@@ -45,7 +45,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: lint packs
-        run: pip install pyyaml && python scripts/lint_packs.py content/packs
+        # lint_packs imports app.services.packs — needs the backend package,
+        # not just pyyaml
+        run: pip install -e backend && python scripts/lint_packs.py content/packs
 
   frontend:
     runs-on: ubuntu-latest
