@@ -9,6 +9,10 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   build: { target: "es2022" },
+  optimizeDeps: {
+    // @novnc/novnc uses top-level await — dev optimizer must allow es2022 too
+    esbuildOptions: { target: "es2022" },
+  },
   server: {
     port: 5173,
     proxy: {

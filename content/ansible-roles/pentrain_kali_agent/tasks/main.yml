@@ -65,6 +65,60 @@
     name: tmux
     state: present
 
+- name: core pentest tooling (must exist — every quest assumes these)
+  ansible.builtin.apt:
+    name:
+      - nmap
+      - gobuster
+      - sqlmap
+      - hydra
+      - john
+      - hashcat
+      - nikto
+      - smbclient
+      - enum4linux-ng
+      - netcat-openbsd
+      - proxychains4
+      - sshuttle
+      - ffuf
+      - seclists
+      - wordlists
+      - impacket-scripts
+      - evil-winrm
+      # seclists is ~3-4 GB — intentional: every wordlist a quest hints at exists
+    state: present
+    update_cache: true
+
+- name: nice-to-have tooling (package names vary by kali release — best effort)
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - netexec           # crackmapexec successor (NXC)
+    - crackmapexec      # older releases still carry this name
+    - chisel            # tcp/udp tunnel — pivot fallback
+    - bloodhound.py     # AD collection (cli: bloodhound-python)
+    - responder         # LLMNR/NBT-NS poisoning for AD quests
+    - kerberoast        # GetUserSPNs alternative bundle
+    - metasploit-framework  # big, but trainees expect it
+  ignore_errors: true
+
+- name: unzip rockyou if only the compressed list exists
+  ansible.builtin.command:
+    cmd: gzip -dk /usr/share/wordlists/rockyou.txt.gz
+    creates: /usr/share/wordlists/rockyou.txt
+  ignore_errors: true
+
+- name: rockyou present?
+  ansible.builtin.stat:
+    path: /usr/share/wordlists/rockyou.txt
+  register: _rockyou
+
+- name: warn when wordlists landed without rockyou
+  ansible.builtin.debug:
+    msg: "WARNING: rockyou.txt missing — password attacks in quests will stall"
+  when: not _rockyou.stat.exists
+
 - name: autostart coach tmux on desktop login (visible agent actions)
   ansible.builtin.copy:
     dest: /etc/xdg/autostart/pentrain-coach.desktop

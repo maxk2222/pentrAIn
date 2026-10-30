@@ -13,6 +13,7 @@ import { ChatPanel } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
 import { NotesPanel } from "@/components/notes";
+import { LazyModal } from "@/components/lazymodal";
 import { DeployLog } from "@/components/deploylog";
 import { cn } from "@/lib/utils";
 
@@ -21,11 +22,19 @@ const PANELS_KEY = "pentrain-panels";
 
 type Panels = { sheet: boolean; notes: boolean; chat: boolean };
 
+const PANELS_VERSION = 2; // bump → stored prefs reset to new defaults once
+
 function loadPanels(): Panels {
+  const defaults: Panels = { sheet: false, notes: true, chat: false };
   try {
-    return { sheet: true, notes: true, chat: true,
-      ...JSON.parse(localStorage.getItem(PANELS_KEY) ?? "{}") };
-  } catch { return { sheet: true, notes: true, chat: true }; }
+    const raw = JSON.parse(localStorage.getItem(PANELS_KEY) ?? "{}");
+    if (raw.v !== PANELS_VERSION) return defaults;
+    return { ...defaults, sheet: raw.sheet, notes: raw.notes, chat: raw.chat };
+  } catch { return defaults; }
+}
+
+function savePanels(p: Panels) {
+  localStorage.setItem(PANELS_KEY, JSON.stringify({ v: PANELS_VERSION, ...p }));
 }
 
 export function SessionPage() {
@@ -39,6 +48,7 @@ export function SessionPage() {
   const [logLines, setLogLines] = useState<string[]>([]);
   const [panels, setPanels] = useState<Panels>(loadPanels);
   const [unread, setUnread] = useState(0);
+  const [lazyAsk, setLazyAsk] = useState<"sheet" | "chat" | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const { data: session, isLoading } = useQuery({
@@ -103,11 +113,27 @@ export function SessionPage() {
   useEffect(() => { if (panels.chat) setUnread(0); }, [panels.chat]);
 
   function togglePanel(key: keyof Panels) {
+    // expanding an assistance panel costs a confirmation — collapsing is free
+    if (!panels[key] && key !== "notes") {
+      setLazyAsk(key);
+      return;
+    }
     setPanels((p) => {
       const next = { ...p, [key]: !p[key] };
-      localStorage.setItem(PANELS_KEY, JSON.stringify(next));
+      savePanels(next);
       return next;
     });
+  }
+
+  function confirmLazy() {
+    if (!lazyAsk) return;
+    const key = lazyAsk;
+    setPanels((p) => {
+      const next = { ...p, [key]: true };
+      savePanels(next);
+      return next;
+    });
+    setLazyAsk(null);
   }
 
   async function activate() {
@@ -237,6 +263,14 @@ export function SessionPage() {
             onClick={() => togglePanel("chat")} />
         )}
       </div>
+
+      {lazyAsk && (
+        <LazyModal
+          what={lazyAsk === "sheet" ? "the reference sheet" : "the AI coach"}
+          onConfirm={confirmLazy}
+          onCancel={() => setLazyAsk(null)}
+        />
+      )}
     </div>
   );
 }
