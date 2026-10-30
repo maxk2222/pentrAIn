@@ -163,14 +163,12 @@ class LudusProvider:
                     await log.awarning("rollback failed", vmid=vm.vmid, error=str(e))
 
     async def testing_mode(self, enable: bool, allow_ips: list[str] | None = None) -> None:
-        # ludus 2: PUT /testing/start|stop; allowed ips via /testing/allow
+        # ludus 2: PUT /testing/start|stop; allowed ips via POST /testing/allow
+        # with body {"allowed": [ip, ...]} — {"ip": ...} is silently ignored
         try:
             await self._req("PUT", "/testing/start" if enable else "/testing/stop")
-            for ip in allow_ips or []:
-                try:
-                    await self._req("POST", "/testing/allow", json={"ip": ip})
-                except LudusError as e:
-                    await log.awarning("testing allow failed", ip=ip, error=str(e))
+            if enable and allow_ips:
+                await self._req("POST", "/testing/allow", json={"allowed": allow_ips})
         except LudusError as e:
             await log.awarning("testing-mode endpoint unavailable", error=str(e))
 
