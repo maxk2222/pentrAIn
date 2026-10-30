@@ -51,6 +51,13 @@
   changed_when: cfg.rc == 0
   when: (app_has_scsi0.stdout | int) == 0
 
+- name: cloud-init network config (static when app_ip set — managed LANs often lack dhcp)
+  ansible.builtin.command: >
+    qm set {{ app_vmid }} --ipconfig0
+    {{ 'ip=' ~ app_ip ~ '/24,gw=' ~ (app_gateway | default(ansible_default_ipv4.gateway)) if app_ip | default('') | length > 0 else 'ip=dhcp' }}
+  register: ipcfg
+  changed_when: ipcfg.rc == 0
+
 - name: grow disk to target size (no-op when already correct)
   ansible.builtin.command: qm resize {{ app_vmid }} scsi0 {{ app_disk_gb }}G
   register: app_resized
@@ -63,16 +70,22 @@
   changed_when: st.rc == 0
   failed_when: st.rc != 0 and 'already running' not in (st.stderr | default(''))
 
-- name: wait for guest agent + read IP
+- name: app vm mac address (for dhcp-mode ip discovery via arp)
+  ansible.builtin.shell: "qm config {{ app_vmid }} | grep -oE 'net0: virtio=[0-9A-Fa-f:]+' | cut -d= -f2 | tr 'A-F' 'a-f'"
+  register: app_mac_q
+  changed_when: false
+  when: app_ip | default('') | length == 0
+
+- name: wait for the vm's ip in the arp table (dhcp mode — cloud images lack the guest agent)
   ansible.builtin.shell: >
-    qm agent {{ app_vmid }} network-get-interfaces 2>/dev/null
-    | grep -oE '"ip-address" *: *"[0-9.]+"' | grep -oE '[0-9.]+'
-    | grep -v '^127\.' | head -1
+    ip neigh | grep -i "{{ app_mac_q.stdout | trim }}"
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1
   register: ipq
   changed_when: false
   until: (ipq.stdout | trim) | length > 0
   retries: 60
   delay: 10
+  when: app_ip | default('') | length == 0
 
 - name: app ip fact
   ansible.builtin.set_fact:
@@ -91,6 +104,7 @@
     port: 22
     timeout: 600
   delegate_to: localhost
+  become: false
 
 - name: app VM up
   ansible.builtin.debug:

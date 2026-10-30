@@ -3,15 +3,20 @@
 
 - name: install docker
   ansible.builtin.apt:
-    name: [ca-certificates, curl, gnupg, git]
+    name: [ca-certificates, curl, gnupg, git, rsync]
     state: present
     update_cache: true
 
-- name: docker key + repo
-  ansible.builtin.apt_key:
+- name: docker signing key (apt-key is gone in debian 13 → dearmor manually)
+  ansible.builtin.get_url:
     url: https://download.docker.com/linux/debian/gpg
-    keyring: /usr/share/keyrings/docker.gpg
-    state: present
+    dest: /tmp/docker.gpg.asc
+    mode: "0644"
+
+- name: dearmor docker key into the apt keyring
+  ansible.builtin.shell: gpg --batch --yes --dearmor -o /usr/share/keyrings/docker.gpg /tmp/docker.gpg.asc
+  args:
+    creates: /usr/share/keyrings/docker.gpg
 
 - name: docker repo
   ansible.builtin.apt_repository:

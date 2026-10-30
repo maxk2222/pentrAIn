@@ -16,7 +16,7 @@ engine_bridge: vmbr0
 engine_ip: ""                  # dhcp if empty — we poll the guest agent
 engine_netmask: ""             # CIDR prefix only (e.g. 24), not dotted
 engine_gateway: ""
-engine_cloud_image_url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+engine_cloud_image_url: "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
 
 # pubkey injected into cloud-init VMs (read on the PVE host; its private key
 # must live on the machine running this playbook)

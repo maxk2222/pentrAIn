@@ -111,6 +111,7 @@
     port: 22
     timeout: 600
   delegate_to: localhost
+  become: false
 
 - name: engine VM ready
   ansible.builtin.debug:

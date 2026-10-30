@@ -2,41 +2,102 @@
 # Ludus on the engine PVE + pentrAIn's ansible roles + API token.
 # Runs on the engine host (nested VM in nested mode, the host itself in direct).
 
-- name: install ludus server + client
+- name: is ludus already installed? (systemd unit = install completed)
+  ansible.builtin.stat:
+    path: /etc/systemd/system/ludus.service
+  register: ludus_present
+
+- name: resolve latest ludus release tag (gitlab, non-beta)
+  ansible.builtin.uri:
+    url: "https://gitlab.com/api/v4/projects/badsectorlabs%2Fludus/repository/tags"
+    return_content: true
+  register: ludus_tags
+  when: not ludus_present.stat.exists
+
+- name: set ludus release tag
+  ansible.builtin.set_fact:
+    ludus_tag: "{{ ludus_version | default('latest') if (ludus_version | default('latest')) != 'latest' else (ludus_tags.json | map(attribute='name') | reject('search', '-beta') | first) }}"
+  when: not ludus_present.stat.exists
+
+- name: download ludus client + server installer + checksums
+  ansible.builtin.get_url:
+    url: "https://gitlab.com/api/v4/projects/badsectorlabs%2Fludus/packages/generic/ludus/{{ ludus_tag }}/{{ item.name }}"
+    dest: "/tmp/{{ item.dest }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { name: "ludus-client_linux-amd64-{{ ludus_tag }}", dest: "ludus" }
+    - { name: "ludus-server-{{ ludus_tag }}", dest: "ludus-server" }
+    - { name: "ludus_{{ ludus_tag }}_checksums.txt", dest: "ludus_checksums.txt", mode: "0644" }
+  when: not ludus_present.stat.exists
+
+- name: verify ludus binary checksums
   ansible.builtin.shell: |
     set -e
-    if command -v ludus >/dev/null 2>&1; then exit 0; fi
     cd /tmp
-    curl -fsSL https://packages.ludus.cloud/latest/ludus-server_linux_amd64.deb -o ludus-server.deb
-    curl -fsSL https://packages.ludus.cloud/latest/ludus_linux_amd64 -o /usr/local/bin/ludus
-    chmod +x /usr/local/bin/ludus
-    dpkg -i ludus-server.deb || apt -f install -y
-    systemctl enable --now ludus-server
-  args:
-    creates: /usr/local/bin/ludus
+    grep -E " (ludus|ludus-server)$" ludus_checksums.txt | sha256sum -c -
+  register: ludus_sha
+  changed_when: false
+  when: not ludus_present.stat.exists
+
+- name: install ludus client binary
+  ansible.builtin.copy:
+    src: /tmp/ludus
+    dest: /usr/local/bin/ludus
+    mode: "0755"
+    remote_src: true
+  when: not ludus_present.stat.exists
+
+- name: was ludus already extracted to /opt/ludus? (partial install → resume with installed copy)
+  ansible.builtin.stat:
+    path: /opt/ludus/ludus-server
+  register: ludus_extracted
+  when: not ludus_present.stat.exists
+
+- name: run ludus server installer (existing proxmox — no reboot, no prompts)
+  ansible.builtin.command: "{{ '/opt/ludus/ludus-server' if (ludus_extracted.stat.exists | default(false)) else '/tmp/ludus-server' }} --no-prompt"
   register: ludus_inst
+  async: 1800
+  poll: 30
+  when: not ludus_present.stat.exists
 
 - name: wait for ludus api
   ansible.builtin.uri:
-    url: "https://localhost:8081/version"
+    url: "https://localhost:8080/version"
     validate_certs: false
-    status_code: [200, 401, 403]
+    status_code: [200, 401, 403, 404]
   register: lapi
   until: lapi.status is defined
-  retries: 30
+  retries: 60
   delay: 10
+
+- name: read ludus root api key (bootstrap admin, written by the installer)
+  ansible.builtin.slurp:
+    src: /opt/ludus/install/root-api-key
+  register: ludus_root_key_b64
+
+- name: set ludus cli environment (root key + local api url)
+  ansible.builtin.set_fact:
+    ludus_cli_env: { LUDUS_API_KEY: "{{ ludus_root_key_b64.content | b64decode | trim }}" }
+    ludus_url_flag: "--url https://localhost:8080"
 
 - name: create ludus admin user (pentrain range owner)
   ansible.builtin.shell: |
     set -e
-    if ludus user list 2>/dev/null | grep -q {{ ludus_admin_user }}; then exit 0; fi
-    ludus user add -n "{{ ludus_admin_user }}" -a -U || true
+    if ludus {{ ludus_url_flag }} user list all 2>/dev/null | grep -qwi "{{ ludus_admin_user }}"; then
+      echo "exists"
+      exit 0
+    fi
+    ludus {{ ludus_url_flag }} user add -n "{{ ludus_admin_user }}" -i "{{ ludus_admin_user }}" -a \
+      -e "{{ ludus_admin_user }}@{{ platform_domain | default('pentrain.local') }}" \
+      -p "$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
+  environment: "{{ ludus_cli_env }}"
   register: luser
-  changed_when: luser.rc == 0
+  changed_when: "'exists' not in luser.stdout"
+  ignore_errors: true
 
 - name: capture ludus api key
-  ansible.builtin.shell: |
-    ludus user apikey get -n {{ ludus_admin_user }} 2>/dev/null | grep -oE '[a-f0-9]{32,}' | head -1
+  ansible.builtin.command: ludus {{ ludus_url_flag }} user apikey -u {{ ludus_admin_user }} --no-prompt --value
+  environment: "{{ ludus_cli_env }}"
   register: lkey
   changed_when: false
   ignore_errors: true
@@ -52,20 +113,22 @@
     set -e
     for r in /opt/pentrain/ansible-roles/*/; do
       name=$(basename "$r")
-      ludus ansible roles list 2>/dev/null | grep -q "$name" || \
-        ludus ansible roles add -d "$r" || true
+      ludus {{ ludus_url_flag }} ansible role list 2>/dev/null | grep -q "$name" || \
+        ludus {{ ludus_url_flag }} ansible role add -d "$r" -g || true
     done
+  environment: "{{ ludus_cli_env }}"
   changed_when: false
   ignore_errors: true
 
 - name: build required templates (opt-in — multi-GB downloads, per template)
   ansible.builtin.shell: |
     set -e
-    if ludus templates list 2>/dev/null | grep -q "{{ item }}"; then
+    if ludus {{ ludus_url_flag }} templates list 2>/dev/null | grep -qw "{{ item }}"; then
       echo "present"
       exit 0
     fi
-    ludus templates build -n "{{ item }}"
+    ludus {{ ludus_url_flag }} templates build -n "{{ item }}"
+  environment: "{{ ludus_cli_env }}"
   loop: "{{ ludus_templates }}"
   register: tpl
   changed_when: "'present' not in tpl.stdout"
@@ -93,6 +156,6 @@
   ansible.builtin.debug:
     msg: >-
       Ludus installed. Range user: {{ ludus_admin_user }}.
-      API key: {{ lkey.stdout | trim | default('(see `ludus user apikey get -n ' ~ ludus_admin_user ~ '`)') }}.
+      API key: {{ lkey.stdout | trim | default('(see `ludus user apikey -u ' ~ ludus_admin_user ~ ' --no-prompt --value`)') }}.
       Configure the backend's engine.* + ludus.* settings via the web wizard
-      (Ludus URL https://<engine>:8081).
+      (Ludus API https://<engine>:8080).
