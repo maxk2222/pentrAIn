@@ -57,6 +57,15 @@ commands; the daemon ships them to `/api/telemetry` with the session token.
 `PENTRAIN_LLM_STREAM=false` or the LLM endpoint lacks SSE — the code falls
 back automatically; only perceived latency changes.
 
+## Installer
+
+- Full ansible output lands in `installer/logs/install.log` regardless of the
+  live status board. Re-run `./install.sh --verbose` for raw task dumps.
+- The installer is idempotent — re-running the same command resumes past
+  already-done tasks.
+- Non-interactive shells (CI, pipes) get plain output automatically; force it
+  with `PENTRAIN_UI=plain` or `NO_COLOR=1`.
+
 ## Windows / Active Directory quests
 
 The `ad-t*` quests need Windows templates that are **not** built by default:

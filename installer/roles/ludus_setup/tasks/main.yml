@@ -58,13 +58,17 @@
   changed_when: false
   ignore_errors: true
 
-- name: build required templates (opt-in — multi-GB downloads)
+- name: build required templates (opt-in — multi-GB downloads, per template)
   ansible.builtin.shell: |
-    for t in {{ ludus_templates | join(' ') }}; do
-      ludus templates list 2>/dev/null | grep -q "$t" && continue
-      ludus templates build -n "$t" || true
-    done
-  changed_when: false
+    set -e
+    if ludus templates list 2>/dev/null | grep -q "{{ item }}"; then
+      echo "present"
+      exit 0
+    fi
+    ludus templates build -n "{{ item }}"
+  loop: "{{ ludus_templates }}"
+  register: tpl
+  changed_when: "'present' not in tpl.stdout"
   when: install_templates | bool
 
 - name: create pve api token for the platform backend

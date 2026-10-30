@@ -39,6 +39,15 @@ cp inventory.example.yml inventory.yml          # fill in your PVE host + API to
 - `nested` (default): creates a `pentrain-engine` VM (nested Proxmox + Ludus + app VM) on your existing homeserver. Leaves everything else untouched.
 - `direct`: installs Ludus on the target PVE host itself. **The host must be dedicated to pentrAIn** — Ludus manages its users, networks and templates.
 
+The installer shows a live status board (stage, running task, elapsed, counters) and writes a full log to `installer/logs/install.log`. Flags:
+
+| Flag | Effect |
+|---|---|
+| `--with-templates` | build the Ludus VM templates (kali, debian, win2022) — multi-GB, multi-hour |
+| `--i-know-dedicated` | direct mode only, required when the host already runs VMs/CTs |
+| `--yes` / `-y` | skip the confirmation prompt |
+| `--verbose` | raw ansible output instead of the status board |
+
 After install, open `https://<pentrain-app-ip>` and run the setup wizard (LLM endpoint, resource budget).
 
 ## Repo layout

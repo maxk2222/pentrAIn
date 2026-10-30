@@ -40,6 +40,7 @@ Thumbs.db
 # Ansible
 *.retry
 installer/vault.yml
+installer/inventory.yml
 installer/inventory/local.ini
 installer/.secrets/
 
