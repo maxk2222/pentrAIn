@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Crosshair, Server, BrainCircuit, Gauge, KeyRound } from "lucide-react";
+import { CheckCircle2, Server, BrainCircuit, Gauge, KeyRound } from "lucide-react";
 import { api, setToken } from "@/lib/api";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select, Slider } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -58,9 +58,11 @@ export function SetupPage() {
     <div className="min-h-full bg-background p-6">
       <div className="mx-auto max-w-2xl">
         <div className="mb-8 flex items-center gap-3">
-          <Crosshair className="h-8 w-8 text-primary" />
+          <img src="/logo-icon.png" alt="PenTrAIn" className="h-10 w-auto" />
           <div>
-            <h1 className="text-2xl font-bold">PenTRAIN Setup</h1>
+            <h1 className="text-2xl font-bold">
+              PenTr<span className="text-primary">AI</span>n Setup
+            </h1>
             <p className="text-sm text-muted">One-time platform configuration</p>
           </div>
         </div>

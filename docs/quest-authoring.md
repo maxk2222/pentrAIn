@@ -67,7 +67,7 @@ flags:
 
 Flag values are randomized per session (HMAC over the session's `flag_seed`);
 the role plants them during deploy, the backend verifies submissions. Never
-hard-code `PENTRAIN{...}` values in pack files — use the flag placeholders
+hard-code `PenTrAIn{...}` values in pack files — use the flag placeholders
 the `pentrain_*` roles expose.
 
 ### Hints

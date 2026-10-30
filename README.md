@@ -1,8 +1,12 @@
-# PenTRAIN
+<p align="center">
+  <img src="docs/assets/logo.png" alt="PenTrAIn" width="420" />
+</p>
+
+# PenTrAIn
 
 **A self-hosted pentest training platform — quests, a live AI coach, and a browser-based Kali, on your own Proxmox.**
 
-PenTRAIN turns a Proxmox host into a guided offensive-security range:
+PenTrAIn turns a Proxmox host into a guided offensive-security range:
 
 - **Quest library** — topic tracks (Linux fundamentals, web appsec, Active Directory, network recon, forensics) with progressive tiers, from a single vulnerable VM to a full corporate network ([GOAD](https://github.com/Orange-Cyberdefense/GOAD)).
 - **Browser workspace** — start a quest, get a real Kali desktop streamed into your browser (noVNC over Proxmox console), with the coach chat, objectives and flags beside it.
@@ -20,11 +24,11 @@ Engine (Proxmox VE + Ludus)  ── either a dedicated PVE host or a nested engi
  └── Quest VMs               targets behind the Ludus router (isolated /24, testing-mode)
 ```
 
-[Ludus](https://ludus.cloud/) is used as an external range engine over its REST API — PenTRAIN does not vendor or modify it.
+[Ludus](https://ludus.cloud/) is used as an external range engine over its REST API — PenTrAIn does not vendor or modify it.
 
 ## Install
 
-Requires: a Proxmox VE host (dedicated to PenTRAIN, or any PVE that can host one large nested VM), Ansible ≥ 2.15 on your admin machine.
+Requires: a Proxmox VE host (dedicated to PenTrAIn, or any PVE that can host one large nested VM), Ansible ≥ 2.15 on your admin machine.
 
 ```bash
 cd installer
@@ -33,7 +37,7 @@ cp inventory.example.yml inventory.yml          # fill in your PVE host + API to
 ```
 
 - `nested` (default): creates a `pentrain-engine` VM (nested Proxmox + Ludus + app VM) on your existing homeserver. Leaves everything else untouched.
-- `direct`: installs Ludus on the target PVE host itself. **The host must be dedicated to PenTRAIN** — Ludus manages its users, networks and templates.
+- `direct`: installs Ludus on the target PVE host itself. **The host must be dedicated to PenTrAIn** — Ludus manages its users, networks and templates.
 
 After install, open `https://<pentrain-app-ip>` and run the setup wizard (LLM endpoint, resource budget).
 

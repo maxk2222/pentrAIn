@@ -16,7 +16,7 @@ def test_derive_secret_deterministic_per_seed():
     c = flags_svc.derive_flag_secret("seed2", "flag1")
     d = flags_svc.derive_flag_secret("seed1", "flag2")
     assert a == b != c != d
-    assert a.startswith("PENTRAIN{") and a.endswith("}")
+    assert a.startswith("PenTrAIn{") and a.endswith("}")
 
 
 async def test_finalize_attempt_math(db_with_packs):

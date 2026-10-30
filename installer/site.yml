@@ -1,5 +1,5 @@
 ---
-# PenTRAIN installer — two modes:
+# PenTrAIn installer — two modes:
 #   nested: outer_pve → engine VM → Proxmox inside → Ludus + app VM inside
 #   direct: direct_pve host IS the engine → Ludus + app VM on it
 #
@@ -43,7 +43,7 @@
     - role: app_vm
 
 # ---------- stage 5: platform stack ----------
-- name: "deploy PenTRAIN platform into the app VM"
+- name: "deploy PenTrAIn platform into the app VM"
   hosts: app_vm
   gather_facts: true
   roles:

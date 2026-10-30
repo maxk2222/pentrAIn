@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Crosshair } from "lucide-react";
 import { api, setToken } from "@/lib/api";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@/components/ui";
 
@@ -30,8 +29,8 @@ export function LoginPage() {
     <div className="grid h-full place-items-center bg-background">
       <Card className="w-[380px]">
         <CardHeader className="items-center pt-8">
-          <Crosshair className="mb-2 h-10 w-10 text-primary" />
-          <CardTitle className="text-2xl">PenTRAIN</CardTitle>
+          <img src="/logo.png" alt="PenTrAIn" className="mb-1 h-24 w-auto" />
+          <CardTitle className="sr-only">PenTrAIn</CardTitle>
           <p className="text-sm text-muted">Pentest training range + AI coach</p>
         </CardHeader>
         <CardContent>

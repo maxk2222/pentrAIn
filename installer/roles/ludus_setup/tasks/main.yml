@@ -1,5 +1,5 @@
 ---
-# Ludus on the engine PVE + PenTRAIN's ansible roles + API token.
+# Ludus on the engine PVE + PenTrAIn's ansible roles + API token.
 # Runs on the engine host (nested VM in nested mode, the host itself in direct).
 
 - name: install ludus server + client

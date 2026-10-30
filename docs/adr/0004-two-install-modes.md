@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-Users either have a dedicated Proxmox host for PenTRAIN or want it alongside an existing homeserver PVE. Ludus takes over whichever PVE it runs on (users, networks, templates), so collocating it with unrelated VMs is unsafe; running everything nested inside one VM is the clean default.
+Users either have a dedicated Proxmox host for PenTrAIn or want it alongside an existing homeserver PVE. Ludus takes over whichever PVE it runs on (users, networks, templates), so collocating it with unrelated VMs is unsafe; running everything nested inside one VM is the clean default.
 
 ## Decision
 Installer supports `--mode nested|direct`:

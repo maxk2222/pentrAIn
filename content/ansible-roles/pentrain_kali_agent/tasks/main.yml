@@ -1,5 +1,5 @@
 ---
-# PenTRAIN kali agent: shell telemetry + coach tmux channel + qemu guest agent.
+# PenTrAIn kali agent: shell telemetry + coach tmux channel + qemu guest agent.
 - name: ensure qemu-guest-agent present and running
   ansible.builtin.apt:
     name: qemu-guest-agent
@@ -71,7 +71,7 @@
     content: |
       [Desktop Entry]
       Type=Application
-      Name=PenTRAIN Coach Terminal
+      Name=PenTrAIn Coach Terminal
       Exec=xfce4-terminal --title="pentrain-coach" -e "tmux new-session -A -s pentrain-coach"
       X-GNOME-Autostart-enabled=true
     mode: "0644"
@@ -80,5 +80,5 @@
   ansible.builtin.copy:
     dest: /etc/motd
     content: |
-      PenTRAIN attack box — telemetry active.
+      PenTrAIn attack box — telemetry active.
       Your AI coach observes commands and may act in the 'pentrain-coach' tmux session.

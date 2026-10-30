@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PenTRAIN installer — wraps ansible-playbook with mode + safety flags.
+# PenTrAIn installer — wraps ansible-playbook with mode + safety flags.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -11,7 +11,7 @@ EXTRA_ARGS=()
 
 usage() {
   cat <<EOF
-PenTRAIN installer
+PenTrAIn installer
 
   --mode nested|direct    required
                           nested = create engine VM on existing Proxmox (default home-server path)
@@ -62,7 +62,7 @@ ansible-galaxy collection install -r requirements.yml
   echo "ERROR: inventory.yml missing — cp inventory.example.yml inventory.yml and fill in your host"; exit 1;
 }
 
-echo "[*] PenTRAIN install — mode=$MODE templates=$WITH_TEMPLATES dedicated=${DEDICATED:-no}"
+echo "[*] PenTrAIn install — mode=$MODE templates=$WITH_TEMPLATES dedicated=${DEDICATED:-no}"
 
 exec ansible-playbook site.yml \
   --extra-vars "$(printf '%s ' "${EV[@]}")" \

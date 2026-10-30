@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Crosshair, LayoutDashboard, Library, LogOut, Settings, Terminal, Trophy,
+  LayoutDashboard, Library, LogOut, Settings, Terminal, Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { setToken } from "@/lib/api";
@@ -29,8 +29,10 @@ export function AppLayout() {
     <div className="flex h-full">
       <aside className="flex w-60 flex-col border-r border-border bg-surface">
         <Link to="/" className="flex items-center gap-2.5 px-5 py-5">
-          <Crosshair className="h-6 w-6 text-primary" />
-          <span className="text-lg font-bold tracking-tight">PenTRAIN</span>
+          <img src="/logo-icon.png" alt="PenTrAIn" className="h-7 w-auto" />
+          <span className="text-lg font-bold tracking-tight">
+            PenTr<span className="text-primary">AI</span>n
+          </span>
         </Link>
 
         {activeSession && (

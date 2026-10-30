@@ -1,4 +1,4 @@
-# PenTRAIN — common dev + ops targets.
+# PenTrAIn — common dev + ops targets.
 .DEFAULT_GOAL := help
 COMPOSE := docker compose -f engine/docker-compose.yml
 PYTEST  := backend/.venv/bin/python -m pytest

@@ -94,7 +94,7 @@ async def test_full_session_lifecycle_mock(db_with_packs):
     assert s.state == "active"
 
     # wrong flag
-    r = await sessions_svc.submit_flag(db, s.id, "PENTRAIN{wrong}")
+    r = await sessions_svc.submit_flag(db, s.id, "PenTrAIn{wrong}")
     assert not r["correct"] and not r["all_solved"]
 
     # right flags → solved + attempt scored
