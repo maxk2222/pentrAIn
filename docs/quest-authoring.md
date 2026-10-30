@@ -144,12 +144,21 @@ Ludus applies `roles: [...]` to each VM during deploy. Conventions:
 ### Windows / Active Directory quests
 
 - `topology.vms[].linux: false` + `windows: {...}` + `domain: {...}` are
-  passed through to Ludus — use `win2022-server-x64-template` (needs a
-  `--with-templates` build; see docs/ops.md).
+  passed through to Ludus verbatim — use `win2022-server-x64-template` /
+  `win11-22h2-x64-template` (needs a `--with-templates` build; see ops.md).
+- Ludus domain schema (verified):
+  `domain: {fqdn: corp.pentrain.local, role: primary-dc|alt-dc|member}` —
+  `primary-dc` promotes the forest root, `alt-dc` adds a replica,
+  `member` joins a workstation.
+- `windows:` subkeys: `sysprep: true`, `install_additional_tools`,
+  `gpos: [name]` — or top-level `gpos: [...]` on the VM, which the compiler
+  folds into `windows.gpos` (linted: linux VMs can't take gpos).
 - Only `kind: file` flags — `kind: command` runs a POSIX shell and will
   never execute on Windows (the pack linter rejects the combination).
-- Domain config (OU structure, GPO-equivalent hardening, users) belongs in
-  the quest's `pentrain_ad_*` roles, not the `gpos` field.
+- Flag paths are Windows-style: `file_path: "C:\\flags\\domain-admin.txt"`.
+- `ip_last_octet: 254` is reserved for the range router (linted).
+- Users, OUs and misconfig belong in the quest's `pentrain_ad_*` roles
+  (`community.windows.*` / `ansible.windows.*` modules over winrm).
 
 ### Checklist before committing a quest
 

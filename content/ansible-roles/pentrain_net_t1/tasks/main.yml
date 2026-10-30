@@ -67,8 +67,7 @@
 
 - name: mysql root weak password + remotely reachable account
   ansible.builtin.command: >-
-    mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA
-    mysql_native_password USING PASSWORD('mysql');
+    mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'mysql';
     CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY 'mysql';
     GRANT ALL PRIVILEGES ON *.* TO 'root'@'%'; FLUSH PRIVILEGES;"
   changed_when: false

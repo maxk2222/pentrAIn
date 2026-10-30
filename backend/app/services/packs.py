@@ -154,6 +154,12 @@ def validate_quest_dir(qdir: Path) -> tuple[QuestYaml | None, list[str]]:
         errs.append(f"{qdir.name}: coach.briefing_ref {spec.coach.briefing_ref} not found")
     vm_names = {v.name for v in spec.topology.vms}
     windows_vms = {v.name for v in spec.topology.vms if v.windows or not v.linux}
+    for v in spec.topology.vms:
+        if v.ip_last_octet == 254:
+            errs.append(f"{qdir.name}: vm {v.name} uses ip_last_octet 254 — "
+                        "the range router owns it")
+        if v.gpos and not (v.windows or not v.linux):
+            errs.append(f"{qdir.name}: vm {v.name} sets gpos but isn't a windows vm")
     for f in spec.flags:
         if f.kind == "file":
             if not f.vm:

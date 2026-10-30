@@ -45,7 +45,7 @@
           iif lo accept
           ct state established,related accept
           ip saddr {{ app_ip }} accept
-          reject
+          counter drop
         }
         chain forward { type filter hook forward priority 0; policy accept; }
         chain output { type filter hook output priority 0; policy accept; }

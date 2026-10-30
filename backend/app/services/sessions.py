@@ -98,10 +98,15 @@ def compile_topology(quest: Quest) -> dict:
             "role": "target",
         }
         if v.get("windows"):
-            entry["windows"] = v["windows"]
+            entry["windows"] = dict(v["windows"])
             entry["linux"] = False
         if v.get("domain"):
             entry["domain"] = v["domain"]
+        if v.get("gpos"):
+            # Ludus expects gpos under windows.gpos — VmSpec keeps them
+            # top-level for yaml ergonomics
+            entry.setdefault("windows", {})["gpos"] = v["gpos"]
+            entry["linux"] = False
         if v.get("roles"):
             entry["roles"] = v["roles"]
         vms.append(entry)

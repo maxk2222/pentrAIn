@@ -36,6 +36,16 @@
     owner: www-data
     mode: "0755"
 
+- name: uploads are stored, not served — the flag must be read on the box
+  ansible.builtin.blockinfile:
+    path: /etc/apache2/apache2.conf
+    marker: "# {mark} PENTRAIN FOR-T2 UPLOADS DENY"
+    block: |
+      <Directory /var/www/html/uploads>
+        Require all denied
+      </Directory>
+  notify: restart apache2
+
 - name: plant webshell
   ansible.builtin.copy:
     dest: /var/www/html/uploads/x.php

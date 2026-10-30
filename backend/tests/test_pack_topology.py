@@ -64,6 +64,16 @@ def test_windows_fields_pass_through_compile():
                     f"{spec.meta.id}: {v.name} lost domain passthrough"
 
 
+def test_gpos_fold_into_windows_key():
+    """VmSpec.gpos must land under windows.gpos in the Ludus config."""
+    cfg = compile_topology(SimpleNamespace(topology={
+        "vms": [{"name": "dc01", "template": "win2022-server-x64-template",
+                 "linux": False, "gpos": ["disable_defender"]}]}))
+    entry = next(v for v in cfg["ludus"] if "dc01" in v["vm_name"])
+    assert entry["windows"]["gpos"] == ["disable_defender"]
+    assert entry["linux"] is False
+
+
 def test_checkpoint_regexes_compile():
     for _qdir, spec in _quests():
         for cp in spec.coach.checkpoints:

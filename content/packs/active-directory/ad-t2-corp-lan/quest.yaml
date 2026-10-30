@@ -37,8 +37,8 @@ topology:
       windows:
         sysprep: true
       domain:
-        name: corp.pentrain.local
-        member: true
+        fqdn: corp.pentrain.local
+        role: member
       roles: [pentrain_ad_t2_ws]
     - name: dc01
       template: win2022-server-x64-template
@@ -50,7 +50,8 @@ topology:
       windows:
         sysprep: true
       domain:
-        name: corp.pentrain.local
+        fqdn: corp.pentrain.local
+        role: primary-dc
       roles: [pentrain_ad_t2_dc]
 flags:
   - id: files-flag

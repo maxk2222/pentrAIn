@@ -27,7 +27,7 @@
   ansible.builtin.set_fact:
     edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.21"
 
-- name: nftables — accept only from edge01, reject the rest
+- name: nftables — accept only from edge01, silently drop the rest
   ansible.builtin.copy:
     dest: /etc/nftables.conf
     content: |
@@ -39,7 +39,7 @@
           iif lo accept
           ct state established,related accept
           ip saddr {{ edge_ip }} accept
-          reject
+          counter drop
         }
         chain forward { type filter hook forward priority 0; policy accept; }
         chain output { type filter hook output priority 0; policy accept; }

@@ -30,7 +30,8 @@ topology:
       windows:
         sysprep: true
       domain:
-        name: corp.pentrain.local
+        fqdn: corp.pentrain.local
+        role: primary-dc
       roles: [pentrain_ad_t1]
 flags:
   - id: dc-flag
