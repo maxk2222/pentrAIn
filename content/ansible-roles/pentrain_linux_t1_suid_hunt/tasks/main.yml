@@ -1,0 +1,59 @@
+---
+# linux-t1-suid-hunt "Sticky Bits" — onboarding creds left in a world-readable
+# note; a careless admin chmod'ed a useful binary SUID. GTFOBins file-read
+# gets root without ever needing a shell as root.
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: trainee user (password leaked in the onboarding note)
+  ansible.builtin.user:
+    name: trainee
+    password: "{{ 'Start123!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/trainee
+    create_home: true
+
+- name: onboarding dir
+  ansible.builtin.file:
+    path: /opt/onboarding
+    state: directory
+    mode: "0755"
+
+- name: leaked credentials note (world-readable — the foothold)
+  ansible.builtin.copy:
+    dest: /opt/onboarding/login-credentials.txt
+    content: |
+      New starter VM — welcome aboard!
+      Temporary login (change on first use, TODO):
+        trainee / Start123!
+      Admin note: diagnostic tools were setuid so you can "run them
+      elevated" — yes, I know, I'll clean it up later.
+    mode: "0644"
+
+- name: the actual misconfig — base64 with the setuid bit (GTFOBins file-read)
+  ansible.builtin.file:
+    path: /usr/bin/base64
+    mode: "u+s"
+
+- name: decoy suid — looks juicy, does nothing exploitable
+  ansible.builtin.copy:
+    dest: /usr/local/bin/sysdiag
+    content: |
+      #!/bin/bash
+      echo "sysdiag v0.3 — collecting diagnostics..."
+      sleep 1
+      echo "OK: 4 cores, thermal nominal, no anomalies found."
+    mode: "4755"
+    owner: root
+    group: root
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

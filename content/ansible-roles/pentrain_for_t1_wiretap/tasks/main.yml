@@ -1,0 +1,71 @@
+---
+# for-t1-wiretap "Wiretap" — SOC triage: an evidence pcap leaks FTP creds
+# (reused for ssh) and the drop-path of the attacker's persistence payload.
+# The pcap is a signpost; flags are injected post-deploy as real files.
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: evidence dir
+  ansible.builtin.file:
+    path: /evidence
+    state: directory
+    mode: "0755"
+
+- name: network capture — the incident artifact under analysis
+  ansible.builtin.copy:
+    src: capture.pcap
+    dest: /evidence/capture.pcap
+    mode: "0644"
+
+- name: triage readme — the SOC brief
+  ansible.builtin.copy:
+    dest: /evidence/README.txt
+    content: |
+      INCIDENT #2214 — files01
+      --------------------------
+      NIDS flagged outbound traffic overnight; capture.pcap is the span-port
+      recording. Establish: (a) how they got in, (b) what they left behind.
+      The analyst workstation has the capture; this host is the victim.
+    mode: "0644"
+
+- name: helper dir — the attacker's drop path
+  ansible.builtin.file:
+    path: /usr/local/lib/systemd-helper
+    state: directory
+    mode: "0755"
+
+- name: attacker's staged payload (path revealed by the pcap)
+  ansible.builtin.copy:
+    dest: /usr/local/lib/systemd-helper/systemd-helper.sh
+    content: |
+      #!/bin/bash
+      # systemd-helper — dropped by operator "m4nt1s"
+      while true; do sleep 3600; done
+    mode: "0755"
+
+- name: IR analyst account (briefing-documented; fetches the evidence)
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+
+- name: ops-backup user (password reused from the FTP session in the pcap)
+  ansible.builtin.user:
+    name: ops-backup
+    password: "{{ 'Restore2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/ops-backup
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

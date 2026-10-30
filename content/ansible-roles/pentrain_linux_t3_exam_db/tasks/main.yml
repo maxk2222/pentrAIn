@@ -1,0 +1,64 @@
+---
+# linux-t3-exam db01 — hop 3: accepts traffic only from app01. dba creds
+# leak via /opt/app/config.yml on the app host. Root flag lives here.
+
+- name: vars — app01 is .51 on the range /24
+  ansible.builtin.set_fact:
+    app_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.51"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
+
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: nftables — only app01 + ansible channel
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ app_ip }} accept
+          ip saddr {{ router_ip }} accept
+          counter drop
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: dba account — creds leaked in the app config
+  ansible.builtin.user:
+    name: dba
+    password: "{{ 'DbAdmin2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/dba
+    create_home: true
+    groups: [sudo]
+    append: true
+
+- name: dba is a full sudoer — the exam's final step is one command
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/dba
+    content: "dba ALL=(ALL) ALL\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

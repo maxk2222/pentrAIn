@@ -1,0 +1,80 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t1-exam
+  track: web-appsec
+  tier: 1
+  title: "Exam: The Leaky Portal"
+  exam: true
+  version: 1
+display:
+  tagline: "T1 final exam: a login that trusts its input, a repo that trusts its history. Chain source disclosure into a shell."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: portal01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 43
+      roles: [pentrain_web_t1_exam]
+flags:
+  - id: portal-flag
+    name: "Portal flag — shown after the login is beaten"
+    kind: file
+    points: 200
+    vm: portal01
+    file_path: /var/lib/portal-data/flag.txt
+  - id: deploy-flag
+    name: "Deploy flag — /home/deploy/user.txt"
+    kind: file
+    points: 200
+    vm: portal01
+    file_path: /home/deploy/user.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Before attacking the login, check what the webroot is serving besides index.php — a metadata directory at the top level is the classic leak."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "git-dumper or manual object reading: `git log -p` on the cloned repo shows what was *removed* from config.php — credentials for a different service."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "The login checks username AND password in one interpolated SQL string. Make the whole condition true: admin' OR '1'='1' -- (mind the trailing space)."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Found the exposed repo"
+      detect: { command_match: "(\\.git|git-dumper|gitdumper|git_log|gobuster|dirb|feroxbuster|nikto)" }
+      hint_after_s: 600
+    - id: cp-history
+      name: "Read the git history"
+      detect: { command_match: "(git log|git show|git-dump|git_cat)" }
+      hint_after_s: 480
+    - id: cp-sqli
+      name: "Attempted the login bypass"
+      detect: { command_match: "(sqlmap|' OR|or 1=1|-- -|admin')" }
+      hint_after_s: 600
+    - id: cp-ssh
+      name: "Used the leaked ssh creds"
+      detect: { command_match: "ssh .*deploy" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 720 }
+scoring:
+  base: 450
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

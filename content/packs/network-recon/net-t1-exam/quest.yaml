@@ -1,0 +1,86 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t1-exam
+  track: network-recon
+  tier: 1
+  title: "Exam: Neighborhood Watch"
+  exam: true
+  version: 1
+display:
+  tagline: "T1 final exam: enumerate every service, collect what anonymous access gives you, and turn leaked creds into root."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: gatekeeper01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 41
+      roles: [pentrain_net_t1_exam]
+flags:
+  - id: ftp-flag
+    name: "FTP flag — sitting in the anonymous share"
+    kind: file
+    points: 100
+    vm: gatekeeper01
+    file_path: /srv/ftp/pub/flag.txt
+  - id: user-flag
+    name: "User flag — /home/fieldtech/user.txt"
+    kind: file
+    points: 150
+    vm: gatekeeper01
+    file_path: /home/fieldtech/user.txt
+  - id: root-flag
+    name: "Root flag — /root/root.txt"
+    kind: file
+    points: 250
+    vm: gatekeeper01
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "nmap -sV -sC <ip> — count the services before picking one. Anonymous access is a misconfiguration, not a feature."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "FTP hands you one flag; the SMB share hands you the door key. smbclient -N //<ip>/it then ssh with what you find."
+  - id: h3
+    cost: 60
+    stage: privesc
+    text: "sudo -l — fieldtech's `find` runs as root. GTFOBins: sudo find . -exec /bin/sh \\; -quit"
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-nmap
+      name: "Ran a full service scan"
+      detect: { command_match: "nmap" }
+      hint_after_s: 480
+    - id: cp-ftp
+      name: "Pulled files via anonymous ftp"
+      detect: { command_match: "(ftp|lftp|wget.*ftp)" }
+      hint_after_s: 480
+    - id: cp-smb
+      name: "Read the SMB share"
+      detect: { command_match: "(smbclient|smbmap|netexec|crackmapexec)" }
+      hint_after_s: 600
+    - id: cp-sudo
+      name: "Checked sudo scope"
+      detect: { command_match: "sudo -l" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 720 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

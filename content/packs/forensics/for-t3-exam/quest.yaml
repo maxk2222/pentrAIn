@@ -1,0 +1,89 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: for-t3-exam
+  track: forensics
+  tier: 3
+  title: "Exam: The Whole Incident"
+  exam: true
+  version: 1
+display:
+  tagline: "T3 final exam: two hosts, one attacker. Correlate the web pop on web02 with the quiet db touch on db02 — write the full timeline."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 8
+  min_disk_gb: 100
+  est_deploy_min: 12
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: web02
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 58
+      roles: [pentrain_for_t3_exam_web]
+    - name: db02
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 59
+      roles: [pentrain_for_t3_exam_db]
+flags:
+  - id: webshell-flag
+    name: "Webshell flag — the parked shell on web02"
+    kind: file
+    points: 150
+    vm: web02
+    file_path: /var/www/html/uploads/flag.txt
+  - id: loot-flag
+    name: "Loot flag — what they staged on db02"
+    kind: file
+    points: 250
+    vm: db02
+    file_path: /var/backups/loot/flag.txt
+  - id: dbmaint-flag
+    name: "Account flag — the abused account's home"
+    kind: file
+    points: 200
+    vm: db02
+    file_path: /home/dbmaint/flag.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "IR creds: analyst/analysis on BOTH hosts. Start on web02 — /var/evidence/http-session.pcap plus /var/log/apache2/access.log tells you exactly which commands ran."
+  - id: h2
+    cost: 60
+    stage: analysis
+    text: "The access log's last webshell command IS the pivot: grep for db config on web02 (/opt/shop/db.ini), then check /var/log/auth.log on db02 for the matching session."
+  - id: h3
+    cost: 80
+    stage: persistence
+    text: "auth.log on db02 shows a sudo tar line — follow it to /var/backups/. The third flag is in the abused account's home directory."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-pcap
+      name: "Read the capture/logs on web02"
+      detect: { command_match: "(tshark|wireshark|http-session|access\\.log)" }
+      hint_after_s: 480
+    - id: cp-config
+      name: "Found the db creds"
+      detect: { command_match: "(db\\.ini|DbMaint|/opt/shop)" }
+      hint_after_s: 480
+    - id: cp-db
+      name: "Worked the second host"
+      detect: { command_match: "(auth\\.log|db02|dbmaint|loot)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 700
+  time_bonus_max: 300
+  par_s: 2700
+  takeover_cost: 200

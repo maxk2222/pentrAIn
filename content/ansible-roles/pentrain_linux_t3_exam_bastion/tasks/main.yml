@@ -1,0 +1,46 @@
+---
+# linux-t3-exam bastion01 — hop 1: motd leaks deployer creds; their home
+# holds the ssh key to app01 (the pivot chain starts here).
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: deployer account
+  ansible.builtin.user:
+    name: deployer
+    password: "{{ 'Deploy2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/deployer
+    create_home: true
+
+- name: motd — the creds ad
+  ansible.builtin.copy:
+    dest: /etc/motd
+    content: |
+      === corp bastion ===
+      deploy account for releases:  deployer / Deploy2024!
+    mode: "0644"
+
+- name: deploy note in deployer's home — leaks the app-tier creds
+  ansible.builtin.copy:
+    dest: /home/deployer/DEPLOY.txt
+    content: |
+      DEPLOY RUNBOOK
+      --------------
+      app tier (app01) is firewalled to this bastion only.
+      ssh app@app01 / AppTier2024!
+      app config at /opt/app/config.yml wires the db connection —
+      do NOT hardcode db creds anywhere else. (too late)
+    owner: deployer
+    group: deployer
+    mode: "0644"
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

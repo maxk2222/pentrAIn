@@ -1,0 +1,110 @@
+---
+# net-t2-dns-enum "Zone Out" — bind9 hands its zone to anyone (AXFR), snmpd
+# leaks a service account, tftp serves files unauthenticated, and a weak
+# password finishes the chain. New-protocol mix: DNS/SNMP/TFTP/SSH.
+
+- name: install services
+  ansible.builtin.apt:
+    name: [bind9, snmpd, tftpd-hpa, openssh-server]
+    state: present
+    update_cache: true
+
+- name: named options — recursion off, transfers to ANYONE (the misconfig)
+  ansible.builtin.copy:
+    dest: /etc/bind/named.conf.options
+    content: |
+      options {
+          directory "/var/cache/bind";
+          recursion no;
+          allow-transfer { any; };      // zone is public — the vuln
+          listen-on { any; };
+          listen-on-v6 { none; };
+      };
+    validate: "named-checkconf %s"
+  notify: restart bind9
+
+- name: corp.local zone declaration
+  ansible.builtin.blockinfile:
+    path: /etc/bind/named.conf.local
+    block: |
+      zone "corp.local" {
+          type master;
+          file "/etc/bind/zones/db.corp.local";
+      };
+    marker: "// {mark} pentrain"
+  notify: restart bind9
+
+- name: zone dir
+  ansible.builtin.file:
+    path: /etc/bind/zones
+    state: directory
+    mode: "0755"
+
+- name: corp.local zone — a small org's worth of hostnames
+  ansible.builtin.copy:
+    dest: /etc/bind/zones/db.corp.local
+    content: |
+      $TTL 300
+      @   IN  SOA ns1.corp.local. hostmaster.corp.local. (1 300 300 300 300)
+          IN  NS  ns1.corp.local.
+      ns1       IN A {{ ansible_default_ipv4.address }}
+      admin     IN A {{ ansible_default_ipv4.address }}
+      backup    IN A {{ ansible_default_ipv4.address }}
+      tftp      IN A {{ ansible_default_ipv4.address }}
+      intranet  IN A {{ ansible_default_ipv4.address }}
+      files     IN A {{ ansible_default_ipv4.address }}
+    validate: "named-checkzone corp.local %s"
+  notify: restart bind9
+
+- name: memo parent dir (copy won't create it)
+  ansible.builtin.file:
+    path: /opt/backup
+    state: directory
+    mode: "0755"
+
+- name: backup memo — snmp 'extend' leaks the service account name
+  ansible.builtin.copy:
+    dest: /opt/backup/memo.txt
+    content: "nightly sync runs as backup-op — password is the weak corp standard\n"
+    mode: "0644"
+
+- name: snmpd.conf — community public, full read tree
+  ansible.builtin.copy:
+    dest: /etc/snmp/snmpd.conf
+    content: |
+      agentAddress udp:161,udp6:[::1]:161
+      rocommunity public
+      sysLocation "rack 2, server room"
+      sysContact "backup-op@corp.local"
+      sysName dns01.corp.local
+      extend backup-memo /bin/cat /opt/backup/memo.txt
+  notify: restart snmpd
+
+- name: tftp drop dir — files served without authentication
+  ansible.builtin.file:
+    path: /srv/tftp
+    state: directory
+    owner: tftp
+    group: tftp
+    mode: "0755"
+
+- name: tftp bait — looks like loot, contains nothing
+  ansible.builtin.copy:
+    dest: /srv/tftp/backup-manifest.txt
+    content: "tftp drop — nightly sync artifacts land here. flag.txt is the interesting one.\n"
+    mode: "0644"
+
+- name: backup-op user — weak password, hydra's job
+  ansible.builtin.user:
+    name: backup-op
+    password: "{{ 'backup123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/backup-op
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

@@ -1,0 +1,24 @@
+---
+# ad-t2-exam dc01 — runs after pentrain_ad_t2_dc. Adds an AS-REP roastable
+# account + exam flag dir; the corp-lan chain (files → ws → dc) stays.
+
+- name: AS-REP roastable account
+  community.windows.win_domain_user:
+    name: svc-metrics
+    password: "Metrics2024!"
+    state: present
+    password_never_expires: true
+
+- name: disable kerberos preauth
+  ansible.windows.win_powershell:
+    script: Set-ADAccountControl -Identity svc-metrics -DoesNotRequirePreAuth $true
+
+- name: exam flag dir
+  ansible.windows.win_file:
+    path: C:\flags\exam
+    state: directory
+
+- name: mention svc-metrics in a sysvol runbook (the breadcrumb)
+  ansible.windows.win_copy:
+    dest: C:\Windows\SYSVOL\domain\scripts\metrics-runbook.txt
+    content: "dashboard pulls run as svc-metrics — do NOT enable preauth, the agent breaks\n"

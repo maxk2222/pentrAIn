@@ -1,0 +1,62 @@
+---
+# net-t3-exam edge01 — perimeter host: open AXFR + SNMP leaks the edge's
+# own ssh creds (first foothold is earned through protocol enum, not loot).
+
+- name: packages
+  ansible.builtin.apt:
+    name: [bind9, bind9utils, snmpd, openssh-server]
+    state: present
+    update_cache: true
+
+- name: bind zone — open AXFR, names the three-tier layout
+  ansible.builtin.copy:
+    dest: /etc/bind/db.corp.local
+    content: |
+      $TTL 300
+      @   IN  SOA ns1.corp.local. admin.corp.local. (1 300 300 300 300)
+          IN  NS  ns1.corp.local.
+      ns1     IN A   {{ ansible_default_ipv4.address }}
+      edge    IN A   {{ ansible_default_ipv4.address }}
+      dmz     IN TXT "dmz01 serves the public docs; vault01 talks only to dmz"
+      vault   IN TXT "see: /srv/notes/netplan.txt on the dmz host"
+    mode: "0644"
+  notify: restart named
+
+- name: named.conf.local
+  ansible.builtin.blockinfile:
+    path: /etc/bind/named.conf.local
+    marker: "// {mark} PENTRAIN NET-T3-EXAM"
+    block: |
+      zone "corp.local" {
+        type master;
+        file "/etc/bind/db.corp.local";
+        allow-transfer { any; };
+      };
+  notify: restart named
+
+- name: snmpd — public community, extend leaks edge ssh creds
+  ansible.builtin.copy:
+    dest: /etc/snmp/snmpd.conf
+    content: |
+      agentAddress udp:161
+      rocommunity public
+      sysLocation "perimeter rack"
+      sysContact edge-op@corp.local
+      extend edge-creds /bin/echo "edge maintenance login: edgeop / Edge2024!"
+    mode: "0644"
+  notify: restart snmpd
+
+- name: edgeop account (creds leak via snmp)
+  ansible.builtin.user:
+    name: edgeop
+    password: "{{ 'Edge2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/edgeop
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

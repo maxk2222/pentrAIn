@@ -1,0 +1,86 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t3-exam
+  track: web-appsec
+  tier: 3
+  title: "Exam: The Reporting API"
+  exam: true
+  version: 1
+display:
+  tagline: "T3 final exam: crack the JWT secret, walk the IDOR, forge admin, and turn an API into a root shell."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: api01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 53
+      roles: [pentrain_web_t3_exam]
+flags:
+  - id: idor-flag
+    name: "IDOR flag — another user's export"
+    kind: file
+    points: 150
+    vm: api01
+    file_path: /var/lib/api/user-flag.txt
+  - id: admin-flag
+    name: "Admin flag — behind the forged token"
+    kind: file
+    points: 200
+    vm: api01
+    file_path: /var/lib/api/admin-flag.txt
+  - id: rce-flag
+    name: "RCE flag — /flag.txt via the debug endpoint"
+    kind: file
+    points: 300
+    vm: api01
+    file_path: /flag.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "GET / lists the endpoints. POST /api/login with guest/guest123 gives a token — jwt.io or jwt_tool will tell you its claims and how it's signed."
+  - id: h2
+    cost: 60
+    stage: exploit
+    text: "The secret is a dictionary word — hashcat -m 16500 or `jwt_tool -C` cracks it. Then flip admin:false→true, re-sign, and hit the admin endpoints."
+  - id: h3
+    cost: 80
+    stage: exploit
+    text: "Two prizes before the shell: /api/users/<id>/export trusts the id you give it (try 1), and /api/admin/exec?cmd= runs commands as root."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Mapped the API"
+      detect: { command_match: "(api/login|api/users|api/admin|curl.*api|ffuf|gobuster)" }
+      hint_after_s: 600
+    - id: cp-jwt
+      name: "Worked the token"
+      detect: { command_match: "(jwt|hashcat.*16500|HS256|Bearer)" }
+      hint_after_s: 600
+    - id: cp-idor
+      name: "Hit the IDOR"
+      detect: { command_match: "users/[0-9]" }
+      hint_after_s: 480
+    - id: cp-exec
+      name: "Ran commands via the api"
+      detect: { command_match: "(exec\\?cmd=|cmd=cat|/flag)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 650
+  time_bonus_max: 250
+  par_s: 2400
+  takeover_cost: 200

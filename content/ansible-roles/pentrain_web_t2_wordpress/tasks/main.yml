@@ -1,0 +1,81 @@
+---
+# web-t2-wordpress "Pressing Matters" — WordPress + MySQL on an internal
+# docker network. Weak admin password falls to wpscan; theme editor gives
+# RCE inside the container. Flags are injected post-deploy via docker exec —
+# the wordpress container only needs /bin/sh + base64.
+
+- name: pull images
+  ansible.builtin.command: docker pull {{ item }}
+  register: pull
+  changed_when: "'Downloaded newer' in pull.stdout or 'Status: Downloaded' in pull.stdout"
+  loop: [mysql:8.0, "wordpress:6.5-apache", wordpress:cli]
+
+- name: internal docker network
+  ansible.builtin.command: docker network create wp-net
+  register: net
+  changed_when: net.rc == 0
+  failed_when: net.rc != 0 and 'already exists' not in (net.stderr | default(''))
+
+- name: mysql container (backend net only)
+  ansible.builtin.command: >-
+    docker run -d --name wp-mysql --restart unless-stopped
+    --network wp-net
+    -e MYSQL_ROOT_PASSWORD=root_db!
+    -e MYSQL_DATABASE=wordpress
+    -e MYSQL_USER=wp
+    -e MYSQL_PASSWORD=WpDb!2024
+    mysql:8.0
+  register: c1
+  changed_when: c1.rc == 0
+  failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))
+
+- name: wait for mysql to accept connections
+  ansible.builtin.command: docker exec wp-mysql mysqladmin ping -proot_db! --silent
+  register: dbping
+  until: dbping.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  ignore_errors: true
+
+- name: wordpress container (published :80)
+  ansible.builtin.command: >-
+    docker run -d --name wordpress --restart unless-stopped
+    --network wp-net -p 80:80
+    -e WORDPRESS_DB_HOST=wp-mysql
+    -e WORDPRESS_DB_NAME=wordpress
+    -e WORDPRESS_DB_USER=wp
+    -e WORDPRESS_DB_PASSWORD=WpDb!2024
+    wordpress:6.5-apache
+  register: c2
+  changed_when: c2.rc == 0
+  failed_when: c2.rc != 0 and 'Conflict' not in (c2.stderr | default(''))
+
+- name: wait for wp files to exist in the container
+  ansible.builtin.command: docker exec wordpress test -f /var/www/html/wp-login.php
+  register: wpfiles
+  until: wpfiles.rc == 0
+  retries: 24
+  delay: 5
+  changed_when: false
+  ignore_errors: true
+
+- name: install wordpress — admin / passw0rd (the weak-cred lesson)
+  ansible.builtin.command: >-
+    docker run --rm --network wp-net wordpress:cli
+    wp core install --allow-root
+    --url=http://{{ ansible_default_ipv4.address }}
+    --title='Corp Intranet'
+    --admin_user=admin
+    --admin_password=passw0rd
+    --admin_email=admin@corp.local
+    --skip-email
+  register: wpi
+  changed_when: "'Success' in (wpi.stdout | default(''))"
+  failed_when: wpi.rc != 0 and 'already installed' not in (wpi.stderr | default('')) + (wpi.stdout | default(''))
+  ignore_errors: true
+
+- name: uploads + flag staging dirs inside the container
+  ansible.builtin.command: docker exec wordpress /bin/sh -c 'mkdir -p /var/www/html/wp-content/uploads'
+  changed_when: false
+  ignore_errors: true

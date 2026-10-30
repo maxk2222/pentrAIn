@@ -1,0 +1,100 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t3-exam
+  track: linux-fundamentals
+  tier: 3
+  title: "Exam: Supply Chain"
+  exam: true
+  version: 1
+display:
+  tagline: "T3 final exam: three hosts deep — bastion to app tier to database. Credentials leak at every hop; so does the flag."
+requirements:
+  min_ram_gb: 14
+  min_vcpus: 10
+  min_disk_gb: 120
+  est_deploy_min: 15
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: bastion01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 50
+      roles: [pentrain_linux_t3_exam_bastion]
+    - name: app01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 51
+      roles: [pentrain_linux_t3_exam_app]
+    - name: db01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 52
+      roles: [pentrain_linux_t3_exam_db]
+flags:
+  - id: bastion-flag
+    name: "Bastion flag — /home/deployer/user.txt"
+    kind: file
+    points: 150
+    vm: bastion01
+    file_path: /home/deployer/user.txt
+  - id: app-flag
+    name: "App flag — /root/app.txt (one hop + one escalation)"
+    kind: file
+    points: 250
+    vm: app01
+    file_path: /root/app.txt
+  - id: db-flag
+    name: "DB flag — /root/db.txt (two hops deep)"
+    kind: file
+    points: 300
+    vm: db01
+    file_path: /root/db.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "bastion01's motd gives you the first account. Loot the user's home directory — runbooks leak the next hop."
+  - id: h2
+    cost: 60
+    stage: pivot
+    text: "ssh -J deployer@bastion app@app01 gets you there in one command. Then sudo -l on the app box — a pager is a shell."
+  - id: h3
+    cost: 80
+    stage: pivot
+    text: "/opt/app/config.yml names the db creds. Chain the jump: ssh -J deployer@bastion,app@app01 dba@db01 — dba is a full sudoer."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-bastion
+      name: "On the bastion"
+      detect: { command_match: "ssh .*deployer" }
+      hint_after_s: 600
+    - id: cp-pivot1
+      name: "Pivoted to the app tier"
+      detect: { command_match: "(ssh.*app@|ssh -J|sshuttle)" }
+      hint_after_s: 600
+    - id: cp-config
+      name: "Looted the app config"
+      detect: { command_match: "(config\\.yml|db_pass|DbAdmin|/opt/app)" }
+      hint_after_s: 480
+    - id: cp-pivot2
+      name: "Reached the db tier"
+      detect: { command_match: "ssh.*dba" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 700
+  time_bonus_max: 300
+  par_s: 2700
+  takeover_cost: 200

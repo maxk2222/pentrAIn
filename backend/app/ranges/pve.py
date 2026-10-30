@@ -77,6 +77,16 @@ class PveClient:
     async def vm_status(self, vmid: int) -> dict:
         return await self.get(f"/nodes/{self.creds.node}/qemu/{vmid}/status/current")
 
+    async def node_rrddata(self, timeframe: str = "hour") -> list[dict]:
+        data = await self.get(f"/nodes/{self.creds.node}/rrddata",
+                              params={"timeframe": timeframe})
+        return data if isinstance(data, list) else []
+
+    async def vm_rrddata(self, vmid: int, timeframe: str = "hour") -> list[dict]:
+        data = await self.get(f"/nodes/{self.creds.node}/qemu/{vmid}/rrddata",
+                              params={"timeframe": timeframe})
+        return data if isinstance(data, list) else []
+
     # ---------- console ----------
     async def vncproxy(self, vmid: int) -> dict:
         """Returns {'ticket': vnc_ticket, 'port': port}. Connect via vncwebsocket."""

@@ -1,0 +1,20 @@
+---
+# ad-t3-exam dc01 — runs after pentrain_ad_t3_dc. Adds a weak password-
+# sprayable domain user and an exam flag dir; the full kill-chain stays.
+
+- name: weak domain user — password-spray wins (Summer2024! is in every list)
+  community.windows.win_domain_user:
+    name: jholt
+    password: "Summer2024!"
+    state: present
+    password_never_expires: true
+
+- name: exam flag dir
+  ansible.windows.win_file:
+    path: C:\flags\exam
+    state: directory
+
+- name: jholt mentioned in an onboarding script (spray breadcrumb)
+  ansible.windows.win_copy:
+    dest: C:\Windows\SYSVOL\domain\scripts\onboarding.txt
+    content: "new hires: jholt (helpdesk) — default onboarding password policy pending\n"

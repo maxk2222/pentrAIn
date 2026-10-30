@@ -1,0 +1,9 @@
+galaxy_info:
+  author: pentrAIn
+  description: pentrAIn range role pentrain_web_t1_exam
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [all]
+dependencies: []

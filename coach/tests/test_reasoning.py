@@ -102,3 +102,44 @@ def test_think_block_never_leaks_to_chat_fallback():
     assert out[0]["type"] == "send_chat"
     assert out[0]["content"] == "not-json prose"
     assert "secret" not in out[0]["content"]
+
+
+async def test_chat_returns_latency_and_usage():
+    c = LlmClient("http://x/v1", "", "m")
+
+    async def fake_post(path, json=None):
+        return _Resp({"choices": [{"message": {"content": "ok"}}],
+                      "usage": {"prompt_tokens": 3, "completion_tokens": 2,
+                                "total_tokens": 5}})
+
+    c._client.post = fake_post
+    r = await c.chat([{"role": "user", "content": "hi"}], json_mode=False)
+    assert r["usage"]["total_tokens"] == 5
+    assert isinstance(r["latency_ms"], int) and r["latency_ms"] >= 0
+
+
+async def test_report_llm_usage_posts_row():
+    from coach.client import BackendClient
+    sent = {}
+
+    class _Cfg:
+        backend_url = "http://be"
+        coach_service_token = "t"
+        backend_ws_url = "ws://be/ws"
+
+    import coach.client as cc
+    old = cc.get_config
+    cc.get_config = lambda: _Cfg()
+    try:
+        cl = BackendClient()
+        async def fake_post(path, body=None):
+            sent["path"], sent["body"] = path, body
+            return {}
+        cl._post = fake_post
+        await cl.report_llm_usage(7, "m1", "chat",
+                                  {"total_tokens": 5, "prompt_tokens": 3}, 42)
+        assert sent["path"] == "/api/coach/llm-usage"
+        assert sent["body"]["total_tokens"] == 5 and sent["body"]["latency_ms"] == 42
+        await cl.close()
+    finally:
+        cc.get_config = old

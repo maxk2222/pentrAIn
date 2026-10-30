@@ -1,0 +1,15 @@
+---
+- name: restart vsftpd
+  ansible.builtin.service:
+    name: vsftpd
+    state: restarted
+
+- name: restart smbd
+  ansible.builtin.service:
+    name: smbd
+    state: restarted
+
+- name: restart sshd
+  ansible.builtin.service:
+    name: ssh
+    state: restarted

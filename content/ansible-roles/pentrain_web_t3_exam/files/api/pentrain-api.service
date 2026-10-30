@@ -1,0 +1,13 @@
+[Unit]
+Description=pentrAIn exam reporting api
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/reporting-api/app.py
+WorkingDirectory=/opt/reporting-api
+Restart=always
+# range-only: the app runs as root so the exec endpoint demonstrates impact
+User=root
+
+[Install]
+WantedBy=multi-user.target

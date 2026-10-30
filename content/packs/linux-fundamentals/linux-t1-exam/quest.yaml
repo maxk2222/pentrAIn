@@ -1,0 +1,80 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t1-exam
+  track: linux-fundamentals
+  tier: 1
+  title: "Exam: The Onboarding Box"
+  exam: true
+  version: 1
+display:
+  tagline: "T1 final exam: loot the box for credentials, get your shell, and climb one SUID binary to root — no walkthrough this time."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: onboarding01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 40
+      roles: [pentrain_linux_t1_exam]
+flags:
+  - id: user-flag
+    name: "User flag — /home/intern/user.txt"
+    kind: file
+    points: 150
+    vm: onboarding01
+    file_path: /home/intern/user.txt
+  - id: root-flag
+    name: "Root flag — /root/root.txt"
+    kind: file
+    points: 300
+    vm: onboarding01
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "SSH is open — you just need credentials. Something on the host welcomes new employees; grep the filesystem for onboarding material."
+  - id: h2
+    cost: 50
+    stage: privesc
+    text: "find / -perm -4000 -type f 2>/dev/null — one interpreter in that list shouldn't carry the SUID bit. GTFOBins shows what it can execute."
+  - id: h3
+    cost: 60
+    stage: privesc
+    text: "python3 -c 'import os;os.execl(\"/bin/sh\",\"sh\",\"-p\")' — a SUID interpreter is a full root shell, not just a file read."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-loot
+      name: "Looted for credentials"
+      detect: { command_match: "(grep|find|onboarding|welcome)" }
+      hint_after_s: 480
+    - id: cp-ssh
+      name: "Logged in as intern"
+      detect: { command_match: "ssh .*intern" }
+      hint_after_s: 480
+    - id: cp-suid
+      name: "Enumerated SUID binaries"
+      detect: { command_match: "perm.{0,15}(4000|u=s|ug=s|/s)" }
+      hint_after_s: 480
+    - id: cp-gtfobins
+      name: "Used the SUID binary"
+      detect: { command_match: "python3" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 720 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1200
+  takeover_cost: 150

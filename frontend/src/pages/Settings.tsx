@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrainCircuit, Gauge, Package, PlugZap, RefreshCw, Save, Server, Shield } from "lucide-react";
-import { api, type EngineResources, type EngineStatus, type LlmModelsOut, type LlmTestOut, type Settings } from "@/lib/api";
+import { api, type EngineResources, type EngineStatus, type LlmEffortsOut, type LlmModelsOut, type LlmTestOut, type Settings } from "@/lib/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Select, Slider, Switch } from "@/components/ui";
 
 interface Spec {
-  label: string; type: "text" | "int" | "float" | "bool" | "choice" | "password" | "model";
+  label: string; type: "text" | "int" | "float" | "bool" | "choice" | "password" | "model" | "effort";
   min?: number; max?: number; step?: number; choices?: { value: string; label: string }[];
   placeholder?: string; help?: string; kind?: "chat" | "vision";
 }
@@ -41,10 +41,8 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
       ["llm.temperature", { label: "Temperature", type: "float", min: 0, max: 1.5, step: 0.05 }],
       ["llm.reasoning", { label: "Thinking / reasoning", type: "bool", help: "Let reasoning-capable models think before answering (disable for fastest replies)" }],
       ["llm.reasoning_effort", {
-        label: "Reasoning effort", type: "choice", choices: [
-          { value: "low", label: "Low" }, { value: "medium", label: "Medium" },
-          { value: "high", label: "High" },
-        ],
+        label: "Reasoning effort", type: "effort",
+        help: "levels detected from the endpoint — 'none' ≈ reasoning off",
       }],
       ["llm.daily_token_budget", { label: "Daily token budget (0 = unlimited)", type: "int", min: 0, max: 100_000_000, step: 100000 }],
     ],
@@ -206,6 +204,9 @@ function SettingField({ spec, value, onChange, get }: {
   if (spec.type === "model") {
     return <ModelField spec={spec} value={value} onChange={onChange} get={get} />;
   }
+  if (spec.type === "effort") {
+    return <EffortField spec={spec} value={value} onChange={onChange} get={get} />;
+  }
   if (spec.type === "bool") {
     return (
       <div className="rounded-lg border border-border p-3">
@@ -348,6 +349,69 @@ function ModelField({ spec, value, onChange, get }: {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Reasoning-effort picker: probes the endpoint's real supported values
+ *  (sends an invalid effort, parses "Supported values: …" from the error),
+ *  falls back to the union list. */
+function EffortField({ spec, value, onChange, get }: {
+  spec: Spec; value: unknown; onChange: (v: unknown) => void;
+  get: (k: string) => unknown;
+}) {
+  const effort = String(value ?? "");
+  const baseUrl = String(get("llm.base_url") ?? "");
+  const apiKey = String(get("llm.api_key") ?? "");
+  const model = String(get("llm.model") ?? "");
+  const reasoningOn = Boolean(get("llm.reasoning"));
+  const [efforts, setEfforts] = useState<string[] | null>(null);
+  const [source, setSource] = useState("");
+  const [fetching, setFetching] = useState(false);
+
+  const fetchEfforts = useCallback(async () => {
+    setFetching(true);
+    try {
+      const r = await api.post<LlmEffortsOut>("/api/llm/reasoning-efforts",
+        { base_url: baseUrl, api_key: apiKey, model });
+      setEfforts(r.efforts);
+      setSource(r.ok ? (r.source === "endpoint" ? "endpoint" : "defaults")
+                     : `probe failed — ${r.error || "?"}`);
+    } catch {
+      setEfforts(null);
+      setSource("probe failed");
+    } finally {
+      setFetching(false);
+    }
+  }, [baseUrl, apiKey, model]);
+
+  useEffect(() => {
+    if (!baseUrl || !model) { setEfforts(null); return; }
+    const t = setTimeout(fetchEfforts, 600);
+    return () => clearTimeout(t);
+  }, [baseUrl, model, fetchEfforts]);
+
+  const opts = efforts ? [...efforts] : [];
+  if (effort && !opts.includes(effort)) opts.unshift(effort);
+
+  return (
+    <div>
+      <span className="mb-1.5 block text-sm font-medium text-muted">{spec.label}</span>
+      <div className="flex items-center gap-2">
+        <Select className="w-full" value={effort} disabled={!reasoningOn}
+          onChange={(e) => onChange(e.target.value)}>
+          {!opts.includes(effort) && <option value={effort}>{effort || "…"}</option>}
+          {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+        </Select>
+        <Button variant="ghost" size="sm" onClick={fetchEfforts}
+          disabled={fetching || !baseUrl || !model}>
+          <RefreshCw className={`h-3.5 w-3.5 ${fetching ? "animate-spin" : ""}`} />
+        </Button>
+      </div>
+      <span className="mt-1 block text-xs text-muted/70">
+        {!reasoningOn ? "enable reasoning above to pick an effort" :
+         source ? `· ${source}` : spec.help}
+      </span>
     </div>
   );
 }

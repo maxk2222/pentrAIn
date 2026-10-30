@@ -1,0 +1,6 @@
+[Unit]
+Description=PixelVault health check
+
+[Service]
+Type=oneshot
+ExecStart=/opt/webapp/healthcheck.sh

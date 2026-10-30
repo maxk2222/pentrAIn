@@ -1,0 +1,62 @@
+---
+# linux-t2-wildcard-cron "Wildcard" — a root cronjob archives /home/ops/backup
+# with `tar czf ... *`. Filenames starting with -- are arguments to tar:
+# --checkpoint-action=exec=sh runs the attacker's script AS ROOT every minute.
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: ops user (password leaked in the backup notes)
+  ansible.builtin.user:
+    name: ops
+    password: "{{ 'Ops2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/ops
+    create_home: true
+
+- name: ops' own backup dir — the tar wildcard's hunting ground
+  ansible.builtin.file:
+    path: /home/ops/backup
+    state: directory
+    owner: ops
+    group: ops
+    mode: "0755"
+
+- name: some real files to archive (background noise)
+  ansible.builtin.copy:
+    dest: "/home/ops/backup/{{ item }}"
+    content: "backup artifact — property of ops\n"
+    owner: ops
+    group: ops
+    mode: "0644"
+  loop: [notes-2024-09.txt, inventory.csv, readme.md]
+
+- name: leaked credentials note (world-readable — the foothold)
+  ansible.builtin.copy:
+    dest: /var/backups/NOTES.txt
+    content: |
+      BACKUP POLICY (ops team)
+      ------------------------
+      Every minute, /home/ops/backup is packed to ops-home.tar.gz by the
+      root cron. Login for the ops share:  ops / Ops2024!
+      — do NOT store anything starting with a dash in that dir, the
+        archiving script gets confused. (weird, whatever)
+    mode: "0644"
+
+- name: the vulnerable root cronjob — `tar czf … *` unquoted wildcard
+  ansible.builtin.cron:
+    name: pack ops backups
+    minute: "*"
+    job: "cd /home/ops/backup && tar czf /var/backups/ops-home.tar.gz *"
+    user: root
+    cron_file: pentrain-wildcard
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

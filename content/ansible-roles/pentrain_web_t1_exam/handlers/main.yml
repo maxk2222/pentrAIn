@@ -1,0 +1,10 @@
+---
+- name: restart apache
+  ansible.builtin.service:
+    name: apache2
+    state: restarted
+
+- name: restart sshd
+  ansible.builtin.service:
+    name: ssh
+    state: restarted

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Awaitable, Callable
 
 import httpx
@@ -72,9 +73,12 @@ class LlmClient:
             body["messages"] = _fold_history(body["messages"])
         if "no_response_format" in self._compat:
             body.pop("response_format", None)
+        started = time.monotonic()
         if on_delta is not None:
             resp = await self._chat_stream(body, on_delta)
             if resp is not None:
+                resp["latency_ms"] = int((time.monotonic() - started) * 1000)
+                resp["usage"] = resp["raw"].get("usage") or {}
                 return resp
             # endpoint refused/broke the stream before any token — plain call
         r = await self._client.post("/chat/completions", json=body)
@@ -102,9 +106,11 @@ class LlmClient:
             content = data["choices"][0]["message"]["content"]
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             raise LlmError(f"llm malformed response ({type(e).__name__}): {r.text[:200]}") from e
-        if usage := data.get("usage"):
+        usage = data.get("usage") or {}
+        if usage:
             self.tokens_used += int(usage.get("total_tokens", 0))
-        return {"content": content, "actions": parse_actions(content), "raw": data}
+        return {"content": content, "actions": parse_actions(content), "raw": data,
+                "usage": usage, "latency_ms": int((time.monotonic() - started) * 1000)}
 
     async def _chat_stream(self, body: dict,
                            on_delta: Callable[[str], Awaitable[None]]) -> dict | None:

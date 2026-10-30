@@ -490,6 +490,10 @@ class SessionCoach:
                 return False
             usage = (resp.get("raw") or {}).get("usage") or {}
             self.usage["tokens"] += int(usage.get("total_tokens", 0))
+            # fire-and-forget usage row for the stats page — never block the turn
+            asyncio.create_task(self.client.report_llm_usage(
+                self.sid, self.llm.model, "reflect" if proactive else "chat",
+                resp.get("usage"), resp.get("latency_ms")))
             spoke = False
             for a in resp["actions"]:
                 # model "reasoning notes" become working memory for later turns
@@ -622,6 +626,9 @@ class SessionCoach:
             }], json_mode=False, model=self._vision_model)
             usage = (resp.get("raw") or {}).get("usage") or {}
             self.usage["tokens"] += int(usage.get("total_tokens", 0))
+            asyncio.create_task(self.client.report_llm_usage(
+                self.sid, self._vision_model, "vision",
+                resp.get("usage"), resp.get("latency_ms")))
             return (resp.get("content") or "")[:600]
         except LlmError as e:
             return f"vision capture failed: {e}"

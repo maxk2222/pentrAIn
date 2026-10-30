@@ -185,6 +185,21 @@ class TelemetryEvent(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class LlmUsage(Base):
+    __tablename__ = "llm_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # no FK — usage rows survive session deletion
+    session_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    model: Mapped[str] = mapped_column(String(160), default="")
+    kind: Mapped[str] = mapped_column(String(24), default="chat")  # chat|reflect|vision
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class CoachMessage(Base):
     __tablename__ = "coach_messages"
 

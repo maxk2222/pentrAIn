@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t1-git-leak
+  track: web-appsec
+  tier: 1
+  title: "Committed"
+  version: 1
+display:
+  tagline: "A dev portal deployed straight from the repo — .git included. The credentials were 'removed'. Were they?"
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: web01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 27
+      roles: [pentrain_web_t1_git_leak]
+flags:
+  - id: admin-flag
+    name: "Admin flag — /admin/flag.txt"
+    kind: file
+    points: 150
+    vm: web01
+    file_path: /var/www/html/admin/flag.txt
+  - id: deploy-flag
+    name: "Deploy flag — /home/deploy/user.txt"
+    kind: file
+    points: 250
+    vm: web01
+    file_path: /home/deploy/user.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Enumerate the web root — gobuster/dirb with a common wordlist. Pay attention to directories that should never ship."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: ".git is browseable — `wget -r -np http://<ip>/.git/` or GitTools/git-dumper. Rebuild the working tree, then `git log` / `git show`."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "config.php holds the deploy account — and that password is reused for SSH (`ssh deploy@<ip>`)."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Enumerated the web root"
+      detect: { command_match: "(gobuster|dirb|ffuf|feroxbuster|nikto|\\.git)" }
+      hint_after_s: 480
+    - id: cp-git
+      name: "Recovered the repository"
+      detect: { command_match: "(git (log|show|checkout|clone)|wget.*\\.git|git-dumper|GitTools)" }
+      hint_after_s: 600
+    - id: cp-ssh
+      name: "Logged in as deploy"
+      detect: { command_match: "ssh .*deploy" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

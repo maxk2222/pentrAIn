@@ -1,0 +1,86 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: for-t2-exam
+  track: forensics
+  tier: 2
+  title: "Exam: Full Report"
+  exam: true
+  version: 1
+display:
+  tagline: "T2 final exam: a popped web server, a capture of the attack, and one implant the attacker never mentioned. Write the timeline."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: web01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 48
+      roles: [pentrain_for_t2_exam]
+flags:
+  - id: webshell-flag
+    name: "Webshell flag — where the attacker parked their shell"
+    kind: file
+    points: 150
+    vm: web01
+    file_path: /var/www/html/uploads/flag.txt
+  - id: exfil-flag
+    name: "Exfil flag — what they staged to steal"
+    kind: file
+    points: 200
+    vm: web01
+    file_path: /var/backups/exfil/flag.txt
+  - id: persistence-flag
+    name: "Persistence flag — the implant absent from the capture"
+    kind: file
+    points: 250
+    vm: web01
+    file_path: /var/lib/.sysmon/flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "/var/evidence/http-session.pcap shows the attack — reconstruct it with tshark http filters. The matching access log is under /var/log/apache2/."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "The pcap names the webshell path and the archive it built — find both on disk, plus whatever directory the tar was built from."
+  - id: h3
+    cost: 70
+    stage: persistence
+    text: "The capture shows the loud part. The quiet part is a second implant in a dot-dir under /var/lib — check cron and systemd for what calls it."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-pcap
+      name: "Read the capture"
+      detect: { command_match: "(tshark|wireshark|tcpdump|http-session|capinfos)" }
+      hint_after_s: 480
+    - id: cp-shell
+      name: "Found the webshell on disk"
+      detect: { command_match: "(shell\\.phtml|uploads|access\\.log)" }
+      hint_after_s: 480
+    - id: cp-exfil
+      name: "Located the exfil staging"
+      detect: { command_match: "(exfil|tar\\.|/var/backups)" }
+      hint_after_s: 480
+    - id: cp-persist
+      name: "Found the second implant"
+      detect: { command_match: "(sysmon|cron|systemd|\\.sh)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 840 }
+scoring:
+  base: 600
+  time_bonus_max: 250
+  par_s: 2100
+  takeover_cost: 150

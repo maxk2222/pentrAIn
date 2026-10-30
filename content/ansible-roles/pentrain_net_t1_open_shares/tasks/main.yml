@@ -1,0 +1,108 @@
+---
+# net-t1-open-shares "Open Shares" — samba guest share leaks a runbook with
+# credentials; the same creds unlock a restricted share AND ssh. SNMP is a
+# second, optional discovery path (sysContact + extend memo).
+# Flags are injected post-deploy — we only create dirs/users/vulns.
+
+- name: install services
+  ansible.builtin.apt:
+    name: [samba, snmpd, openssh-server]
+    state: present
+    update_cache: true
+
+- name: share roots
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/srv/samba, /srv/samba/public, /srv/samba/finance]
+
+- name: public share bait — the runbook that leaks credentials
+  ansible.builtin.copy:
+    dest: "{{ item.dest }}"
+    content: "{{ item.content }}"
+    mode: "0644"
+  loop:
+    - dest: /srv/samba/public/README.txt
+      content: |
+        ops share — drop public files here
+        (this share is temporary, DO NOT put credentials on it)
+    - dest: /srv/samba/public/backup-runbook.txt
+      content: |
+        NIGHTLY BACKUP RUNBOOK (v3 draft)
+        --------------------------------
+        1. sync /srv/samba/finance to the backup target — runs as the
+           service account:  svc-backup / Backup2024!
+        2. check the [finance] share for missed files
+        3. snmp monitors the job: community string is still 'public'
+           (change before go-live — TODO)
+
+- name: smb.conf — guest-readable [public], credential-gated [finance]
+  ansible.builtin.copy:
+    dest: /etc/samba/smb.conf
+    content: |
+      [global]
+         workgroup = WORKGROUP
+         server string = pentrain file server
+         security = user
+         map to guest = Bad User
+         log level = 1
+
+      [public]
+         path = /srv/samba/public
+         browseable = yes
+         read only = yes
+         guest ok = yes
+         guest only = yes
+
+      [finance]
+         path = /srv/samba/finance
+         browseable = yes
+         read only = yes
+         guest ok = no
+         valid users = svc-backup
+    validate: "testparm -s %s >/dev/null"
+  notify: restart smbd
+
+- name: svc-backup user (password leaked in the public runbook)
+  ansible.builtin.user:
+    name: svc-backup
+    password: "{{ 'Backup2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/svc-backup
+    create_home: true
+
+- name: samba password for svc-backup (same password — reuse is the lesson)
+  ansible.builtin.shell: "(echo 'Backup2024!'; echo 'Backup2024!') | smbpasswd -s -a svc-backup"
+  changed_when: false
+
+- name: memo parent dir (copy won't create it)
+  ansible.builtin.file:
+    path: /opt/backup
+    state: directory
+    mode: "0755"
+
+- name: snmp memo — second discovery path, hints at the account
+  ansible.builtin.copy:
+    dest: /opt/backup/memo.txt
+    content: "backup job runs as svc-backup — see runbook on the public share\n"
+    mode: "0644"
+
+- name: snmpd.conf — community public, full read tree (the exposure)
+  ansible.builtin.copy:
+    dest: /etc/snmp/snmpd.conf
+    content: |
+      agentAddress udp:161,udp6:[::1]:161
+      rocommunity public
+      sysLocation "rack 3, office"
+      sysContact "svc-backup@corp.local"
+      sysName smb01.corp.local
+      extend backup-memo /bin/cat /opt/backup/memo.txt
+  notify: restart snmpd
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

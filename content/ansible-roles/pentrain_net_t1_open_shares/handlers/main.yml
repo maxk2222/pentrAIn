@@ -1,0 +1,21 @@
+---
+- name: restart smbd
+  ansible.builtin.service:
+    name: smbd
+    state: restarted
+
+- name: restart nmbd
+  ansible.builtin.service:
+    name: nmbd
+    state: restarted
+  ignore_errors: true
+
+- name: restart snmpd
+  ansible.builtin.service:
+    name: snmpd
+    state: restarted
+
+- name: restart sshd
+  ansible.builtin.service:
+    name: ssh
+    state: restarted

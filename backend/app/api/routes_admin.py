@@ -1,14 +1,16 @@
 """Auth, setup wizard, settings, engine status, profile, telemetry ingest, pack mgmt."""
+import re
 import time
+from datetime import date, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
 from ..db import get_db
-from ..models.domain import CoachMessage, UserProfile
+from ..models.domain import CoachMessage, LlmUsage, UserProfile
 from ..schemas import (
     CheckpointIn,
     CoachExecIn,
@@ -242,6 +244,88 @@ async def llm_test(body: dict, db: AsyncSession = Depends(get_db),
     return {"ok": True, "latency_ms": latency_ms, "sample": sample.strip()}
 
 
+# effort levels worth trying at any OpenAI-compatible endpoint — union of the
+# LM Studio/Qwen set and OpenAI's reasoning_effort vocabulary
+DEFAULT_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"]
+
+
+@router.post("/llm/reasoning-efforts")
+async def llm_reasoning_efforts(body: dict, db: AsyncSession = Depends(get_db),
+                                _=Depends(get_current_user)):
+    """Probe the endpoint's real effort vocabulary by sending an invalid value —
+    servers that validate reply with "Supported values: …" (LM Studio/Qwen do);
+    everything else gets the union fallback."""
+    url, key = await _llm_endpoint(db, body.get("base_url"), body.get("api_key"))
+    model = ((body.get("model") or "").strip()
+             or await settings_svc.get_secret(db, "llm.model"))
+    if not model:
+        return {"ok": False, "error": "model required", "efforts": DEFAULT_EFFORTS,
+                "source": "fallback"}
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as c:
+            r = await c.post(f"{url}/chat/completions", headers=headers, json={
+                "model": model, "max_tokens": 1, "reasoning_effort": "pentrain_probe",
+                "messages": [{"role": "user", "content": "probe"}],
+            })
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": f"connection failed: {type(e).__name__}: {e}",
+                "efforts": DEFAULT_EFFORTS, "source": "fallback"}
+    if r.status_code >= 400:
+        m = re.search(r"supported values[^a-zA-Z]*([a-zA-Z,\s]+)", r.text, re.IGNORECASE)
+        if m:
+            efforts = [e for e in re.split(r"[,\s]+", m.group(1).strip())
+                       if re.fullmatch(r"[a-z]+", e)]
+            if efforts:
+                return {"ok": True, "efforts": efforts, "source": "endpoint"}
+    return {"ok": True, "efforts": DEFAULT_EFFORTS, "source": "fallback"}
+
+
+@router.get("/llm/usage")
+async def llm_usage(days: int = 7, db: AsyncSession = Depends(get_db),
+                    _=Depends(get_current_user)):
+    """Aggregated coach-LLM consumption for the stats page."""
+    days = max(1, min(days, 90))
+    since = date.today() - timedelta(days=days - 1)
+    day_col = func.date(LlmUsage.ts)
+    rows = (await db.execute(
+        select(day_col.label("day"),
+               func.count(LlmUsage.id).label("requests"),
+               func.coalesce(func.sum(LlmUsage.total_tokens), 0).label("tokens"),
+               func.coalesce(func.sum(LlmUsage.prompt_tokens), 0).label("prompt"),
+               func.coalesce(func.sum(LlmUsage.completion_tokens), 0).label("completion"),
+               func.coalesce(func.avg(LlmUsage.latency_ms), 0).label("avg_latency_ms"))
+        .where(day_col >= since.isoformat())
+        .group_by(day_col))).all()
+    return {
+        "days": [{"day": str(r.day), "requests": r.requests, "tokens": r.tokens,
+                  "prompt": r.prompt, "completion": r.completion,
+                  "avg_latency_ms": round(r.avg_latency_ms)} for r in rows],
+        "budget": await settings_svc.get_setting(db, "llm.daily_token_budget", 0),
+    }
+
+
+@router.get("/engine/metrics")
+async def engine_metrics(timeframe: str = "hour",
+                         db: AsyncSession = Depends(get_db),
+                         _=Depends(get_current_user)):
+    """Proxy PVE node rrddata — host cpu/mem/net/io time series for /stats."""
+    if timeframe not in ("hour", "day", "week", "month"):
+        timeframe = "hour"
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine — no host metrics", "rows": []}
+    try:
+        rows = await engine.pve.node_rrddata(timeframe)
+    except Exception as e:
+        return {"ok": False, "reason": f"rrddata failed: {e}", "rows": []}
+    keep = ("time", "cpu", "maxcpu", "loadavg", "memused", "memtotal",
+            "memavailable", "netin", "netout", "iowait", "swapused",
+            "roottotal", "rootused")
+    return {"ok": True, "timeframe": timeframe,
+            "rows": [{k: r[k] for k in keep if k in r} for r in rows]}
+
+
 @router.post("/packs/sync")
 async def sync_packs(db: AsyncSession = Depends(get_db),
                      _=Depends(get_current_user)):
@@ -391,3 +475,18 @@ async def coach_update_profile(body: dict, db: AsyncSession = Depends(get_db)):
         p.xp_total = int(body["xp_total"])
     await db.commit()
     return {"ok": True}
+
+
+@coach_router.post("/llm-usage", status_code=204)
+async def coach_llm_usage(body: dict, db: AsyncSession = Depends(get_db)):
+    """Coach reports per-request token/latency for the stats page — fire-and-forget."""
+    db.add(LlmUsage(
+        session_id=body.get("session_id") or None,
+        model=str(body.get("model") or "")[:160],
+        kind=str(body.get("kind") or "chat")[:24],
+        prompt_tokens=int(body.get("prompt_tokens") or 0),
+        completion_tokens=int(body.get("completion_tokens") or 0),
+        total_tokens=int(body.get("total_tokens") or 0),
+        latency_ms=int(body.get("latency_ms") or 0),
+    ))
+    await db.commit()

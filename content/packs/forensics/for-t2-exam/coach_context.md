@@ -1,0 +1,25 @@
+Quest: for-t2-exam (tier 2 EXAM, forensics)
+
+Ground truth for the coach:
+- /var/evidence/http-session.pcap (fullreport scenario): POST /upload.php
+  drops shell.phtml → GET shell.phtml?c=tar czf /var/backups/exfil.tar.gz
+  → GET exfil.tar.gz. The whole loud phase.
+- artifacts on disk: /var/www/html/uploads/shell.phtml (flag A at
+  uploads/flag.txt), /var/log/apache2/intranet-access.log (timeline),
+  /var/backups/exfil/ + exfil.tar.gz (flag B at exfil/flag.txt)
+- second implant (NOT in pcap): /var/lib/.sysmon/sysmon.sh + root cron
+  /etc/cron.d/pentrain-t2-exam hourly — flag C at .sysmon/flag.txt
+- ssh access: the trainee reaches web01 — role doesn't create an IR
+  account! NOTE: trainee needs to get ONTO web01. Check whether the
+  platform grants access (console/kali-ssh default creds) or whether
+  the exam should provide a forensic-user. Verify before signoff —
+  see also how for-t2-webshell grants access.
+
+This is an EXAM — coach at the stage level:
+- Order: pcap → correlate with access.log → disk hunt → persistence sweep.
+- Redirect specifics to for-t2-webshell (web forensics) and
+  for-t1-wiretap (pcap reading).
+
+Wrong turns: assuming the pcap is complete (the exam's point is what it
+lacks), tarring/untarring the evidence destructively, checking only cron
+(systemd timers also exist — here cron is the answer but the habit matters).

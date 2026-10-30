@@ -1,0 +1,25 @@
+---
+# ad-t1-exam — runs against the DC after pentrain_ad_t1. Adds an AS-REP
+# roastable account (no preauth) so the exam covers BOTH roast primitives
+# plus the SYSVOL/enum skills from the teaching quest.
+
+- name: AS-REP roastable user (kerberos preauth disabled — the new vuln)
+  community.windows.win_domain_user:
+    name: svc-report
+    password: "Report2024!"
+    state: present
+    password_never_expires: true
+
+- name: disable kerberos preauth on svc-report
+  ansible.windows.win_powershell:
+    script: Set-ADAccountControl -Identity svc-report -DoesNotRequirePreAuth $true
+
+- name: second flag dir (the roast-chain target)
+  ansible.windows.win_file:
+    path: C:\flags\exam
+    state: directory
+
+- name: staged breadcrumb tying svc-report to the report service
+  ansible.windows.win_copy:
+    dest: C:\Windows\SYSVOL\domain\scripts\reports-runbook.txt
+    content: "nightly reports run as svc-report — svc account, do not touch\n"

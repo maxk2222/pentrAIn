@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t2-upload-bypass
+  track: web-appsec
+  tier: 2
+  title: "Gallery"
+  version: 1
+display:
+  tagline: "An upload form with a blacklist and a trusting MIME check — get a shell as www-data, then turn a health check into root."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: web02
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 30
+      roles: [pentrain_web_t2_upload_bypass]
+flags:
+  - id: web-flag
+    name: "Web flag — readable only from a shell context"
+    kind: file
+    points: 200
+    vm: web02
+    file_path: /var/www/internal/flag.txt
+  - id: root-flag
+    name: "Root flag — /root/root.txt"
+    kind: file
+    points: 300
+    vm: web02
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "The upload rejects '.php' — a blacklist, not a whitelist. Which other extensions does the server actually execute?"
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "Try .phtml or .phar, and remember the MIME check reads YOUR header — `curl -F 'photo=@shell.phtml;type=image/png'`. Browse /uploads/."
+  - id: h3
+    cost: 60
+    stage: privesc
+    text: "As www-data: `find / -group www-data -writable`, or `systemctl list-timers`. A root-run healthcheck script that www-data can edit wins the box."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-upload
+      name: "Attempted an upload bypass"
+      detect: { command_match: "(upload|curl.*-F|\\.phtml|\\.phar|burp)" }
+      hint_after_s: 600
+    - id: cp-shell
+      name: "Ran commands via the webshell"
+      detect: { command_match: "(cmd=|system\\(|whoami|shell\\.p)" }
+      hint_after_s: 600
+    - id: cp-privesc
+      name: "Found the writable root-run script"
+      detect: { command_match: "(healthcheck|systemctl|writable|list-timers|group www-data)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

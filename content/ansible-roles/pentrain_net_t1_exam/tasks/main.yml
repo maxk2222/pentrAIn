@@ -1,0 +1,93 @@
+---
+# net-t1-exam "Neighborhood Watch" — combines net-t1-services (full service
+# enum → anonymous ftp) + net-t1-open-shares (smb → creds → ssh). Root via
+# sudo NOPASSWD find — GTFOBins capstone.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [vsftpd, samba, openssh-server]
+    state: present
+    update_cache: true
+
+- name: anonymous ftp root + pub dir
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/srv/ftp, /srv/ftp/pub]
+
+- name: decoy + flag staging files in the ftp root
+  ansible.builtin.copy:
+    dest: "/srv/ftp/pub/{{ item }}"
+    content: "archive export — property of facilities\n"
+    mode: "0644"
+  loop: [manifest-2023.txt, floorplan-README.txt]
+
+- name: vsftpd — flip the stock anonymous_enable=NO to YES (first match wins)
+  ansible.builtin.lineinfile:
+    path: /etc/vsftpd.conf
+    regexp: "^anonymous_enable="
+    line: "anonymous_enable=YES"
+  notify: restart vsftpd
+
+- name: vsftpd — anonymous read-only settings (the misconfiguration)
+  ansible.builtin.blockinfile:
+    path: /etc/vsftpd.conf
+    marker: "# {mark} PENTRAIN NET-T1-EXAM"
+    block: |
+      anon_root=/srv/ftp
+      no_anon_password=YES
+      write_enable=NO
+  notify: restart vsftpd
+
+- name: smb share dir with the leaked creds
+  ansible.builtin.file:
+    path: /srv/smb/it
+    state: directory
+    mode: "0755"
+
+- name: it notes leaking field-tech credentials
+  ansible.builtin.copy:
+    dest: /srv/smb/it/field-access.txt
+    content: |
+      FIELD TECH ACCESS (for site visits)
+        ssh user: fieldtech
+        password: Field2024!
+      sudo is scoped to `find` for log collection — do not widen it.
+    mode: "0644"
+
+- name: guest-readable samba share
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    marker: "# {mark} PENTRAIN NET-T1-EXAM"
+    block: |
+      [global]
+        map to guest = Bad User
+      [it]
+        path = /srv/smb/it
+        guest ok = yes
+        read only = yes
+        browseable = yes
+  notify: restart smbd
+
+- name: fieldtech account
+  ansible.builtin.user:
+    name: fieldtech
+    password: "{{ 'Field2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/fieldtech
+    create_home: true
+
+- name: sudo NOPASSWD on find — the "log collection" scope
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/fieldtech
+    content: "fieldtech ALL=(root) NOPASSWD: /usr/bin/find\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

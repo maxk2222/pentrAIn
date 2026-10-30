@@ -39,6 +39,7 @@ meta:
   track: linux-fundamentals       # groups quests; ordering via `tier`
   tier: 1                         # progression within the track
   title: "First Foothold"
+  exam: false                     # optional — see "Exam quests" below
   version: 1
 display:
   tagline: "SSH in with weak creds, escalate via a sudo misconfiguration."
@@ -146,6 +147,34 @@ scoring:
   par_s: 900             # finishing under par adds bonus, decaying to 0 at 2×par
   takeover_cost: 100     # penalty per coach takeover action (autonomy 4)
 ```
+
+## Progression and exam quests
+
+Quests unlock per track:
+
+- **Tier 1** is always open.
+- A **normal tier N quest** unlocks when **any** non-exam quest of tier N−1
+  in the same track is solved (`any-solved` — multiple quests per tier are
+  supported; you only need one).
+- An **exam quest** (`meta.exam: true`) unlocks only when **every** non-exam
+  quest of its own track+tier is solved (`all-solved`). It is the capstone
+  for that tier — design it to combine *all* skills the tier's teaching
+  quests covered.
+- Exam quests **never** count as tier predecessors. Solving the T1 exam
+  alone does not open T2 — a real T1 quest must be solved.
+
+Exam conventions:
+
+- Naming: `<track>-t<N>-exam`, title `"Exam: <name>"`.
+- The library renders an **EXAM** badge and sorts exams after the teaching
+  quests of the same tier (API ordering, not client-side).
+- `coach_context.md` should state the exam posture explicitly: confirm
+  stages rather than hand out answers, and redirect stuck trainees to the
+  matching teaching quest.
+- Same flag/role rules apply — exams may reuse teaching roles as building
+  blocks plus a dedicated `pentrain_*_exam` role for the extra surface.
+- AD exams exist for all three tiers (`needs_windows: true`) and inherit
+  the same template/resource caveats as the teaching quests (see ops.md).
 
 ## Ansible roles
 

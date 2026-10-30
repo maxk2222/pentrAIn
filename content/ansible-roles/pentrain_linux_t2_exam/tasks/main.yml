@@ -1,0 +1,66 @@
+---
+# linux-t2-exam "The Maintenance Window" — combines linux-t2-privesc-chain
+# (sudo GTFOBin) + linux-t2-wildcard-cron (root cron tar *). Either path
+# reaches root — the exam wants you to find at least one, ideally both.
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: maint account (creds leak via the ops motd)
+  ansible.builtin.user:
+    name: maint
+    password: "{{ 'Maint2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/maint
+    create_home: true
+
+- name: leaked creds in a world-readable ops note
+  ansible.builtin.copy:
+    dest: /etc/motd
+    content: |
+      === maintenance window: sundays 02:00-04:00 ===
+      maintenance account for contractors:  maint / Maint2024!
+      report issues to ops@corp.local
+    mode: "0644"
+
+- name: spool dir the root cron packs every minute (wildcard surface)
+  ansible.builtin.file:
+    path: /home/maint/spool
+    state: directory
+    owner: maint
+    group: maint
+    mode: "0755"
+
+- name: noise files in the spool
+  ansible.builtin.copy:
+    dest: "/home/maint/spool/{{ item }}"
+    content: "maintenance artifact\n"
+    owner: maint
+    group: maint
+    mode: "0644"
+  loop: [job-1042.log, job-1043.log, manifest.txt]
+
+- name: root cron — tar wildcard over a user-writable dir
+  ansible.builtin.cron:
+    name: pack maintenance spool
+    minute: "*"
+    job: "cd /home/maint/spool && tar czf /var/backups/maint-spool.tar.gz *"
+    user: root
+    cron_file: pentrain-t2-exam
+
+- name: sudo NOPASSWD journalctl — the second privesc path
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/maint
+    content: "maint ALL=(root) NOPASSWD: /usr/bin/journalctl\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

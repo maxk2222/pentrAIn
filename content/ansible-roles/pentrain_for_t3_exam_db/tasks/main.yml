@@ -1,0 +1,65 @@
+---
+# for-t3-exam db02 — the second victim: auth.log shows the ssh from web02;
+# the loot dir holds what they staged. Correlation is the exam.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server]
+    state: present
+    update_cache: true
+
+- name: IR analyst account (same documented creds)
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+    groups: [sudo]
+    append: true
+
+- name: dbmaint — the account the attacker abused
+  ansible.builtin.user:
+    name: dbmaint
+    password: "{{ 'DbMaint2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/dbmaint
+    create_home: true
+
+- name: auth.log evidence — ssh from web02's address
+  ansible.builtin.copy:
+    dest: /var/log/auth.log
+    content: |
+      Nov 14 09:14:12 db02 sshd[2041]: Accepted password for dbmaint from 10.10.10.58 port 41022 ssh2
+      Nov 14 09:14:12 db02 sshd[2041]: pam_unix(sshd:session): session opened for user dbmaint
+      Nov 14 09:14:19 db02 sudo:  dbmaint : TTY=pts/0 ; PWD=/home/dbmaint ; USER=root ; COMMAND=/usr/bin/tar czf /var/backups/loot.tar.gz /var/lib/mysql-exports
+      Nov 14 09:15:44 db02 sshd[2041]: pam_unix(sshd:session): session closed for user dbmaint
+    mode: "0644"
+
+- name: mysql exports dir — what was dumped
+  ansible.builtin.file:
+    path: /var/lib/mysql-exports
+    state: directory
+    mode: "0755"
+
+- name: a dump artifact
+  ansible.builtin.copy:
+    dest: /var/lib/mysql-exports/customers-2024-11.sql
+    content: |
+      -- mysqldump customers 2024-11-14 (sample)
+      CREATE TABLE customers (id INT, email VARCHAR(255));
+      INSERT INTO customers VALUES (1,'ops@corp.local'),(2,'finance@corp.local');
+    mode: "0644"
+
+- name: loot staging dir named in the sudo log line
+  ansible.builtin.file:
+    path: /var/backups/loot
+    state: directory
+    mode: "0755"
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

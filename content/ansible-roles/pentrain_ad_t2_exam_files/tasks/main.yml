@@ -1,0 +1,14 @@
+---
+# ad-t2-exam files01 — runs after pentrain_ad_t2_files. Adds a second
+# breadcrumb on the share pointing at the exam's extra roastable account.
+
+- name: second creds note on the guest share (exam breadcrumb)
+  ansible.builtin.copy:
+    dest: /srv/share/backups/domain-notes.txt
+    content: |
+      DOMAIN MAINTENANCE NOTES
+      ------------------------
+      - svc-metrics handles the dashboard pull — ask DC admin before
+        touching kerberos settings (it needs preauth OFF, long story)
+      - ws01 service login still: CORP\wuser / Work2024!
+    mode: "0644"

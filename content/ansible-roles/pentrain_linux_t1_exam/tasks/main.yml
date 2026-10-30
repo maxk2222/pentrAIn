@@ -1,0 +1,48 @@
+---
+# linux-t1-exam "The Onboarding Box" — combines first-foothold (loot → creds
+# → ssh) + suid-hunt (SUID binary → root). Welcome note leaks the password;
+# /usr/bin/base64 carries the SUID bit (GTFOBins file-read primitive).
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: intern account (password leaked in the welcome pack)
+  ansible.builtin.user:
+    name: intern
+    password: "{{ 'Intern2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/intern
+    create_home: true
+
+- name: onboarding welcome pack — readable by anyone who looks
+  ansible.builtin.file:
+    path: /opt/onboarding
+    state: directory
+    mode: "0755"
+
+- name: welcome note with the credentials (the foothold)
+  ansible.builtin.copy:
+    dest: /opt/onboarding/welcome.txt
+    content: |
+      Welcome to the team, intern!
+      Your workstation account is already set up:
+        user: intern
+        pass: Intern2024!
+      Please change this password on first login. (nobody ever does)
+      — IT
+    mode: "0644"
+
+- name: SUID on /usr/bin/python3 — interpreter = full root shell (GTFOBins exec)
+  ansible.builtin.file:
+    path: /usr/bin/python3
+    mode: "4755"
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

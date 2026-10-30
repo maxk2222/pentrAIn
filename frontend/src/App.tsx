@@ -9,6 +9,7 @@ import { LibraryPage } from "@/pages/Library";
 import { QuestDetailPage } from "@/pages/QuestDetail";
 import { SessionPage } from "@/pages/Session";
 import { LeaderboardPage } from "@/pages/Leaderboard";
+import { StatsPage } from "@/pages/Stats";
 import { SettingsPage } from "@/pages/Settings";
 
 function Guard({ children }: { children: React.ReactNode }) {
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/quests/:questId" element={<QuestDetailPage />} />
         <Route path="/session/:sessionId" element={<SessionPage />} />
         <Route path="/leaderboard" element={<LeaderboardPage />} />
+        <Route path="/stats" element={<StatsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

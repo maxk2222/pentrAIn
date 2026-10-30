@@ -1,0 +1,100 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t3-exam
+  track: network-recon
+  tier: 3
+  title: "Exam: Three Doors Down"
+  exam: true
+  version: 1
+display:
+  tagline: "T3 final exam: a gossiping edge, a public dmz, a vault that only trusts the dmz. Every protocol you enumerated this tier pays off."
+requirements:
+  min_ram_gb: 14
+  min_vcpus: 10
+  min_disk_gb: 120
+  est_deploy_min: 15
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: edge01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 55
+      roles: [pentrain_net_t3_exam_edge]
+    - name: dmz01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 56
+      roles: [pentrain_net_t3_exam_dmz]
+    - name: vault01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 57
+      roles: [pentrain_net_t3_exam_vault]
+flags:
+  - id: edge-flag
+    name: "Edge flag — /home/edgeop/user.txt (snmp told you the password)"
+    kind: file
+    points: 150
+    vm: edge01
+    file_path: /home/edgeop/user.txt
+  - id: dmz-flag
+    name: "DMZ flag — served publicly under /docs"
+    kind: file
+    points: 200
+    vm: dmz01
+    file_path: /var/www/html/docs/flag.txt
+  - id: vault-flag
+    name: "Vault flag — /root/vault.txt (two pivots deep)"
+    kind: file
+    points: 350
+    vm: vault01
+    file_path: /root/vault.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "UDP scan the edge — snmpwalk -c public shows an 'extend' entry with credentials, and dig axfr maps the three hosts plus two telling TXT records."
+  - id: h2
+    cost: 60
+    stage: exploit
+    text: "The dmz is directly reachable: curl http://<dmz>/docs/ — one flag there, and netplan.txt leaks BOTH the dmz and vault accounts."
+  - id: h3
+    cost: 80
+    stage: pivot
+    text: "ssh -J docmaster@<dmz> vaultop@<vault> — or hop manually: ssh docmaster@dmz then ssh vaultop@vault from inside. vaultop is a full sudoer."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-udp
+      name: "Enumerated the edge's UDP"
+      detect: { command_match: "(snmpwalk|snmp-check|dig|nmap.*-sU)" }
+      hint_after_s: 600
+    - id: cp-edge
+      name: "Shelled the edge"
+      detect: { command_match: "ssh .*edgeop" }
+      hint_after_s: 600
+    - id: cp-dmz
+      name: "Looted the dmz docs"
+      detect: { command_match: "(docs|netplan|docmaster)" }
+      hint_after_s: 480
+    - id: cp-vault
+      name: "Pivoted to the vault"
+      detect: { command_match: "(ssh.*vaultop|ssh -J|sshuttle)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 700
+  time_bonus_max: 300
+  par_s: 2700
+  takeover_cost: 200

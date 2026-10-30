@@ -1,0 +1,138 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ad-t3-exam
+  track: active-directory
+  tier: 3
+  title: "Exam: Domain Takeover"
+  exam: true
+  version: 1
+display:
+  tagline: "T3 final exam: the complete kill chain — spray, roast, pivot, sync. Two DCs, two workstations, one domain. Take all of it."
+requirements:
+  min_ram_gb: 46
+  min_vcpus: 16
+  min_disk_gb: 360
+  est_deploy_min: 60
+  needs_windows: true
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: dc01
+      template: win2022-server-x64-template
+      ram_gb: 8
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 51
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        fqdn: corp.pentrain.local
+        role: primary-dc
+      roles: [pentrain_ad_t3_dc, pentrain_ad_t3_exam_dc]
+    - name: dc02
+      template: win2022-server-x64-template
+      ram_gb: 8
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 54
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        fqdn: corp.pentrain.local
+        role: alt-dc
+      roles: [pentrain_ad_t3_dc2]
+    - name: ws01
+      template: win11-22h2-x64-template
+      ram_gb: 6
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 53
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        fqdn: corp.pentrain.local
+        role: member
+      roles: [pentrain_ad_t3_ws1]
+    - name: ws02
+      template: win11-22h2-x64-template
+      ram_gb: 6
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 55
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        fqdn: corp.pentrain.local
+        role: member
+      roles: [pentrain_ad_t3_ws2]
+flags:
+  - id: spray-flag
+    name: "Spray flag — the onboarding user's prize"
+    kind: file
+    points: 150
+    vm: dc01
+    file_path: "C:\\flags\\exam\\spray.txt"
+  - id: ws-flag
+    name: "Workstation flag — mid-chain proof"
+    kind: file
+    points: 200
+    vm: ws01
+    file_path: "C:\\flags\\workstation.txt"
+  - id: dc2-flag
+    name: "Second DC flag — replication didn't save them"
+    kind: file
+    points: 250
+    vm: dc02
+    file_path: "C:\\flags\\dc2.txt"
+  - id: dcsync-flag
+    name: "DCSync flag — the keys to the kingdom"
+    kind: file
+    points: 350
+    vm: dc01
+    file_path: "C:\\flags\\krbtgt.txt"
+hints:
+  - id: h1
+    cost: 50
+    stage: recon
+    text: "Start with credentialed-less enum: impacket-GetADUsers or a kerberos user enum. SYSVOL's onboarding.txt names the helpdesk user — then spray seasons: netexec smb --users <list> --passwords <list>."
+  - id: h2
+    cost: 80
+    stage: exploit
+    text: "With any domain user, bloodhound-python maps the path: who has sessions on ws01/ws02, who is local admin where. The roastable svc accounts are still there."
+  - id: h3
+    cost: 100
+    stage: post
+    text: "Domain admin isn't the goal — DCSync is. impacket-secretsdump -just-dc on dc01 pulls krbtgt; a golden ticket or a second admin session reaches dc02."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-spray
+      name: "Ran a password spray"
+      detect: { command_match: "(netexec|crackmapexec|kerbrute|spray)" }
+      hint_after_s: 720
+    - id: cp-map
+      name: "Mapped the attack path"
+      detect: { command_match: "(bloodhound|sharphound|GetUserSPNs|GetNPUsers)" }
+      hint_after_s: 720
+    - id: cp-lateral
+      name: "Moved to a workstation"
+      detect: { command_match: "(evil-winrm|psexec|wmiexec|smbexec|winrm)" }
+      hint_after_s: 720
+    - id: cp-dcsync
+      name: "Synced the domain secrets"
+      detect: { command_match: "(secretsdump|dcsync|mimikatz|lsadump)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 120, nudge_s: 540, hint_s: 1020 }
+scoring:
+  base: 1000
+  time_bonus_max: 400
+  par_s: 5400
+  takeover_cost: 300

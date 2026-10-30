@@ -1,0 +1,73 @@
+---
+# net-t2-exam internal01 — the "second segment": nftables drops everything
+# except traffic from edge01 (and the ansible channel). Holds the web flag
+# + ssh flag the trainee can only reach after pivoting through the edge.
+
+- name: vars — edge is .46 on whatever /24 Ludus assigned
+  ansible.builtin.set_fact:
+    edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.46"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
+
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, nftables, openssh-server]
+    state: present
+    update_cache: true
+
+- name: nftables — accept only edge01 and the ansible channel
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ edge_ip }} accept
+          ip saddr {{ router_ip }} accept
+          counter drop
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: internal flag dir under the docroot
+  ansible.builtin.file:
+    path: /var/www/html/internal
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: internal web landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: |
+      <!doctype html><title>internal builds</title>
+      <h1>corp internal build server</h1>
+      <p>if you can see this, you came through the edge.</p>
+    mode: "0644"
+
+- name: netops account — creds leak via the zone TXT record
+  ansible.builtin.user:
+    name: netops
+    password: "{{ 'NetOps2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/netops
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

@@ -22,6 +22,7 @@ from ..schemas import (
 from ..services import console as console_svc
 from ..services import scoring as scoring_svc
 from ..services import sessions as sessions_svc
+from ..services.engine import get_engine
 from .deps import get_current_user
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(get_current_user)])
@@ -96,6 +97,36 @@ async def session_telemetry(session_id: int, limit: int = 100,
         .order_by(TelemetryEvent.id.desc()).limit(min(limit, 500)))).scalars().all()
     return [{"id": t.id, "kind": t.kind, "payload": t.payload,
              "ts": t.ts.isoformat() if t.ts else None} for t in reversed(rows)]
+
+
+@router.get("/sessions/{session_id}/metrics")
+async def session_metrics(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Live per-VM gauges for the stats page — cpu/mem/net per range VM."""
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine", "vms": []}
+    vms: list[dict] = [{"name": "kali", "role": "kali", "vmid": s.kali_vmid}] if s.kali_vmid else []
+    vms += [{"name": n, "role": "target", "vmid": v}
+            for n, v in (s.target_vmids or {}).items()]
+    out = []
+    for v in vms:
+        try:
+            st = await engine.pve.vm_status(v["vmid"])
+            out.append({**v,
+                        "status": st.get("status"),
+                        "cpu": st.get("cpu") or 0.0,
+                        "mem": st.get("mem") or 0,
+                        "maxmem": st.get("maxmem") or 0,
+                        "balloon": st.get("balloon") or 0,
+                        "netin": st.get("netin") or 0,
+                        "netout": st.get("netout") or 0,
+                        "uptime": st.get("uptime") or 0})
+        except Exception as e:
+            out.append({**v, "status": "error", "error": str(e)[:120]})
+    return {"ok": True, "vms": out}
 
 
 @router.get("/sessions/{session_id}/console")

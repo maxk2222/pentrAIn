@@ -89,6 +89,19 @@ class BackendClient:
     async def capture_screen(self, session_id: int) -> dict:
         return await self._post("/api/coach/screen", {"session_id": session_id})
 
+    async def report_llm_usage(self, session_id: int | None, model: str,
+                               kind: str, usage: dict | None,
+                               latency_ms: int | None) -> dict:
+        """Fire-and-forget usage row for the stats page — never blocks a turn."""
+        u = usage or {}
+        return await self._post("/api/coach/llm-usage", {
+            "session_id": session_id, "model": model, "kind": kind,
+            "prompt_tokens": int(u.get("prompt_tokens") or 0),
+            "completion_tokens": int(u.get("completion_tokens") or 0),
+            "total_tokens": int(u.get("total_tokens") or 0),
+            "latency_ms": int(latency_ms or 0),
+        })
+
     async def update_profile(self, metrics: dict | None = None,
                              track_levels: dict | None = None,
                              xp_total: int | None = None) -> dict:

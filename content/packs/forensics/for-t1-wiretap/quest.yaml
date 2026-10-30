@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: for-t1-wiretap
+  track: forensics
+  tier: 1
+  title: "Wiretap"
+  version: 1
+display:
+  tagline: "The NIDS recorded everything. Read the capture, replay the intruder's own credentials, find what they left behind."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: pcap01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 29
+      roles: [pentrain_for_t1_wiretap]
+flags:
+  - id: access-flag
+    name: "Access flag — prove the leaked creds still work"
+    kind: file
+    points: 150
+    vm: pcap01
+    file_path: /home/ops-backup/flag.txt
+  - id: stash-flag
+    name: "Stash flag — the attacker's drop directory"
+    kind: file
+    points: 250
+    vm: pcap01
+    file_path: /usr/local/lib/systemd-helper/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: triage
+    text: "Start in /evidence — `tshark -r capture.pcap` or Wireshark on the Kali desktop. Follow the TCP stream on port 21."
+  - id: h2
+    cost: 40
+    stage: analysis
+    text: "The FTP session carries a login in cleartext — and admins reuse passwords. Try them on SSH."
+  - id: h3
+    cost: 60
+    stage: analysis
+    text: "The data channel (port 20) carries the manifest — it names the directory where the persistence payload was staged."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-pcap
+      name: "Opened the capture"
+      detect: { command_match: "(tshark|wireshark|tcpdump.*-r|strings.*pcap|capinfos)" }
+      hint_after_s: 600
+    - id: cp-creds
+      name: "Extracted the credentials"
+      detect: { command_match: "(ftp|Restore|follow.*stream|ops-backup)" }
+      hint_after_s: 720
+    - id: cp-ssh
+      name: "Logged in as ops-backup"
+      detect: { command_match: "ssh .*ops-backup" }
+      hint_after_s: 600
+    - id: cp-stash
+      name: "Found the drop directory"
+      detect: { command_match: "(systemd-helper|/usr/local/lib)" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

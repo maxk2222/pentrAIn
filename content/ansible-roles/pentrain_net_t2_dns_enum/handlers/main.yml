@@ -1,0 +1,20 @@
+---
+- name: restart bind9
+  ansible.builtin.service:
+    name: bind9
+    state: restarted
+
+- name: restart snmpd
+  ansible.builtin.service:
+    name: snmpd
+    state: restarted
+
+- name: restart tftpd-hpa
+  ansible.builtin.service:
+    name: tftpd-hpa
+    state: restarted
+
+- name: restart sshd
+  ansible.builtin.service:
+    name: ssh
+    state: restarted

@@ -1,0 +1,64 @@
+---
+# net-t3-exam vault01 — the innermost host: nftables accepts only dmz01
+# and the ansible channel. vaultop creds leak on the dmz's notes.
+
+- name: vars — dmz is .56 on the range /24
+  ansible.builtin.set_fact:
+    dmz_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.56"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
+
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: nftables — only dmz + ansible channel
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ dmz_ip }} accept
+          ip saddr {{ router_ip }} accept
+          counter drop
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: vaultop account (creds leak on dmz01)
+  ansible.builtin.user:
+    name: vaultop
+    password: "{{ 'Vault2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/vaultop
+    create_home: true
+    groups: [sudo]
+    append: true
+
+- name: full sudoer — last step is one command
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/vaultop
+    content: "vaultop ALL=(ALL) ALL\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

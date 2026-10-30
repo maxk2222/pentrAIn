@@ -1,0 +1,76 @@
+---
+# net-t2-exam edge01 — combines dns-enum (open AXFR, SNMP leak, TFTP drop)
+# with the two-segments pivot: the zone's TXT record leaks creds for the
+# *internal* box, which only accepts traffic from this edge host.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [bind9, bind9utils, snmpd, tftpd-hpa, openssh-server]
+    state: present
+    update_cache: true
+
+- name: bind zone — open AXFR, creds hidden in a TXT record
+  ansible.builtin.copy:
+    dest: /etc/bind/db.corp.local
+    content: |
+      $TTL 300
+      @   IN  SOA ns1.corp.local. admin.corp.local. (1 300 300 300 300)
+          IN  NS  ns1.corp.local.
+      ns1       IN A   {{ ansible_default_ipv4.address }}
+      edge      IN A   {{ ansible_default_ipv4.address }}
+      internal  IN TXT "build-notes: internal01 accepts only edge-originated ssh; netops / NetOps2024!"
+      vpn       IN A   {{ ansible_default_ipv4.address }}
+    mode: "0644"
+  notify: restart named
+
+- name: named.conf serving corp.local with allow-transfer any
+  ansible.builtin.blockinfile:
+    path: /etc/bind/named.conf.local
+    marker: "// {mark} PENTRAIN NET-T2-EXAM"
+    block: |
+      zone "corp.local" {
+        type master;
+        file "/etc/bind/db.corp.local";
+        allow-transfer { any; };
+      };
+  notify: restart named
+
+- name: snmpd — public community, extend leaks the edge's own role
+  ansible.builtin.copy:
+    dest: /etc/snmp/snmpd.conf
+    content: |
+      agentAddress udp:161
+      rocommunity public default -V systemonly
+      rocommunity6 public default -V systemonly
+      sysLocation "perimeter rack"
+      sysContact edge-op@corp.local
+      extend edge-memo /bin/echo "edge01 terminates the range LAN — internal builds reachable via ssh jump"
+    mode: "0644"
+  notify: restart snmpd
+
+- name: tftp drop with the edge flag + noise
+  ansible.builtin.file:
+    path: /srv/tftp
+    state: directory
+    mode: "0755"
+
+- name: tftp noise file
+  ansible.builtin.copy:
+    dest: /srv/tftp/boot-notes.txt
+    content: "pxe bootstrap notes — internal segment has its own services\n"
+    mode: "0644"
+
+- name: netops on the edge too — same creds, the pivot foothold
+  ansible.builtin.user:
+    name: netops
+    password: "{{ 'NetOps2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/netops
+    create_home: true
+
+- name: sshd password auth (edge allows it; internal only from here)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

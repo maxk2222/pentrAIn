@@ -99,3 +99,40 @@ history live there; ranges are disposable by design.
 Edit packs → `pentrain pack-lint` → `pentrain sync-packs` (or the Settings
 "Sync packs" button). Changed `quest.yaml` applies to *new* sessions only —
 running sessions keep their deploy-time snapshot of the definition.
+
+## Rolling out new quests
+
+New quests ship two artifacts that must land in different places:
+
+1. **Packs** — `content/packs/` is mounted read-only into the backend
+   container. Update the checkout, run `pentrain pack-lint`, then
+   `pentrain sync-packs`. New quests appear in the library immediately;
+   progression/exam gates are enforced at session start.
+2. **Roles** — `content/ansible-roles/` live on the **PVE host**, not the
+   app VM. Ludus only knows roles that were registered with it:
+
+   ```bash
+   # on the PVE host (e.g. ssh root@192.168.3.95)
+   rsync -a content/ansible-roles/pentrain_<name>/ /opt/pentrain/ansible-roles/pentrain_<name>/
+   for r in /opt/pentrain/ansible-roles/pentrain_*/; do
+     ludus ansible role add -d "$r" -g
+   done
+   ludus ansible roles list | grep pentrain    # verify registration
+   ```
+
+   The installer does exactly this on each run — re-running the installer
+   (or just this loop) is the supported resync path. Every role needs
+   `tasks/main.yml` + `meta/main.yml` or Ludus refuses it; the pack linter
+   fails early when a referenced role dir is missing.
+3. Smoke-test one new quest end-to-end before announcing it (deploy →
+   flag inject → submit → soft reset). Deploy logs land in the session's
+   Log tab.
+
+### Exam quests
+
+`meta.exam: true` quests appear in the library with an **EXAM** badge and
+unlock only after *all* teaching quests of that track+tier are solved.
+Nothing extra to deploy — the gate is backend logic. AD exams
+(`ad-t1-exam` … `ad-t3-exam`) reuse the teaching roles plus small
+`pentrain_ad_tN_exam*` roles — same template requirements as the
+corresponding tier (see "Windows / Active Directory quests" above).

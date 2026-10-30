@@ -1,0 +1,65 @@
+---
+# web-t1-git-leak "Committed" — apache+php dev portal shipped with its .git
+# dir intact. PHP source isn't served, but git objects are: wget -r /.git or
+# GitTools recovers config.php — including the deploy user's ssh password.
+# Autoindex stays on (debian default) so /.git/ browses without special tools.
+# Flags are injected post-deploy — we only create the app + vuln.
+
+- name: install services
+  ansible.builtin.apt:
+    name: [apache2, libapache2-mod-php, git, openssh-server]
+    state: present
+    update_cache: true
+
+- name: deploy the portal (straight from the repo — .git included)
+  ansible.builtin.copy:
+    src: portal/
+    dest: /var/www/html
+    owner: www-data
+    group: www-data
+    mode: preserve
+
+- name: remove the stock placeholder page
+  ansible.builtin.file:
+    path: /var/www/html/index.html
+    state: absent
+
+- name: git repo in the docroot — full history, credentials committed
+  ansible.builtin.shell: |
+    set -e
+    cd /var/www/html
+    git init -q
+    git config user.email "dev@corp.local"
+    git config user.name "portal-dev"
+    git add index.php login.php admin/index.php
+    git commit -qm "dev portal skeleton"
+    git add config.php
+    git commit -qm "wire up db config"
+    printf 'vendor/\n*.log\n' > .gitignore
+    git add .gitignore
+    git commit -qm "prep for deploy"
+    chown -R www-data:www-data /var/www/html/.git
+  args:
+    creates: /var/www/html/.git/HEAD
+  changed_when: false
+
+- name: apache serves the site
+  ansible.builtin.service:
+    name: apache2
+    enabled: true
+    state: started
+
+- name: deploy user (password reused from config.php — the lesson)
+  ansible.builtin.user:
+    name: deploy
+    password: "{{ 'D3pl0y!24' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/deploy
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

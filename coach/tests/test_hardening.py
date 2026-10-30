@@ -31,6 +31,9 @@ class FakeClient:
     async def mark_checkpoint(self, sid, cid):
         return {}
 
+    async def report_llm_usage(self, sid, model, kind, usage, latency_ms):
+        return {}
+
 
 class RecordingLlm:
     """Fake LlmClient that counts calls."""

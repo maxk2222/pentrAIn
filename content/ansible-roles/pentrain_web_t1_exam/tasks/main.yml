@@ -1,0 +1,114 @@
+---
+# web-t1-exam "The Leaky Portal" — combines web-t1-dvwa (SQLi auth bypass)
+# + web-t1-git-leak (exposed .git → history → creds). The .git is built by
+# real commits at provision time — history is genuine, not a fixture.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, php, libapache2-mod-php, php-sqlite3, sqlite3, git, openssh-server]
+    state: present
+    update_cache: true
+
+- name: app + data dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  loop: [/var/www/portal, /var/lib/portal-data]
+
+- name: portal app
+  ansible.builtin.copy:
+    src: portal/index.php
+    dest: /var/www/portal/index.php
+    owner: www-data
+    group: www-data
+    mode: "0644"
+
+- name: sqlite user store with one real account
+  ansible.builtin.command: >-
+    sqlite3 /var/lib/portal-data/portal.db
+    "CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT, password TEXT);
+     INSERT INTO users(username,password) SELECT 'sysop','X9!kQ2z' WHERE NOT EXISTS
+       (SELECT 1 FROM users WHERE username='sysop');"
+  args:
+    creates: /var/lib/portal-data/portal.db
+
+- name: point apache docroot at the portal
+  ansible.builtin.lineinfile:
+    path: /etc/apache2/sites-available/000-default.conf
+    regexp: "DocumentRoot"
+    line: "        DocumentRoot /var/www/portal"
+  notify: restart apache
+
+- name: seed git history — v1 leaks the deploy key, v2 scrubs it (sloppily)
+  ansible.builtin.block:
+    - name: git init
+      ansible.builtin.command: git init -q
+      args:
+        chdir: /var/www/portal
+        creates: /var/www/portal/.git
+
+    - name: leaky v1 config (contains ssh creds — stays in history)
+      ansible.builtin.copy:
+        dest: /var/www/portal/config.php
+        content: |
+          <?php
+          // deploy config — DO NOT COMMIT SECRETS (oops)
+          $DEPLOY_HOST = 'portal01';
+          $DEPLOY_USER = 'deploy';
+          $DEPLOY_PASS = 'Deploy2024!';   // <-- leaked
+          $DB_PATH = '/var/lib/portal-data/portal.db';
+        mode: "0644"
+
+    - name: commit v1
+      ansible.builtin.command: git -c user.email=ops@corp.local -c user.name=ops add -A .
+      args:
+        chdir: /var/www/portal
+      register: c1
+      changed_when: true
+      ignore_errors: true
+
+    - name: commit v1 (record)
+      ansible.builtin.command: git -c user.email=ops@corp.local -c user.name=ops commit -qm 'initial portal'
+      args:
+        chdir: /var/www/portal
+      register: c2
+      changed_when: true
+      ignore_errors: true
+
+    - name: scrubbed v2 config (removes the secret — but history remembers)
+      ansible.builtin.copy:
+        dest: /var/www/portal/config.php
+        content: |
+          <?php
+          $DEPLOY_HOST = 'portal01';
+          $DB_PATH = '/var/lib/portal-data/portal.db';
+        mode: "0644"
+
+    - name: commit v2
+      ansible.builtin.command: >-
+        git -c user.email=ops@corp.local -c user.name=ops
+        commit -qam 'remove secrets from config'
+      args:
+        chdir: /var/www/portal
+      register: c3
+      changed_when: true
+      ignore_errors: true
+  when: true
+
+- name: deploy account whose creds live in git history
+  ansible.builtin.user:
+    name: deploy
+    password: "{{ 'Deploy2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/deploy
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

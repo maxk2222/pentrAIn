@@ -1,0 +1,79 @@
+---
+# linux-t3-exam app01 — hop 2: accepts traffic only from bastion01. The
+# bastion's note leaks app creds; app's config leaks the db creds. sudo
+# journalctl gives root here.
+
+- name: vars — bastion is .50 on the range /24
+  ansible.builtin.set_fact:
+    bastion_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.50"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
+
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: nftables — only bastion + ansible channel
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ bastion_ip }} accept
+          ip saddr {{ router_ip }} accept
+          counter drop
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: app account (creds leak on the bastion's deploy note)
+  ansible.builtin.user:
+    name: app
+    password: "{{ 'AppTier2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/app
+    create_home: true
+
+- name: sudo NOPASSWD journalctl — GTFOBins root
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/app
+    content: "app ALL=(root) NOPASSWD: /usr/bin/journalctl\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: app config leaking the db creds — the third hop's key
+  ansible.builtin.file:
+    path: /opt/app
+    state: directory
+    mode: "0755"
+
+- name: the config itself
+  ansible.builtin.copy:
+    dest: /opt/app/config.yml
+    content: |
+      app:
+        db_host: db01
+        db_user: dba
+        db_pass: DbAdmin2024!
+    mode: "0644"
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

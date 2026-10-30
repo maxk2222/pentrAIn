@@ -136,3 +136,67 @@ def test_engine_resources_mock(client):
     r = client.get("/api/engine/resources")
     assert r.status_code == 200
     assert r.json()["ok"] is False and "mock" in r.json()["reason"]
+
+
+def test_efforts_parses_supported_values(client, fake_llm, llm_settings):
+    fake_llm.handler = lambda m, u, h, j: _FakeResp(
+        {"error": {"message": "Invalid 'reasoning_effort' value: 'pentrain_probe'. "
+                              "Supported values: none, minimal, low, medium, high, xhigh."}},
+        400)
+    out = client.post("/api/llm/reasoning-efforts", json={"model": "m1"}).json()
+    assert out["ok"] is True and out["source"] == "endpoint"
+    assert out["efforts"] == ["none", "minimal", "low", "medium", "high", "xhigh"]
+    body = fake_llm.seen[0][3]
+    assert body["reasoning_effort"] == "pentrain_probe" and body["model"] == "m1"
+
+
+def test_efforts_fallback_on_success_or_vague_error(client, fake_llm, llm_settings):
+    # endpoint ignores unknown effort entirely → union list marked fallback
+    fake_llm.handler = lambda m, u, h, j: _FakeResp(
+        {"choices": [{"message": {"content": ""}}]})
+    out = client.post("/api/llm/reasoning-efforts", json={"model": "m1"}).json()
+    assert out["ok"] is True and out["source"] == "fallback"
+    assert "high" in out["efforts"]
+
+    # error without a parseable list → same fallback
+    fake_llm.handler = lambda m, u, h, j: _FakeResp({"error": "bad request"}, 400)
+    out = client.post("/api/llm/reasoning-efforts", json={"model": "m1"}).json()
+    assert out["ok"] is True and out["source"] == "fallback"
+
+
+def test_efforts_uses_saved_model_and_key(client, fake_llm, llm_settings):
+    client.patch("/api/settings", json={"updates": {"llm.model": "saved-model"}})
+    fake_llm.handler = lambda m, u, h, j: _FakeResp({"error": "bad"}, 400)
+    client.post("/api/llm/reasoning-efforts", json={"api_key": "********"})
+    _method, _url, headers, body = fake_llm.seen[0]
+    assert body["model"] == "saved-model"
+    assert headers["Authorization"] == "Bearer secret-key"
+
+
+def test_efforts_no_model(client, fake_llm, llm_settings):
+    client.patch("/api/settings", json={"updates": {"llm.model": ""}})
+    out = client.post("/api/llm/reasoning-efforts", json={}).json()
+    assert out["ok"] is False and "model" in out["error"]
+
+
+def test_engine_metrics_mock(client):
+    out = client.get("/api/engine/metrics?timeframe=bogus").json()
+    assert out["ok"] is False and "mock" in out["reason"]
+
+
+def test_llm_usage_roundtrip(client):
+    from app.config import get_config
+    tok = get_config().coach_service_token
+    h = {"Authorization": f"Bearer {tok}"}
+    r = client.post("/api/coach/llm-usage", headers=h, json={
+        "session_id": None, "model": "m1", "kind": "chat",
+        "prompt_tokens": 10, "completion_tokens": 5,
+        "total_tokens": 15, "latency_ms": 120})
+    assert r.status_code == 204
+    out = client.get("/api/llm/usage?days=7").json()
+    assert isinstance(out["days"], list)
+    assert any(d["tokens"] >= 15 for d in out["days"])
+    # wrong token → service auth rejects
+    r = client.post("/api/coach/llm-usage",
+                    headers={"Authorization": "Bearer wrong"}, json={})
+    assert r.status_code == 401

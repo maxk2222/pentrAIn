@@ -161,3 +161,25 @@ export interface WsEvent {
   session_id?: number;
   data?: Record<string, any>;
 }
+
+export interface LlmEffortsOut {
+  ok: boolean; efforts: string[]; source?: "endpoint" | "fallback"; error?: string;
+}
+export interface RrdRow {
+  time: number; cpu?: number; maxcpu?: number; loadavg?: number;
+  memused?: number; memtotal?: number; memavailable?: number;
+  netin?: number; netout?: number; iowait?: number;
+  roottotal?: number; rootused?: number; swapused?: number;
+}
+export interface EngineMetrics { ok: boolean; timeframe?: string; rows: RrdRow[]; reason?: string }
+export interface SessionVmMetric {
+  name: string; role: string; vmid: number; status?: string;
+  cpu?: number; mem?: number; maxmem?: number; balloon?: number;
+  netin?: number; netout?: number; uptime?: number; error?: string;
+}
+export interface SessionMetrics { ok: boolean; vms: SessionVmMetric[]; reason?: string }
+export interface LlmUsageDay {
+  day: string; requests: number; tokens: number;
+  prompt: number; completion: number; avg_latency_ms: number;
+}
+export interface LlmUsageOut { days: LlmUsageDay[]; budget: number }

@@ -1,0 +1,85 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t1-open-shares
+  track: network-recon
+  tier: 1
+  title: "Open Shares"
+  version: 1
+display:
+  tagline: "A file server with a 'temporary' guest share — inside it, a runbook full of credentials."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: smb01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 26
+      roles: [pentrain_net_t1_open_shares]
+flags:
+  - id: share-flag
+    name: "Share flag — readable without any login"
+    kind: file
+    points: 100
+    vm: smb01
+    file_path: /srv/samba/public/flag.txt
+  - id: finance-flag
+    name: "Finance flag — the locked share"
+    kind: file
+    points: 150
+    vm: smb01
+    file_path: /srv/samba/finance/flag.txt
+  - id: user-flag
+    name: "User flag — /home/svc-backup/user.txt"
+    kind: file
+    points: 250
+    vm: smb01
+    file_path: /home/svc-backup/user.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "nmap -sV -sU --top-ports 200 <smb01> — 139/445 is SMB, 161/udp is SNMP. `smbclient -L //<ip>/` lists the shares; try guest access."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "smbclient //<ip>/public (empty password). The backup runbook names a service account AND its password."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "Same credentials, two doors: `smbclient //<ip>/finance -U svc-backup` for the locked share, `ssh svc-backup@<ip>` for the home dir."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-scan
+      name: "Enumerated services"
+      detect: { command_match: "(nmap|masscan|rustscan|enum4linux)" }
+      hint_after_s: 480
+    - id: cp-smb
+      name: "Connected to SMB"
+      detect: { command_match: "(smbclient|smbmap|smbget|crackmapexec|netexec)" }
+      hint_after_s: 600
+    - id: cp-snmp
+      name: "Queried SNMP"
+      detect: { command_match: "snmp(walk|-check|get|bulkwalk)" }
+      hint_after_s: 720
+    - id: cp-ssh
+      name: "Logged in as svc-backup"
+      detect: { command_match: "ssh .*svc-backup" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

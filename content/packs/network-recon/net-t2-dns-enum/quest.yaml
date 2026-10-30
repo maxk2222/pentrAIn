@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t2-dns-enum
+  track: network-recon
+  tier: 2
+  title: "Zone Out"
+  version: 1
+display:
+  tagline: "A nameserver that gives away its zone to anyone, SNMP in factory state, and a file drop that asks for nothing."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: dns01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 31
+      roles: [pentrain_net_t2_dns_enum]
+flags:
+  - id: tftp-flag
+    name: "TFTP flag — no login required"
+    kind: file
+    points: 150
+    vm: dns01
+    file_path: /srv/tftp/flag.txt
+  - id: user-flag
+    name: "User flag — /home/backup-op/user.txt"
+    kind: file
+    points: 300
+    vm: dns01
+    file_path: /home/backup-op/user.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "UDP matters: 53 (DNS), 69 (TFTP), 161 (SNMP) are all open. Try `dig @<ip> corp.local axfr` and `tftp <ip> -c get flag.txt`."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "snmpwalk -v2c -c public <ip> — the sysContact and the 'extend' output name a service account. What it doesn't give you is a password."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "hydra -l backup-op -P /usr/share/wordlists/metasploit/unix_passwords.txt ssh://<ip> — the corp standard is weak. (rockyou.txt.gz needs gunzip first.)"
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-dns
+      name: "Tried a zone transfer"
+      detect: { command_match: "(dig|axfr|nslookup|host -t|dnsenum|fierce)" }
+      hint_after_s: 600
+    - id: cp-snmp
+      name: "Walked SNMP"
+      detect: { command_match: "snmp(walk|-check|get|bulkwalk)" }
+      hint_after_s: 600
+    - id: cp-brute
+      name: "Attacked SSH with a wordlist"
+      detect: { command_match: "(hydra|medusa|ncrack|patator|sshpass)" }
+      hint_after_s: 720
+    - id: cp-tftp
+      name: "Pulled files over TFTP"
+      detect: { command_match: "t?ftp " }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t1-suid-hunt
+  track: linux-fundamentals
+  tier: 1
+  title: "Sticky Bits"
+  version: 1
+display:
+  tagline: "An onboarding VM with the password in plain sight — and a setuid binary that reads any file as root."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: suid01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 28
+      roles: [pentrain_linux_t1_suid_hunt]
+flags:
+  - id: user-flag
+    name: "User flag — /home/trainee/user.txt"
+    kind: file
+    points: 150
+    vm: suid01
+    file_path: /home/trainee/user.txt
+  - id: root-flag
+    name: "Root flag — /root/root.txt"
+    kind: file
+    points: 250
+    vm: suid01
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Before brute-forcing SSH, look for what the last admin left behind — /opt is a good place to start."
+  - id: h2
+    cost: 40
+    stage: privesc
+    text: "`find / -perm -4000 -type f 2>/dev/null` — then check GTFOBins for anything that can read files."
+  - id: h3
+    cost: 60
+    stage: privesc
+    text: "base64 reads files: `base64 /root/root.txt | base64 -d`. Not every setuid binary is exploitable — sysdiag is a red herring."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-ssh
+      name: "Logged in as trainee"
+      detect: { command_match: "ssh .*trainee" }
+      hint_after_s: 600
+    - id: cp-suid
+      name: "Enumerated SUID binaries"
+      detect: { command_match: "(find .*-perm|getcap)" }
+      hint_after_s: 480
+    - id: cp-gtfobins
+      name: "Used the file-read primitive"
+      detect: { command_match: "(base64|gtfobins|/root/root)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1200
+  takeover_cost: 150

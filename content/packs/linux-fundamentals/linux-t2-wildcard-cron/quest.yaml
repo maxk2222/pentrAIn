@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t2-wildcard-cron
+  track: linux-fundamentals
+  tier: 2
+  title: "Wildcard"
+  version: 1
+display:
+  tagline: "Every minute, root packs your backup dir with `tar *`. Filenames are arguments — make them count."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: cron01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 32
+      roles: [pentrain_linux_t2_wildcard_cron]
+flags:
+  - id: user-flag
+    name: "User flag — /home/ops/user.txt"
+    kind: file
+    points: 150
+    vm: cron01
+    file_path: /home/ops/user.txt
+  - id: root-flag
+    name: "Root flag — /root/root.txt"
+    kind: file
+    points: 300
+    vm: cron01
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Loot the readable files — /var/backups holds more than archives. The note names credentials."
+  - id: h2
+    cost: 50
+    stage: privesc
+    text: "`cat /etc/crontab` and `ls /etc/cron.d` — find what runs as root every minute, and which directory it touches."
+  - id: h3
+    cost: 60
+    stage: privesc
+    text: "tar expands `*` as filenames — files named `--checkpoint=1` and `--checkpoint-action=exec=sh /home/ops/pwn.sh` in that dir get read as options by the ROOT process."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-ssh
+      name: "Logged in as ops"
+      detect: { command_match: "ssh .*ops" }
+      hint_after_s: 600
+    - id: cp-cron
+      name: "Read the cron configuration"
+      detect: { command_match: "(crontab|/etc/cron|list-timers|pspy)" }
+      hint_after_s: 480
+    - id: cp-wildcard
+      name: "Planted wildcard options"
+      detect: { command_match: "(checkpoint|wildcard|--exec|exec=sh)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 450
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

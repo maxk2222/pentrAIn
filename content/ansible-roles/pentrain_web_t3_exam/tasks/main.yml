@@ -1,0 +1,37 @@
+---
+# web-t3-exam "The API" — combines web-t3-api-chain (JWT forge + IDOR +
+# chained endpoints). Flask + pyjwt straight from Debian packages; systemd
+# unit runs the app as root so /api/admin/exec is genuinely dangerous.
+
+- name: packages (debian-only, no docker needed)
+  ansible.builtin.apt:
+    name: [python3-flask, python3-jwt]
+    state: present
+    update_cache: true
+
+- name: app + data dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/opt/reporting-api, /var/lib/api]
+
+- name: deploy app.py
+  ansible.builtin.copy:
+    src: api/app.py
+    dest: /opt/reporting-api/app.py
+    mode: "0644"
+
+- name: systemd unit
+  ansible.builtin.copy:
+    src: api/pentrain-api.service
+    dest: /etc/systemd/system/pentrain-api.service
+    mode: "0644"
+  notify: restart api
+
+- name: enable + start the api
+  ansible.builtin.systemd:
+    name: pentrain-api
+    enabled: true
+    state: started
+    daemon_reload: true

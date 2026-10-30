@@ -1,0 +1,93 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t2-exam
+  track: network-recon
+  tier: 2
+  title: "Exam: Perimeter Audit"
+  exam: true
+  version: 1
+display:
+  tagline: "T2 final exam: the edge box gossips (AXFR, SNMP, TFTP) — and the interesting target only listens to it. Pivot."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 8
+  min_disk_gb: 100
+  est_deploy_min: 12
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: edge01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 46
+      roles: [pentrain_net_t2_exam_edge]
+    - name: internal01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 47
+      roles: [pentrain_net_t2_exam_internal]
+flags:
+  - id: tftp-flag
+    name: "TFTP flag — unauthenticated pull from the edge"
+    kind: file
+    points: 100
+    vm: edge01
+    file_path: /srv/tftp/flag.txt
+  - id: internal-user-flag
+    name: "Internal user flag — /home/netops/user.txt (pivot required)"
+    kind: file
+    points: 200
+    vm: internal01
+    file_path: /home/netops/user.txt
+  - id: internal-web-flag
+    name: "Internal web flag — served only to edge-originated traffic"
+    kind: file
+    points: 200
+    vm: internal01
+    file_path: /var/www/html/internal/flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "UDP first: nmap -sU --top-ports 200 edge. Ask the nameserver for the whole zone — dig @<edge> corp.local axfr — and read every record, including TXT."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "The zone's TXT record leaks credentials for a host that refuses you directly. tftp <edge> -c get flag.txt is the freebie; sshuttle -r user@edge <internal-net>/24 is the pivot."
+  - id: h3
+    cost: 70
+    stage: pivot
+    text: "After sshuttle: curl the internal web flag and ssh netops@<internal>. Or simpler: ssh -J edge and proxy everything through the jump."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-udp
+      name: "Scanned UDP services"
+      detect: { command_match: "nmap.*-sU|dig|snmpwalk|snmp-check" }
+      hint_after_s: 600
+    - id: cp-axfr
+      name: "Pulled the zone"
+      detect: { command_match: "(axfr|ixfr|corp\\.local)" }
+      hint_after_s: 480
+    - id: cp-tftp
+      name: "Grabbed the tftp flag"
+      detect: { command_match: "(tftp|atftp)" }
+      hint_after_s: 480
+    - id: cp-pivot
+      name: "Pivoted through the edge"
+      detect: { command_match: "(sshuttle|chisel|ssh -J|ProxyJump|socks|ligolo)" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 550
+  time_bonus_max: 250
+  par_s: 2100
+  takeover_cost: 150

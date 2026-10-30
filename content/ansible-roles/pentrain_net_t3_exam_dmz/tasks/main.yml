@@ -1,0 +1,52 @@
+---
+# net-t3-exam dmz01 — the public docs host: apache + flag in the webroot,
+# plus netplan notes leaking the vault's ssh creds. Vault accepts only
+# traffic sourced from this host.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, openssh-server]
+    state: present
+    update_cache: true
+
+- name: docroot flag dir
+  ansible.builtin.file:
+    path: /var/www/html/docs
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: |
+      <!doctype html><title>corp docs</title>
+      <h1>public documentation mirror</h1><p>/docs for the index.</p>
+    mode: "0644"
+
+- name: netplan notes — leak the vault creds, web-readable (the chain's key)
+  ansible.builtin.copy:
+    dest: /var/www/html/docs/netplan.txt
+    content: |
+      NETWORK PLAN — dmz segment
+      vault01 accepts ssh ONLY from dmz01 (firewall policy).
+      jump account on vault: vaultop / Vault2024!
+      dmz publisher account (for doc uploads): docmaster / Docs2024!
+      rotate quarterly — last changed 2024-10
+    mode: "0644"
+
+- name: docmaster account — the dmz pivot foothold
+  ansible.builtin.user:
+    name: docmaster
+    password: "{{ 'Docs2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/docmaster
+    create_home: true
+
+- name: ssh password auth on (reachable via pivot for completeness)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
