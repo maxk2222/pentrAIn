@@ -163,6 +163,11 @@ async def test_compile_topology_ludus_format(db_with_packs):
     vms = cfg["ludus"]
     kali = next(v for v in vms if "kali" in v["vm_name"])
     assert kali["template"] == "kali-x64-desktop-template"
+    assert kali["ram_gb"] == 6 and kali["ram_min_gb"] == 3
+    for v in vms:
+        if v is not kali:
+            assert v["ram_min_gb"] == v["ram_gb"] // 2
+    assert cfg["router"] == {"ram_gb": 2, "ram_min_gb": 1}
     assert "pentrain_kali_agent" in (kali.get("roles") or [])
     names = {v["vm_name"] for v in vms}
     assert "{{ range_id }}-kali" in names

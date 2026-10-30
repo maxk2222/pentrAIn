@@ -1,4 +1,7 @@
 """Auth, setup wizard, settings, engine status, profile, telemetry ingest, pack mgmt."""
+import time
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -112,6 +115,128 @@ async def engine_status(db: AsyncSession = Depends(get_db),
         },
         "node": node,
     }
+
+
+@router.get("/engine/resources")
+async def engine_resources(db: AsyncSession = Depends(get_db),
+                           _=Depends(get_current_user)):
+    """Live host capacity → suggested budget. The UI fills the budget fields on
+    click — never silently overwrites what the admin chose."""
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine — configure a real engine first"}
+    try:
+        node = await engine.pve.node_status()
+    except Exception as e:
+        return {"ok": False, "reason": f"node status failed: {e}"}
+    mem = node.get("memory") or {}
+    ram_total_gb = (mem.get("total") or 0) / 2**30
+    ram_free_gb = ram_total_gb - (mem.get("used") or 0) / 2**30
+    cores = int((node.get("cpuinfo") or {}).get("cpus") or 0)
+    disk_free_gb = 0.0
+    try:
+        pools = await engine.pve.get(f"/nodes/{engine.pve.creds.node}/storage")
+        for p in pools or []:
+            if p.get("active") and "images" in (p.get("content") or ""):
+                disk_free_gb = max(disk_free_gb, (p.get("avail") or 0) / 2**30)
+    except Exception:
+        pass
+    suggested = {
+        # keep ~15% host headroom + everything already in use (app VM, PVE, ludus)
+        "max_ram_gb": max(2, int(ram_free_gb * 0.85)),
+        "max_vcpus": max(2, cores),
+        "max_disk_gb": max(60, int(disk_free_gb * 0.8)),
+    }
+    return {"ok": True, "ram_total_gb": round(ram_total_gb, 1),
+            "ram_free_gb": round(ram_free_gb, 1), "cores": cores,
+            "disk_free_gb": round(disk_free_gb, 1), "suggested": suggested}
+
+
+# ---------- LLM endpoint discovery / test ----------
+
+_LLM_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+_TEST_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQ"
+    "AAAABJRU5ErkJggg=="
+)
+
+
+async def _llm_endpoint(db: AsyncSession, base_url: str | None,
+                        api_key: str | None) -> tuple[str, str]:
+    """Resolve endpoint creds — draft values from the request win; '********'
+    (redacted echo) and empty fall back to stored secrets."""
+    url = (base_url or "").strip() or await settings_svc.get_secret(db, "llm.base_url")
+    url = url.rstrip("/")
+    if not url:
+        raise HTTPException(422, "llm.base_url not configured")
+    key = api_key if (api_key and api_key != "********") else None
+    if key is None:
+        key = await settings_svc.get_secret(db, "llm.api_key")
+    return url, key
+
+
+@router.post("/llm/models")
+async def llm_models(body: dict, db: AsyncSession = Depends(get_db),
+                     _=Depends(get_current_user)):
+    """Proxy GET {base_url}/models — OpenAI-compatible discovery. Tolerant:
+    every endpoint flavor returns {data:[{id}]} but field coverage varies."""
+    url, key = await _llm_endpoint(db, body.get("base_url"), body.get("api_key"))
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as c:
+            r = await c.get(f"{url}/models", headers=headers)
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": f"connection failed: {type(e).__name__}: {e}",
+                "models": []}
+    if r.status_code >= 400:
+        return {"ok": False, "error": f"GET /models -> {r.status_code}: {r.text[:200]}",
+                "models": []}
+    try:
+        data = r.json()
+        ids = sorted({m["id"] for m in data.get("data", [])
+                      if isinstance(m, dict) and m.get("id")})
+    except (ValueError, AttributeError) as e:
+        return {"ok": False, "error": f"malformed /models response: {e}", "models": []}
+    return {"ok": True, "models": [{"id": i} for i in ids]}
+
+
+@router.post("/llm/test")
+async def llm_test(body: dict, db: AsyncSession = Depends(get_db),
+                   _=Depends(get_current_user)):
+    """Real inference probe — catches bad auth, missing model and unsupported
+    vision payloads that a /models lookup alone would never see."""
+    url, key = await _llm_endpoint(db, body.get("base_url"), body.get("api_key"))
+    model = (body.get("model") or "").strip()
+    if not model:
+        raise HTTPException(422, "model required")
+    kind = body.get("kind", "chat")
+    content: list | str = "Reply with exactly: ok"
+    if kind == "vision":
+        content = [
+            {"type": "text", "text": "What color dominates this image? One word."},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{_TEST_PNG}"}},
+        ]
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as c:
+            r = await c.post(f"{url}/chat/completions", headers=headers, json={
+                "model": model, "max_tokens": 8,
+                "messages": [{"role": "user", "content": content}],
+            })
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": f"connection failed: {type(e).__name__}: {e}"}
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if r.status_code >= 400:
+        return {"ok": False, "latency_ms": latency_ms,
+                "error": f"{r.status_code}: {r.text[:300]}"}
+    try:
+        sample = (r.json()["choices"][0]["message"]["content"] or "")[:200]
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        return {"ok": False, "latency_ms": latency_ms,
+                "error": f"malformed response: {type(e).__name__}"}
+    return {"ok": True, "latency_ms": latency_ms, "sample": sample.strip()}
 
 
 @router.post("/packs/sync")
@@ -233,6 +358,8 @@ async def coach_config(db: AsyncSession = Depends(get_db)):
             "vision_model": await settings_svc.get_setting(db, "llm.vision_model", ""),
             "temperature": await settings_svc.get_setting(db, "llm.temperature", 0.4),
             "daily_token_budget": await settings_svc.get_setting(db, "llm.daily_token_budget", 0),
+            "reasoning": await settings_svc.get_setting(db, "llm.reasoning", True),
+            "reasoning_effort": await settings_svc.get_setting(db, "llm.reasoning_effort", "medium"),
         },
         "coach": {
             "enabled": await settings_svc.get_setting(db, "coach.enabled", True),

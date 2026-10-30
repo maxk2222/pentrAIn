@@ -55,7 +55,8 @@ requirements:
 topology:
   kali:
     template: kali-x64-desktop-template   # Ludus template name
-    ram_gb: 8
+    ram_gb: 6                             # ballooning max; ram_min_gb sets the floor
+    ram_min_gb: 3                         # optional — kali defaults 3, targets ram_gb/2
     cpus: 4
   vms:
     - name: target01
@@ -69,6 +70,9 @@ topology:
 
 The Kali VM is implicit per session — add every other box under `vms`.
 `ip_last_octet` gives deterministic addresses for briefings and checkpoints.
+`ram_gb` is the ballooning ceiling and `ram_min_gb` the floor Proxmox may shrink
+to under pressure; `requirements.min_ram_gb` should cover the sum of `ram_gb`
+plus ~2G for the implicit router.
 
 ### Flags
 

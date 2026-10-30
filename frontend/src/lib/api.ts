@@ -137,6 +137,15 @@ export interface EngineStatus {
   node: Record<string, unknown> | null;
 }
 
+export interface EngineResources {
+  ok: boolean; reason?: string;
+  ram_total_gb?: number; ram_free_gb?: number; cores?: number; disk_free_gb?: number;
+  suggested?: { max_ram_gb: number; max_vcpus: number; max_disk_gb: number };
+}
+
+export interface LlmModelsOut { ok: boolean; models: { id: string }[]; error?: string }
+export interface LlmTestOut { ok: boolean; latency_ms?: number; error?: string; sample?: string }
+
 export interface Profile {
   xp_total: number; track_levels: Record<string, number>;
   prefs: Record<string, unknown>; metrics: Record<string, unknown>;

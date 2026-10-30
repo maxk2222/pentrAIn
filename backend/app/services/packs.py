@@ -30,7 +30,8 @@ class Requirements(BaseModel):
 
 class KaliSpec(BaseModel):
     template: str = "kali-x64-desktop-template"
-    ram_gb: int = 8
+    ram_gb: int = 6
+    ram_min_gb: int | None = None  # ballooning floor — compile_topology defaults to 3
     cpus: int = 4
 
 
@@ -38,6 +39,7 @@ class VmSpec(BaseModel):
     name: str
     template: str
     ram_gb: int = 4
+    ram_min_gb: int | None = None  # ballooning floor — defaults to ram_gb//2
     cpus: int = 2
     disk_gb: int | None = None
     vlan: int = 10

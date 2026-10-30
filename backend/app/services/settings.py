@@ -29,6 +29,8 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "llm.vision_model": ("", False),
     "llm.temperature": (0.4, False),
     "llm.daily_token_budget": (2_000_000, False),
+    "llm.reasoning": (True, False),               # let thinking models reason before answering
+    "llm.reasoning_effort": ("medium", False),    # low|medium|high (reasoning_effort field)
     "coach.default_autonomy": (2, False),
     "coach.verbosity": ("normal", False),          # terse|normal|verbose
     "coach.personality": ("mentor", False),

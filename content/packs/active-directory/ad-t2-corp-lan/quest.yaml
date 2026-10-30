@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "A linux file server, a domain-joined workstation, a DC — the creds walk from one to the next."
 requirements:
-  min_ram_gb: 32
+  min_ram_gb: 30
   min_vcpus: 12
   min_disk_gb: 240
   est_deploy_min: 45
@@ -17,7 +17,7 @@ requirements:
 topology:
   kali:
     template: kali-x64-desktop-template
-    ram_gb: 8
+    ram_gb: 6
     cpus: 4
   vms:
     - name: files01

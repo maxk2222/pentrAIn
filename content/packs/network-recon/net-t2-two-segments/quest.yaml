@@ -9,14 +9,14 @@ meta:
 display:
   tagline: "The second host refuses to talk to you — but it does talk to the first one. Pivot."
 requirements:
-  min_ram_gb: 18
+  min_ram_gb: 16
   min_vcpus: 8
   min_disk_gb: 100
   est_deploy_min: 14
 topology:
   kali:
     template: kali-x64-desktop-template
-    ram_gb: 8
+    ram_gb: 6
     cpus: 4
   vms:
     - name: edge01

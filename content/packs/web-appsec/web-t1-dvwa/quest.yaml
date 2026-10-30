@@ -9,14 +9,14 @@ meta:
 display:
   tagline: "OWASP basics on DVWA: file inclusion for the flag, uploads for the state."
 requirements:
-  min_ram_gb: 12
+  min_ram_gb: 10
   min_vcpus: 6
   min_disk_gb: 80
   est_deploy_min: 10
 topology:
   kali:
     template: kali-x64-desktop-template
-    ram_gb: 8
+    ram_gb: 6
     cpus: 4
   vms:
     - name: dvwa01

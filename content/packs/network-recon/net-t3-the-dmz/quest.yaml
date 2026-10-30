@@ -9,14 +9,14 @@ meta:
 display:
   tagline: "DMZ → app tier → data tier. Every hop trusts only the previous one — chain your pivots."
 requirements:
-  min_ram_gb: 20
+  min_ram_gb: 18
   min_vcpus: 10
   min_disk_gb: 140
   est_deploy_min: 18
 topology:
   kali:
     template: kali-x64-desktop-template
-    ram_gb: 8
+    ram_gb: 6
     cpus: 4
   vms:
     - name: dmz01

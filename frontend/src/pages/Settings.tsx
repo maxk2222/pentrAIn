@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BrainCircuit, Gauge, Package, RefreshCw, Save, Server, Shield } from "lucide-react";
-import { api, type EngineStatus, type Settings } from "@/lib/api";
+import { BrainCircuit, Gauge, Package, PlugZap, RefreshCw, Save, Server, Shield } from "lucide-react";
+import { api, type EngineResources, type EngineStatus, type LlmModelsOut, type LlmTestOut, type Settings } from "@/lib/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Select, Slider, Switch } from "@/components/ui";
 
 interface Spec {
-  label: string; type: "text" | "int" | "float" | "bool" | "choice" | "password";
+  label: string; type: "text" | "int" | "float" | "bool" | "choice" | "password" | "model";
   min?: number; max?: number; step?: number; choices?: { value: string; label: string }[];
-  placeholder?: string; help?: string;
+  placeholder?: string; help?: string; kind?: "chat" | "vision";
 }
 
 /** UI metadata for the typed settings registry (backend services/settings.py DEFAULTS). */
@@ -19,7 +19,7 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
       ["engine.pve_node", { label: "PVE node name", type: "text" }],
       ["engine.pve_token_id", { label: "API token ID", type: "text", placeholder: "root@pam!pentrain" }],
       ["engine.pve_token_secret", { label: "API token secret", type: "password" }],
-      ["engine.ludus_url", { label: "Ludus API URL", type: "text", placeholder: "https://engine:8081" }],
+      ["engine.ludus_url", { label: "Ludus API URL", type: "text", placeholder: "https://engine:8080" }],
       ["engine.ludus_api_key", { label: "Ludus API key", type: "password" }],
     ],
   },
@@ -36,9 +36,16 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
     keys: [
       ["llm.base_url", { label: "Base URL", type: "text", placeholder: "http://localhost:11434/v1" }],
       ["llm.api_key", { label: "API key", type: "password" }],
-      ["llm.model", { label: "Chat model", type: "text" }],
-      ["llm.vision_model", { label: "Vision model (optional)", type: "text" }],
+      ["llm.model", { label: "Chat model", type: "model", kind: "chat" }],
+      ["llm.vision_model", { label: "Vision model (optional)", type: "model", kind: "vision" }],
       ["llm.temperature", { label: "Temperature", type: "float", min: 0, max: 1.5, step: 0.05 }],
+      ["llm.reasoning", { label: "Thinking / reasoning", type: "bool", help: "Let reasoning-capable models think before answering (disable for fastest replies)" }],
+      ["llm.reasoning_effort", {
+        label: "Reasoning effort", type: "choice", choices: [
+          { value: "low", label: "Low" }, { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+        ],
+      }],
       ["llm.daily_token_budget", { label: "Daily token budget (0 = unlimited)", type: "int", min: 0, max: 100_000_000, step: 100000 }],
     ],
   },
@@ -83,6 +90,7 @@ export function SettingsPage() {
   });
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [saved, setSaved] = useState(false);
+  const [detectMsg, setDetectMsg] = useState("");
 
   const save = useMutation({
     mutationFn: (updates: Record<string, unknown>) =>
@@ -101,6 +109,26 @@ export function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["tracks"] });
       qc.invalidateQueries({ queryKey: ["quests"] });
     },
+  });
+
+  const detect = useMutation({
+    mutationFn: () => api.get<EngineResources>("/api/engine/resources"),
+    onSuccess: (r) => {
+      if (r.ok && r.suggested) {
+        setDraft((d) => ({
+          ...d,
+          "resources.max_ram_gb": r.suggested!.max_ram_gb,
+          "resources.max_vcpus": r.suggested!.max_vcpus,
+          "resources.max_disk_gb": r.suggested!.max_disk_gb,
+        }));
+        setDetectMsg(
+          `host: ${r.ram_free_gb}G RAM free · ${r.cores} cores · ${r.disk_free_gb}G disk free ` +
+          `→ suggested budget loaded (save to apply)`);
+      } else {
+        setDetectMsg(r.reason || "no engine data available");
+      }
+    },
+    onError: (e) => setDetectMsg(e instanceof Error ? e.message : "detect failed"),
   });
 
   const get = (key: string) => (key in draft ? draft[key] : settings?.[key]);
@@ -148,9 +176,19 @@ export function SettingsPage() {
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             {g.keys.map(([key, spec]) => (
-              <SettingField key={key} spec={spec} value={get(key)}
+              <SettingField key={key} spec={spec} value={get(key)} get={get}
                 onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))} />
             ))}
+            {g.title.startsWith("Resource budget") && (
+              <div className="flex flex-wrap items-center gap-3 md:col-span-2">
+                <Button variant="secondary" size="sm" onClick={() => detect.mutate()}
+                  disabled={detect.isPending}>
+                  <Gauge className="h-4 w-4" />
+                  {detect.isPending ? "Reading host…" : "Auto-detect from engine host"}
+                </Button>
+                {detectMsg && <span className="text-xs text-muted">{detectMsg}</span>}
+              </div>
+            )}
           </CardContent>
         </Card>
       ))}
@@ -158,16 +196,24 @@ export function SettingsPage() {
   );
 }
 
-function SettingField({ spec, value, onChange }: {
+function SettingField({ spec, value, onChange, get }: {
   spec: Spec; value: unknown; onChange: (v: unknown) => void;
+  get: (k: string) => unknown;
 }) {
   const label = <span className="mb-1.5 block text-sm font-medium text-muted">{spec.label}</span>;
+  const help = spec.help ? <span className="mt-1 block text-xs text-muted/70">{spec.help}</span> : null;
 
+  if (spec.type === "model") {
+    return <ModelField spec={spec} value={value} onChange={onChange} get={get} />;
+  }
   if (spec.type === "bool") {
     return (
-      <div className="flex items-center justify-between rounded-lg border border-border p-3">
-        <span className="text-sm font-medium text-muted">{spec.label}</span>
-        <Switch checked={Boolean(value)} onChange={onChange} />
+      <div className="rounded-lg border border-border p-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-muted">{spec.label}</span>
+          <Switch checked={Boolean(value)} onChange={onChange} />
+        </div>
+        {help}
       </div>
     );
   }
@@ -200,6 +246,108 @@ function SettingField({ spec, value, onChange }: {
         placeholder={spec.placeholder}
         onChange={(e) => onChange(e.target.value)}
       />
+      {help}
+    </div>
+  );
+}
+
+/** Model picker: dropdown fed by the endpoint's /models listing, free-text
+ *  fallback for endpoints that don't expose it, and a live inference test. */
+function ModelField({ spec, value, onChange, get }: {
+  spec: Spec; value: unknown; onChange: (v: unknown) => void;
+  get: (k: string) => unknown;
+}) {
+  const model = String(value ?? "");
+  const baseUrl = String(get("llm.base_url") ?? "");
+  const apiKey = String(get("llm.api_key") ?? "");
+  const [models, setModels] = useState<string[] | null>(null);
+  const [listMsg, setListMsg] = useState("");
+  const [fetching, setFetching] = useState(false);
+  const [test, setTest] = useState<{ ok?: boolean; text: string } | null>(null);
+  const [custom, setCustom] = useState(false);
+
+  const fetchModels = useCallback(async () => {
+    setFetching(true); setListMsg("");
+    try {
+      const r = await api.post<LlmModelsOut>("/api/llm/models",
+        { base_url: baseUrl, api_key: apiKey });
+      if (r.ok) {
+        setModels(r.models.map((m) => m.id));
+        if (!r.models.length) setListMsg("endpoint lists no models — enter one manually");
+      } else {
+        setModels(null);
+        setListMsg(r.error || "model list failed — enter one manually");
+      }
+    } catch (e) {
+      setModels(null);
+      setListMsg(e instanceof Error ? e.message : "failed");
+    } finally {
+      setFetching(false);
+    }
+  }, [baseUrl, apiKey]);
+
+  // pull the endpoint's model catalog automatically — debounced so typing a
+  // new base_url doesn't fire a request per keystroke
+  useEffect(() => {
+    if (!baseUrl) { setModels(null); return; }
+    const t = setTimeout(fetchModels, 600);
+    return () => clearTimeout(t);
+  }, [baseUrl, fetchModels]);
+
+  const runTest = async () => {
+    setTest({ text: "testing…" });
+    try {
+      const r = await api.post<LlmTestOut>("/api/llm/test", {
+        model, kind: spec.kind ?? "chat", base_url: baseUrl, api_key: apiKey,
+      });
+      setTest(r.ok
+        ? { ok: true, text: `ok · ${r.latency_ms}ms${r.sample ? ` — “${r.sample}”` : ""}` }
+        : { ok: false, text: r.error || "test failed" });
+    } catch (e) {
+      setTest({ ok: false, text: e instanceof Error ? e.message : "test failed" });
+    }
+  };
+
+  const opts = models ? [...models] : [];
+  if (model && !opts.includes(model)) opts.unshift(model);  // saved value always selectable
+  const showCustom = custom || (!model && !opts.length);
+
+  return (
+    <div>
+      <span className="mb-1.5 block text-sm font-medium text-muted">{spec.label}</span>
+      <div className="flex gap-2">
+        <Select className="min-w-0 flex-1" value={showCustom ? "__custom__" : model}
+          onChange={(e) => {
+            if (e.target.value === "__custom__") setCustom(true);
+            else { setCustom(false); onChange(e.target.value); }
+          }}>
+          {!model && !showCustom && <option value="">select…</option>}
+          {opts.map((m) => <option key={m} value={m}>{m}</option>)}
+          <option value="__custom__">custom…</option>
+        </Select>
+        <Button variant="secondary" size="sm" title="Fetch model list from endpoint"
+          onClick={fetchModels} disabled={fetching || !baseUrl}>
+          <RefreshCw className={`h-4 w-4 ${fetching ? "animate-spin" : ""}`} />
+        </Button>
+        <Button variant="secondary" size="sm" title="Run a real inference request"
+          onClick={runTest} disabled={!model || test?.text === "testing…" || !baseUrl}>
+          <PlugZap className="h-4 w-4" /> Test
+        </Button>
+      </div>
+      {showCustom && (
+        <Input className="mt-2" value={model} placeholder="model id, e.g. qwen3:30b"
+          onChange={(e) => onChange(e.target.value)} />
+      )}
+      {(listMsg || test) && (
+        <div className="mt-1.5 space-y-0.5">
+          {listMsg && <div className="text-xs text-warning">{listMsg}</div>}
+          {test && (
+            <div className={`text-xs ${test.ok === false ? "text-danger" : test.ok ? "text-success" : "text-muted"}`}>
+              {test.text}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

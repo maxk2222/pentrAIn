@@ -9,14 +9,14 @@ meta:
 display:
   tagline: "OWASP Juice Shop: score-board recon, the ftp easter egg, and an admin-section challenge."
 requirements:
-  min_ram_gb: 14
+  min_ram_gb: 12
   min_vcpus: 6
   min_disk_gb: 90
   est_deploy_min: 12
 topology:
   kali:
     template: kali-x64-desktop-template
-    ram_gb: 8
+    ram_gb: 6
     cpus: 4
   vms:
     - name: juice01

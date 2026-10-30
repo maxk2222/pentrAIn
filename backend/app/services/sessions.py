@@ -69,7 +69,12 @@ async def _append_log(db: AsyncSession, session: Session, line: str) -> None:
 
 
 def compile_topology(quest: Quest) -> dict:
-    """quest.topology → Ludus range config (subset of Ludus schema we need)."""
+    """quest.topology → Ludus range config (subset of Ludus schema we need).
+
+    Every VM carries ram_min_gb alongside ram_gb — Ludus maps it to Proxmox
+    memory ballooning, so a range squeezed onto a small host still boots and
+    shrinks under pressure instead of being refused outright.
+    """
     topo = quest.topology or {}
     vms: list[dict] = []
     kali = topo.get("kali") or {}
@@ -79,19 +84,22 @@ def compile_topology(quest: Quest) -> dict:
         "template": kali.get("template", "kali-x64-desktop-template"),
         "vlan": 10,
         "ip_last_octet": 5,
-        "ram_gb": kali.get("ram_gb", 8),
+        "ram_gb": kali.get("ram_gb", 6),
+        "ram_min_gb": kali.get("ram_min_gb") or 3,
         "cpus": kali.get("cpus", 4),
         "linux": True,
         "roles": ["pentrain_kali_agent"],
     })
     for i, v in enumerate(topo.get("vms") or []):
+        ram_gb = v.get("ram_gb", 4)
         entry = {
             "vm_name": f"{{{{ range_id }}}}-{v['name']}",
             "hostname": f"{{{{ range_id }}}}-{v['name'].upper()[:14]}",
             "template": v["template"],
             "vlan": v.get("vlan", 10),
             "ip_last_octet": v.get("ip_last_octet", 20 + i),
-            "ram_gb": v.get("ram_gb", 4),
+            "ram_gb": ram_gb,
+            "ram_min_gb": v.get("ram_min_gb") or max(1, ram_gb // 2),
             "cpus": v.get("cpus", 2),
             "linux": v.get("linux", True),
         }
@@ -108,7 +116,9 @@ def compile_topology(quest: Quest) -> dict:
         if v.get("roles"):
             entry["roles"] = v["roles"]
         vms.append(entry)
-    return {"ludus": vms}
+    # Ludus auto-adds the router VM (default 2G); sizing it explicitly makes
+    # the range footprint honest and lets it balloon on small hosts too
+    return {"ludus": vms, "router": {"ram_gb": 2, "ram_min_gb": 1}}
 
 
 async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:

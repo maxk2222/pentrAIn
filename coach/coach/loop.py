@@ -105,6 +105,8 @@ class SessionCoach:
             llm.get("base_url", ""), llm.get("api_key", ""), llm.get("model", ""),
             temperature=float(llm.get("temperature", 0.4)),
             timeout_s=get_config().llm_timeout_s,
+            reasoning=bool(llm.get("reasoning", True)),
+            reasoning_effort=llm.get("reasoning_effort") or None,
         )
         self._vision_model = llm.get("vision_model", "")
         # seed history from the NEWEST messages (ctx messages are newest-first)
@@ -179,14 +181,18 @@ class SessionCoach:
         self.state.coach_enabled = bool(s.get("coach_enabled", True)) and global_on
         llm = cfg.get("llm", {})
         if (llm.get("base_url"), llm.get("api_key"), llm.get("model"),
-                llm.get("temperature")) != (
+                llm.get("temperature"), llm.get("reasoning"),
+                llm.get("reasoning_effort")) != (
                 old_llm.get("base_url"), old_llm.get("api_key"),
-                old_llm.get("model"), old_llm.get("temperature")):
+                old_llm.get("model"), old_llm.get("temperature"),
+                old_llm.get("reasoning"), old_llm.get("reasoning_effort")):
             new = LlmClient(
                 llm.get("base_url", ""), llm.get("api_key", ""),
                 llm.get("model", ""),
                 temperature=float(llm.get("temperature", 0.4)),
-                timeout_s=get_config().llm_timeout_s)
+                timeout_s=get_config().llm_timeout_s,
+                reasoning=bool(llm.get("reasoning", True)),
+                reasoning_effort=llm.get("reasoning_effort") or None)
             old, self.llm = self.llm, new
             if old:
                 await old.close()

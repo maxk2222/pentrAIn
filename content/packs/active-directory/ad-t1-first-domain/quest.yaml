@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "One domain controller, one roastable service account — your first AS-REP/Kerberoast win."
 requirements:
-  min_ram_gb: 24
+  min_ram_gb: 22
   min_vcpus: 8
   min_disk_gb: 160
   est_deploy_min: 35
@@ -17,7 +17,7 @@ requirements:
 topology:
   kali:
     template: kali-x64-desktop-template
-    ram_gb: 8
+    ram_gb: 6
     cpus: 4
   vms:
     - name: dc01

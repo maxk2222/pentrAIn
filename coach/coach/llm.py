@@ -31,9 +31,12 @@ class LlmError(RuntimeError):
 
 class LlmClient:
     def __init__(self, base_url: str, api_key: str, model: str,
-                 temperature: float = 0.4, timeout_s: int = 120):
+                 temperature: float = 0.4, timeout_s: int = 120,
+                 reasoning: bool = True, reasoning_effort: str | None = None):
         self.model = model
         self.temperature = temperature
+        self.reasoning = reasoning
+        self.reasoning_effort = reasoning_effort
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
@@ -52,6 +55,14 @@ class LlmClient:
             "messages": messages,
             "temperature": self.temperature,
         }
+        # reasoning control — endpoint flavors differ, so use the two dominant
+        # conventions: chat_template_kwargs.enable_thinking (Qwen3/vLLM chat
+        # template switch) and reasoning_effort (OpenAI-compat field). Servers
+        # that don't know a key ignore it; failures surface in the UI test.
+        if not self.reasoning:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        elif self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         if on_delta is not None:
@@ -166,7 +177,13 @@ def _extract_stream_content(raw: str) -> str | None:
 
 def parse_actions(content: str) -> list[dict]:
     """Extract the action list from model output (tolerates markdown fences/prose)."""
-    text = content.strip()
+    # strip thinking blocks first — chain-of-thought must never leak into chat
+    text = re.sub(r"<think\b[^>]*>.*?</think>", "", content,
+                  flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<think\b[^>]*>.*$", "", text,
+                  flags=re.DOTALL | re.IGNORECASE).strip()  # unterminated block
+    if not text:
+        return [{"type": "none", "reason": "response was only a think block"}]
     # strip code fences
     m = re.search(r"```(?:json)?\s*(\{.*\}|\[.*\])\s*```", text, re.DOTALL)
     if m:
@@ -179,13 +196,13 @@ def parse_actions(content: str) -> list[dict]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return [{"type": "send_chat", "content": content[:1500]}]
+        return [{"type": "send_chat", "content": text[:1500]}]
     if isinstance(data, dict) and "actions" in data:
         data = data["actions"]
     if isinstance(data, dict):
         data = [data]
     if not isinstance(data, list):
-        return [{"type": "send_chat", "content": content[:1500]}]
+        return [{"type": "send_chat", "content": text[:1500]}]
     out = []
     for a in data:
         if isinstance(a, dict) and a.get("type") in ALLOWED_ACTIONS:
