@@ -100,7 +100,7 @@ export function ObjectivesPanel({ sessionId, events }: { sessionId: number; even
       <div className="flex gap-2 border-t border-border p-2">
         <Input value={flag} onChange={(e) => setFlag(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), submitFlag())}
-          placeholder="PenTrAIn{…}" className="font-mono" />
+          placeholder="pentrAIn{…}" className="font-mono" />
         <Button variant="outline" size="icon" onClick={submitFlag} disabled={!flag.trim()}>
           <Flag className="h-4 w-4" />
         </Button>

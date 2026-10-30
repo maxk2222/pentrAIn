@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lint PenTrAIn quest packs — validates every quest dir against the loader schema.
+"""Lint pentrAIn quest packs — validates every quest dir against the loader schema.
 
 Usage: python scripts/lint_packs.py [content/packs]
 """

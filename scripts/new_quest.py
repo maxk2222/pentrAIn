@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scaffold a new PenTrAIn quest pack.
+"""Scaffold a new pentrAIn quest pack.
 
 Creates content/packs/<track>/<quest-id>/ with a validated quest.yaml skeleton,
 briefing/defense/coach_context stubs, and optionally an Ansible role skeleton.
@@ -120,7 +120,7 @@ why does this engagement exist?
 ## Rules of engagement
 
 - Only attack hosts inside your deployed range.
-- Flags look like `PenTrAIn{{...}}` - submit them in the Flags panel.
+- Flags look like `pentrAIn{{...}}` - submit them in the Flags panel.
 """
 
 DEFENSE_MD = """\
@@ -195,7 +195,7 @@ ROLE_TASKS = """\
 # {role} - quest target for {quest_id}
 # Idempotent tasks only; use `validate:` on config writes; notify handlers
 # for service restarts. Flags are injected post-deploy by the platform -
-# do NOT write PenTrAIn{{...}} files here.
+# do NOT write pentrAIn{{...}} files here.
 - name: TODO first task
   ansible.builtin.debug:
     msg: "replace me"

@@ -1,7 +1,7 @@
 [project]
 name = "pentrain-backend"
 version = "0.1.0"
-description = "PenTrAIn platform backend — quests, sessions, scoring, console proxy, telemetry"
+description = "pentrAIn platform backend — quests, sessions, scoring, console proxy, telemetry"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

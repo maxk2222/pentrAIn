@@ -17,7 +17,7 @@ w() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 
 case "$cmd" in
 doctor)
-  c "PenTrAIn doctor — checking environment"
+  c "pentrAIn doctor — checking environment"
   rc=0
 
   command -v docker >/dev/null && g "docker $(docker --version | cut -d' ' -f3 | tr -d ',')" || { r "docker missing"; rc=1; }

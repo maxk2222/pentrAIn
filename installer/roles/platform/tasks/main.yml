@@ -1,5 +1,5 @@
 ---
-# Deploy the PenTrAIn platform inside the app VM: docker + compose stack.
+# Deploy the pentrAIn platform inside the app VM: docker + compose stack.
 
 - name: install docker
   ansible.builtin.apt:
@@ -90,5 +90,5 @@
 - name: done
   ansible.builtin.debug:
     msg: >-
-      PenTrAIn platform up at http://{{ app_ip_addr | default(inventory_hostname) }}:{{ platform_http_port }}.
+      pentrAIn platform up at http://{{ app_ip_addr | default(inventory_hostname) }}:{{ platform_http_port }}.
       Open it in a browser — the setup wizard will configure the engine + LLM.

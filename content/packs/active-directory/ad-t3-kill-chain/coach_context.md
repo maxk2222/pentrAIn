@@ -22,7 +22,7 @@
   (ws02).
 - dc02 is a replica — same domain, same DA creds; it's the last flag, not a
   new domain.
-- All flags file-based via qemu-ga; trainees read + submit `PenTrAIn{...}`.
+- All flags file-based via qemu-ga; trainees read + submit `pentrAIn{...}`.
 
 ## Common wrong turns
 

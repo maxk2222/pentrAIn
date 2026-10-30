@@ -1,4 +1,4 @@
-# PenTrAIn installer inventory — copy to inventory.yml and fill in.
+# pentrAIn installer inventory — copy to inventory.yml and fill in.
 #
 # Two modes:
 #   nested — create an engine VM on `outer_pve`, install Proxmox inside it.

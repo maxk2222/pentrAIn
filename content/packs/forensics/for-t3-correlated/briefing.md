@@ -24,4 +24,4 @@ camp — find all three flags and reconstruct the kill chain end to end.
 ## Rules of engagement
 
 - Blue quest: analyze, don't attack.
-- Flags look like `PenTrAIn{...}` — submit them in the Flags panel.
+- Flags look like `pentrAIn{...}` — submit them in the Flags panel.

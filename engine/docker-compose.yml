@@ -1,4 +1,4 @@
-# PenTrAIn platform stack — runs inside the pentrain-app VM.
+# pentrAIn platform stack — runs inside the pentrain-app VM.
 # backend = FastAPI + engine providers; coach = LLM coaching loop; frontend = SPA + WS proxy.
 name: pentrain
 

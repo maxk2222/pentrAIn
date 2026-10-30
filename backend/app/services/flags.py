@@ -1,6 +1,6 @@
 """Flag generation, injection and validation.
 
-Dynamic flags: secret = PenTrAIn{hmac(app_secret, session.flag_seed + flag_key)[:12]}
+Dynamic flags: secret = pentrAIn{hmac(app_secret, session.flag_seed + flag_key)[:12]}
 → unique per session attempt (anti-replay across resets). Injected into target
 VMs via qemu-guest-agent file writes (file kind) at deploy and after soft reset.
 """
@@ -29,7 +29,7 @@ def new_telemetry_token() -> str:
 def derive_flag_secret(flag_seed: str, flag_key: str) -> str:
     cfg = get_config()
     digest = hmac.new(cfg.app_secret.encode(), f"{flag_seed}:{flag_key}".encode(), hashlib.sha256)
-    return f"PenTrAIn{{{digest.hexdigest()[:16]}}}"
+    return f"pentrAIn{{{digest.hexdigest()[:16]}}}"
 
 
 async def create_expected_flags(db: AsyncSession, session: Session, flags: list[Flag]) -> None:

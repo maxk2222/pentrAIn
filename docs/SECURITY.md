@@ -1,6 +1,6 @@
 # Security notes
 
-PenTrAIn runs **deliberately vulnerable machines**. That is the product. The
+pentrAIn runs **deliberately vulnerable machines**. That is the product. The
 security posture therefore focuses on containing them — the range is the
 blast radius, not your LAN.
 

@@ -85,7 +85,7 @@ flags:
 Flag values are randomized per session (HMAC over the session's `flag_seed`).
 The platform injects them **after** deploy via the qemu guest agent
 (`flags_svc.inject_flags` → `pve.agent_write_file`); the backend verifies
-submissions. Roles must therefore **never** write `PenTrAIn{...}` files —
+submissions. Roles must therefore **never** write `pentrAIn{...}` files —
 only create the vulnerability and any directory the flag file lands in.
 
 - `kind: file` — backend writes `{secret}` to `file_path` on `vm`. With
@@ -151,7 +151,7 @@ Ludus applies `roles: [...]` to each VM during deploy. Conventions:
 - Role name in `quest.yaml` must match the role directory.
 - Idempotent tasks — ranges get soft-reset (snapshot rollback), but roles may
   also re-run after hard resets.
-- Do **not** plant flag content — the platform injects `PenTrAIn{...}`
+- Do **not** plant flag content — the platform injects `pentrAIn{...}`
   secrets post-deploy via the guest agent. Roles may `file: state=directory`
   the flag's parent dir so a restricted path still resolves.
 - The Kali box always gets `pentrain_kali_agent` (telemetry sidecar + shell

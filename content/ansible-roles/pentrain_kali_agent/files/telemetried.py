@@ -3,7 +3,7 @@
 
 Reads /etc/pentrain/telemetried.conf (TOKEN=, SESSION=, API=), tails
 /var/log/pentrain/*.log produced by the shell hook, batches events and
-POSTs them to the PenTrAIn backend /api/telemetry. Spools to disk when the
+POSTs them to the pentrAIn backend /api/telemetry. Spools to disk when the
 backend is unreachable (e.g. Ludus testing mode), retries forever.
 """
 from __future__ import annotations

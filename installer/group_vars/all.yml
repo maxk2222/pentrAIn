@@ -1,5 +1,5 @@
 ---
-# PenTrAIn installer variables — override via --extra-vars or edit here.
+# pentrAIn installer variables — override via --extra-vars or edit here.
 
 # ----- mode -----
 # nested | direct  (install.sh --mode sets this)

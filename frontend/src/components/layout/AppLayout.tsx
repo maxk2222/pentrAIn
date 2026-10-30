@@ -29,9 +29,9 @@ export function AppLayout() {
     <div className="flex h-full">
       <aside className="flex w-60 flex-col border-r border-border bg-surface">
         <Link to="/" className="flex items-center gap-2.5 px-5 py-5">
-          <img src="/logo-icon.png" alt="PenTrAIn" className="h-7 w-auto" />
+          <img src="/logo-icon.png" alt="pentrAIn" className="h-7 w-auto" />
           <span className="text-lg font-bold tracking-tight">
-            PenTr<span className="text-primary">AI</span>n
+            pentr<span className="text-primary">AI</span>n
           </span>
         </Link>
 

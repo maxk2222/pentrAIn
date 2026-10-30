@@ -20,7 +20,7 @@
 - Both flags use file paths via guest agent: `C:\flags\domain-admin.txt`,
   `C:\Windows\SYSVOL\domain\scripts\flag.txt`.
 - `kind: command` flags don't exist on Windows — trainees must cat the file
-  content and submit the `PenTrAIn{...}` string.
+  content and submit the `pentrAIn{...}` string.
 
 ## Common wrong turns
 

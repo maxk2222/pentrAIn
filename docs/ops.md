@@ -40,7 +40,7 @@ Check in order:
 **Deploy hangs / fails.**
 Deploy logs stream into the session's Log tab. On a real engine check the
 Ludus API (`ludus` service + templates present, `ludus templates list`) —
-PenTrAIn only orchestrates it. Mock mode always completes.
+pentrAIn only orchestrates it. Mock mode always completes.
 
 **Console black / disconnected.**
 The console proxies Proxmox noVNC for the session's Kali VMID. If it dies

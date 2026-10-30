@@ -1,4 +1,4 @@
-# PenTrAIn shell telemetry hook — sourced by /etc/bash.bashrc and /etc/zsh/zshrc.
+# pentrAIn shell telemetry hook — sourced by /etc/bash.bashrc and /etc/zsh/zshrc.
 # Logs every executed command as TSV: epoch \t user \t cwd \t command
 # plus a result line after each command: R \t exit_code
 # telemetried ships these to the platform backend.

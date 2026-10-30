@@ -24,4 +24,4 @@ the two flags hidden in the evidence.
 ## Rules of engagement
 
 - Blue quest: analyze, don't attack.
-- Flags look like `PenTrAIn{...}` — submit them in the Flags panel.
+- Flags look like `pentrAIn{...}` — submit them in the Flags panel.

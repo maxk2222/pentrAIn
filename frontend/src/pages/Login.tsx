@@ -29,8 +29,8 @@ export function LoginPage() {
     <div className="grid h-full place-items-center bg-background">
       <Card className="w-[380px]">
         <CardHeader className="items-center pt-8">
-          <img src="/logo.png" alt="PenTrAIn" className="mb-1 h-24 w-auto" />
-          <CardTitle className="sr-only">PenTrAIn</CardTitle>
+          <img src="/logo.png" alt="pentrAIn" className="mb-1 h-24 w-auto" />
+          <CardTitle className="sr-only">pentrAIn</CardTitle>
           <p className="text-sm text-muted">Pentest training range + AI coach</p>
         </CardHeader>
         <CardContent>

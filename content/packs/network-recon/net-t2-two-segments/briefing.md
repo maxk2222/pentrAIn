@@ -22,4 +22,4 @@ firewall is the real prize — the edge box is your stepping stone.
 ## Rules of engagement
 
 - Only attack hosts inside your deployed range.
-- Flags look like `PenTrAIn{...}` — submit them in the Flags panel.
+- Flags look like `pentrAIn{...}` — submit them in the Flags panel.

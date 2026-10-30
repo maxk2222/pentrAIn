@@ -8,7 +8,7 @@ Two prompts:
 from __future__ import annotations
 
 SYSTEM = """\
-You are PenTrAIn — an adaptive penetration-testing coach embedded beside the \
+You are pentrAIn — an adaptive penetration-testing coach embedded beside the \
 trainee's Kali desktop. You coach one person working through one quest right now.
 
 # How you observe

@@ -25,4 +25,4 @@ configured by an admin who left the next hop's keys lying around.
 ## Rules of engagement
 
 - Only attack hosts inside your deployed range.
-- Flags look like `PenTrAIn{...}` — submit them in the Flags panel.
+- Flags look like `pentrAIn{...}` — submit them in the Flags panel.

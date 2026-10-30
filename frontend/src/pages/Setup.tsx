@@ -58,10 +58,10 @@ export function SetupPage() {
     <div className="min-h-full bg-background p-6">
       <div className="mx-auto max-w-2xl">
         <div className="mb-8 flex items-center gap-3">
-          <img src="/logo-icon.png" alt="PenTrAIn" className="h-10 w-auto" />
+          <img src="/logo-icon.png" alt="pentrAIn" className="h-10 w-auto" />
           <div>
             <h1 className="text-2xl font-bold">
-              PenTr<span className="text-primary">AI</span>n Setup
+              pentr<span className="text-primary">AI</span>n Setup
             </h1>
             <p className="text-sm text-muted">One-time platform configuration</p>
           </div>

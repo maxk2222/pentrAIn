@@ -74,7 +74,7 @@
           This Proxmox host already runs {{ existing_workloads }} VM(s)/CT(s).
           Ludus takes over the host (own users, networks, templates, firewall).
           Re-run with --i-know-dedicated to confirm this host is dedicated to
-          PenTrAIn, or use --mode nested on a shared host.
+          pentrAIn, or use --mode nested on a shared host.
       when: (existing_workloads | int) > 0 and not (i_know_dedicated | bool)
 
     - name: warn loudly even when acknowledged

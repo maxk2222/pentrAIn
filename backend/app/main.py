@@ -1,4 +1,4 @@
-"""PenTrAIn backend — FastAPI app factory."""
+"""pentrAIn backend — FastAPI app factory."""
 from __future__ import annotations
 
 import contextlib
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     cfg = get_config()
-    app = FastAPI(title="PenTrAIn", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="pentrAIn", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in cfg.cors_origins.split(",")],

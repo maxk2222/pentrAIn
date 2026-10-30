@@ -1,5 +1,5 @@
 [Unit]
-Description=PenTrAIn telemetry agent
+Description=pentrAIn telemetry agent
 After=network-online.target
 Wants=network-online.target
 
