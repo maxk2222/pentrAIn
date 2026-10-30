@@ -82,7 +82,6 @@ def compile_topology(quest: Quest) -> dict:
         "ram_gb": kali.get("ram_gb", 8),
         "cpus": kali.get("cpus", 4),
         "linux": True,
-        "role": "kali",
         "roles": ["pentrain_kali_agent"],
     })
     for i, v in enumerate(topo.get("vms") or []):
@@ -95,7 +94,6 @@ def compile_topology(quest: Quest) -> dict:
             "ram_gb": v.get("ram_gb", 4),
             "cpus": v.get("cpus", 2),
             "linux": v.get("linux", True),
-            "role": "target",
         }
         if v.get("windows"):
             entry["windows"] = dict(v["windows"])

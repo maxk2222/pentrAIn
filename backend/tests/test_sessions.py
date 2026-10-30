@@ -161,7 +161,7 @@ async def test_compile_topology_ludus_format(db_with_packs):
     quest = await db_with_packs.get(Quest, "linux-t3-pivot")
     cfg = sessions_svc.compile_topology(quest)
     vms = cfg["ludus"]
-    kali = next(v for v in vms if v.get("role") == "kali")
+    kali = next(v for v in vms if "kali" in v["vm_name"])
     assert kali["template"] == "kali-x64-desktop-template"
     assert "pentrain_kali_agent" in (kali.get("roles") or [])
     names = {v["vm_name"] for v in vms}
