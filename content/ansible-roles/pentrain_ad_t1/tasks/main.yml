@@ -1,0 +1,23 @@
+---
+# ad-t1 — runs against the Ludus-promoted DC via winrm (community.windows /
+# ansible.windows — stock in Ludus's ansible env). Creates the roastable
+# svc-backup account + flag dirs. Flags injected post-deploy via qemu-ga.
+- name: flag directory
+  ansible.windows.win_file:
+    path: C:\flags
+    state: directory
+
+- name: roastable service account (weak password — the vulnerability)
+  community.windows.win_domain_user:
+    name: svc-backup
+    password: "Backup2024!"
+    state: present
+    password_never_expires: true
+    groups: ["Domain Admins"]
+    service_principal_names:
+      - "HTTP/backup.corp.pentrain.local"
+
+- name: staged login-script breadcrumb in SYSVOL (points at C:\flags)
+  ansible.windows.win_copy:
+    dest: C:\Windows\SYSVOL\domain\scripts\note.txt
+    content: "backup job runs as svc-backup — admin share has the goods\n"

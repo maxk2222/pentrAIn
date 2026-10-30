@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: for-t2-webshell
+  track: forensics
+  tier: 2
+  title: "Post Mortem"
+  version: 1
+display:
+  tagline: "Reconstruct a web compromise: SQLi in the access log, a webshell in uploads, an exfil archive in /tmp."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: web01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 27
+      roles: [pentrain_for_t2]
+flags:
+  - id: webshell-flag
+    name: "Webshell flag — planted in the uploads dir"
+    kind: file
+    points: 200
+    vm: web01
+    file_path: /var/www/html/uploads/flag.txt
+  - id: exfil-flag
+    name: "Exfil flag — inside the attacker's loot archive"
+    kind: file
+    points: 200
+    vm: web01
+    file_path: /tmp/.loot/flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "access.log shows the attack: grep for SELECT/UNION/'..%2f' — the exploit line precedes everything else."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "POSTs to /uploads/ after the SQLi = dropped files. ls -la /var/www/html/uploads/ and match timestamps to the log."
+  - id: h3
+    cost: 50
+    stage: post
+    text: "The attacker staged loot before leaving: /tmp/.loot/ contains a tarball + notes.txt. The second flag file sits next to it."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-accesslog
+      name: "Analyzed access.log"
+      detect: { command_match: "access\\.log|apache2|grep.*(union|select|%27)" }
+      hint_after_s: 600
+    - id: cp-uploads
+      name: "Found the webshell"
+      detect: { command_match: "uploads|shell|\\.php" }
+      hint_after_s: 720
+    - id: cp-exfil
+      name: "Located the loot staging"
+      detect: { command_match: "/tmp/|tar |loot|exfil" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

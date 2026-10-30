@@ -1,0 +1,6 @@
+---
+# Handlers — reference with `notify: <name>` from tasks.
+# - name: restart sshd
+#   ansible.builtin.service:
+#     name: ssh
+#     state: restarted

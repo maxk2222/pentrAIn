@@ -1,0 +1,22 @@
+---
+# ad-t3 ws01 — first foothold: local admin + readme leak pointing at ws02.
+- name: flag + ops dirs
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop: ["C:\\flags", "C:\\ops"]
+
+- name: local admin account (weak — readme leaks it)
+  ansible.windows.win_user:
+    name: wadmin
+    password: "WAdmin2024!"
+    state: present
+    groups: Administrators
+
+- name: readme — leaks ws01's own admin AND ws02's (password reuse)
+  ansible.windows.win_copy:
+    dest: C:\ops\readme.txt
+    content: |
+      ws fleet local admin (ws01 + ws02 — same for all):
+        wadmin / WAdmin2024!
+      ws02 helpdesk scripts under C:\helpdesk\.

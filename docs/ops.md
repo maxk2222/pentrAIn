@@ -57,6 +57,22 @@ commands; the daemon ships them to `/api/telemetry` with the session token.
 `PENTRAIN_LLM_STREAM=false` or the LLM endpoint lacks SSE — the code falls
 back automatically; only perceived latency changes.
 
+## Windows / Active Directory quests
+
+The `ad-t*` quests need Windows templates that are **not** built by default:
+
+- Re-run the installer with `--with-templates`, or trigger the Ludus template
+  build manually — `win2022-server-x64-template` (and `win11-22h2-x64-template`
+  for `ad-t2`+ workstations). First build takes hours and tens of GB.
+- Deploy times are long: `est_deploy_min` on AD quests is honest (25–60 min).
+- Flag injection needs the **qemu guest agent** inside the Windows template —
+  stock Ludus Windows templates ship it. A failed inject shows up as
+  `flag <id> inject FAILED` in the session deploy log.
+- Windows quests only use `kind: file` flags (`C:\flags\*.txt`) — `kind:
+  command` checks run a POSIX shell and are rejected by the pack linter.
+- AD t3 (`ad-t3-kill-chain`) wants ~48G RAM — check the admin resource budget
+  or `check_unlock` keeps it locked.
+
 ## Resets
 
 - **Soft reset** — Ludus snapshot rollback; fast; flags re-randomize

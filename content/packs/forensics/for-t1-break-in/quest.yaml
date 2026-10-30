@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: for-t1-break-in
+  track: forensics
+  tier: 1
+  title: "The Break-In"
+  version: 1
+display:
+  tagline: "A host was popped overnight. Read the logs, find the intruder's stash, prove the persistence."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: evidence01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 26
+      roles: [pentrain_for_t1]
+flags:
+  - id: stash-flag
+    name: "Attacker stash — follow the bash_history trail"
+    kind: file
+    points: 150
+    vm: evidence01
+    file_path: /tmp/.x11-cache/flag.txt
+  - id: persistence-flag
+    name: "Persistence proof — inside the planted cron job"
+    kind: file
+    points: 150
+    vm: evidence01
+    file_path: /etc/cron.d/.sysupdate-flag
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Start with auth.log (or journalctl -u ssh): grep for 'Failed' vs 'Accepted' — the brute force precedes the break-in."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "The attacker's session left a trail: cat /root/.bash_history (or the ops user's). It names the stash directory."
+  - id: h3
+    cost: 50
+    stage: post
+    text: "Persistence lives in cron: ls /etc/cron.d/ — the .sysupdate job hides a second flag file next to itself."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-authlog
+      name: "Read the auth log"
+      detect: { command_match: "auth\\.log|journalctl|lastlog|last " }
+      hint_after_s: 600
+    - id: cp-history
+      name: "Found the attacker's shell history"
+      detect: { command_match: "bash_history|history" }
+      hint_after_s: 720
+    - id: cp-persist
+      name: "Checked persistence locations"
+      detect: { command_match: "cron|systemctl list-timers|rc\\.local|\\.ssh/" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 450
+  time_bonus_max: 150
+  par_s: 1500
+  takeover_cost: 150

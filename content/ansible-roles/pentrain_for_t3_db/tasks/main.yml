@@ -1,0 +1,89 @@
+---
+# for-t3 db01 — exfil point + the syslog collector: /var/log/collected.log
+# stitches all three hosts into one timeline. Source in auth.log = app01.
+- name: analyst account + sudo
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+
+- name: analyst sudoers
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-analyst
+    content: "analyst ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: compromised dbadm account
+  ansible.builtin.user:
+    name: dbadm
+    password: "{{ 'dbadm123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/dbadm
+    create_home: true
+
+- name: dbadm had sudo (over-privileged db admin — the lesson)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/91-dbadm
+    content: "dbadm ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: exfil staging dir
+  ansible.builtin.file:
+    path: /var/tmp/.s3
+    state: directory
+    mode: "0755"
+
+- name: staged customer dump (the exfil payload)
+  ansible.builtin.copy:
+    dest: /var/tmp/.s3/customer.sql.gz
+    content: "GZIP-FAKE-DUMP: customers(18230 rows) cards***\n"
+    mode: "0644"
+
+- name: dbadm history — the cleanup attempt
+  ansible.builtin.copy:
+    dest: /home/dbadm/.bash_history
+    content: |
+      mkdir /var/tmp/.s3
+      sudo mysqldump customers | gzip > /var/tmp/.s3/customer.sql.gz
+      ls -la /var/tmp/.s3/
+      # scp /var/tmp/.s3/customer.sql.gz — window cut short, left it behind
+      exit
+    owner: dbadm
+    mode: "0600"
+
+- name: app + edge source IPs on the range /24
+  ansible.builtin.set_fact:
+    app_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.42"
+    edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.41"
+
+- name: exfil window in auth.log (source = app01)
+  ansible.builtin.blockinfile:
+    path: /var/log/auth.log
+    marker: "# {mark} PENTRAIN FOR-T3 DB"
+    block: |
+      Mar 15 03:15:48 db01 sshd[2600]: Accepted password for dbadm from {{ app_ip }} port 51299 ssh2
+      Mar 15 03:15:48 db01 sshd[2600]: pam_unix(sshd:session): session opened for user dbadm
+    create: true
+
+- name: collected.log — forwarded syslog from all three hosts
+  ansible.builtin.copy:
+    dest: /var/log/collected.log
+    content: |
+      Mar 15 02:58:11 edge01 sshd[2110]: Failed password for webops from 10.66.6.6 port 49812 ssh2
+      Mar 15 02:58:37 edge01 sshd[2110]: Accepted password for webops from 10.66.6.6 port 49812 ssh2
+      Mar 15 03:07:02 app01 sshd[2401]: Accepted password for appadm from {{ edge_ip }} port 50822 ssh2
+      Mar 15 03:15:48 db01 sshd[2600]: Accepted password for dbadm from {{ app_ip }} port 51299 ssh2
+      Mar 15 03:16:30 db01 sudo: dbadm : TTY=pts/0 ; PWD=/home/dbadm ; USER=root ; COMMAND=/usr/bin/mysqldump customers
+      Mar 15 03:21:04 db01 sshd[2600]: pam_unix(sshd:session): session closed for user dbadm
+    mode: "0644"

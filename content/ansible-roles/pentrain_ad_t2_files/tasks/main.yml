@@ -1,0 +1,35 @@
+---
+# ad-t2 files01 — the linux file server: guest-readable SMB share leaking
+# flag + workstation credentials.
+- name: packages
+  ansible.builtin.apt:
+    name: [samba, openssh-server]
+    state: present
+    update_cache: true
+
+- name: share dirs
+  ansible.builtin.file:
+    path: "/srv/share/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [backups]
+
+- name: ws creds leak (the pivot)
+  ansible.builtin.copy:
+    dest: /srv/share/backups/ws-creds.txt
+    content: |
+      ws01 service login (workstation maintenance):
+        CORP\wuser / Work2024!
+    mode: "0644"
+
+- name: guest-readable share
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    marker: "# {mark} PENTRAIN AD-T2"
+    block: |
+      [share]
+        path = /srv/share
+        guest ok = yes
+        read only = yes
+        browseable = yes
+  notify: restart smbd

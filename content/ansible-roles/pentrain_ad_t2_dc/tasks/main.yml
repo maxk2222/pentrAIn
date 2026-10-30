@@ -1,0 +1,20 @@
+---
+# ad-t2 dc01 — domain users + leakable DA password + flag dir. Runs via winrm.
+- name: flag directory
+  ansible.windows.win_file:
+    path: C:\flags
+    state: directory
+
+- name: wuser — the domain user whose creds leak on files01's share
+  community.windows.win_domain_user:
+    name: wuser
+    password: "Work2024!"
+    state: present
+    password_never_expires: true
+
+- name: domain admin password (matches the ws01 note — weak, rotatable lesson)
+  community.windows.win_domain_user:
+    name: Administrator
+    password: "D@main2024!"
+    state: present
+    update_password: always

@@ -1,0 +1,77 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t3-api-chain
+  track: web-appsec
+  tier: 3
+  title: "Broken Trust"
+  version: 1
+display:
+  tagline: "A public web app, an internal API it was never meant to reach — chain an SSRF into the backend."
+requirements:
+  min_ram_gb: 14
+  min_vcpus: 6
+  min_disk_gb: 90
+  est_deploy_min: 12
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: app01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 24
+      roles: [pentrain_docker_host, pentrain_web_t3]
+flags:
+  - id: web-flag
+    name: "Web flag — a file inside the public-web container"
+    kind: file
+    points: 150
+    vm: app01
+    container: public-web
+    file_path: /srv/app/flag.txt
+  - id: internal-flag
+    name: "Internal flag — reachable only through the SSRF"
+    kind: file
+    points: 350
+    vm: app01
+    container: internal-api
+    file_path: /srv/api/flag.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "Only port 80 is exposed, but the app advertises a URL 'preview' feature. What happens when it fetches a URL you control?"
+  - id: h2
+    cost: 60
+    stage: exploit
+    text: "The preview endpoint is an SSRF — point it at http://localhost, http://127.0.0.1:5000, or internal container names. Backend containers share a docker network; guess common names like internal-api."
+  - id: h3
+    cost: 80
+    stage: exploit
+    text: "Fetch http://internal-api:5000/ first — it lists itself. The flag endpoint is /admin/flag."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-recon
+      name: "Enumerated the web app"
+      detect: { command_match: "(curl |nikto|dirb|gobuster|ffuf|whatweb)" }
+      hint_after_s: 600
+    - id: cp-ssrf
+      name: "Probing the SSRF"
+      detect: { command_match: "(url=|preview|127\\.0\\.0\\.1|localhost|169\\.254)" }
+      hint_after_s: 900
+    - id: cp-internal
+      name: "Reached the internal API"
+      detect: { command_match: "internal-api|admin/flag|:5000" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 600
+  time_bonus_max: 250
+  par_s: 2100
+  takeover_cost: 150

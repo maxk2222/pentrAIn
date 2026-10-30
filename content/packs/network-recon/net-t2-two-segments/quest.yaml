@@ -1,0 +1,86 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t2-two-segments
+  track: network-recon
+  tier: 2
+  title: "Behind the Firewall"
+  version: 1
+display:
+  tagline: "The second host refuses to talk to you — but it does talk to the first one. Pivot."
+requirements:
+  min_ram_gb: 18
+  min_vcpus: 8
+  min_disk_gb: 100
+  est_deploy_min: 14
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: edge01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 21
+      roles: [pentrain_net_t2_edge]
+    - name: internal01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 22
+      roles: [pentrain_net_t2_internal]
+flags:
+  - id: edge-flag
+    name: "Edge flag — maintenance account home"
+    kind: file
+    points: 150
+    vm: edge01
+    file_path: /home/deploy/flag.txt
+  - id: internal-flag
+    name: "Internal flag — only reachable via the pivot"
+    kind: file
+    points: 350
+    vm: internal01
+    file_path: /home/internal_svc/flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "edge01 answers on 22+80; internal01 drops everything from your IP. The web root on edge01 leaks config.php — credentials for both machines are inside."
+  - id: h2
+    cost: 50
+    stage: pivot
+    text: "ssh -J deploy@<edge01> internal_svc@<internal01> (ProxyJump) or sshuttle -r deploy@edge01 <subnet>. SSH's own -J needs no extra tools on edge01."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "creds: deploy/deploy123 on edge01, internal_svc/L3tM3In! on internal01. Both are commented in /var/www/html/config.php."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-scan
+      name: "Scanned both hosts"
+      detect: { command_match: "nmap|masscan" }
+      hint_after_s: 480
+    - id: cp-config
+      name: "Found config.php"
+      detect: { command_match: "config\\.php|gobuster|curl.*edge" }
+      hint_after_s: 720
+    - id: cp-edge
+      name: "On edge01"
+      detect: { command_match: "ssh.*deploy|deploy@" }
+      hint_after_s: 720
+    - id: cp-pivot
+      name: "Attempted the pivot"
+      detect: { command_match: "-J |ProxyJump|sshuttle|proxychains|portfwd|Dynamic" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 650
+  time_bonus_max: 250
+  par_s: 2400
+  takeover_cost: 150

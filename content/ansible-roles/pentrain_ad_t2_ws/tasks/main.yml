@@ -1,0 +1,25 @@
+---
+# ad-t2 ws01 — domain-joined workstation: flag dir + the DA creds note.
+# Runs via winrm after domain join (windows.member in quest.yaml).
+- name: flag + ops dirs
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop: ["C:\\flags", "C:\\ops"]
+
+- name: dc-note — leaks the domain-admin password (the real vulnerability)
+  ansible.windows.win_copy:
+    dest: C:\ops\dc-note.txt
+    content: |
+      helpdesk note — dc01 admin for emergencies only:
+        CORP\Administrator / D@main2024!
+
+- name: wuser gets remote-management rights (leaked creds must actually log in)
+  ansible.windows.win_group_membership:
+    name: Administrators
+    members: ["CORP\\wuser"]
+    state: present
+  register: grp
+  retries: 12
+  delay: 10
+  until: grp is not failed   # dc01's role may still be creating the account

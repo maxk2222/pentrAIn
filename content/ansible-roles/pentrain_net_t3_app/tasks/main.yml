@@ -1,0 +1,62 @@
+---
+# net-t3 app01 — middle tier: accepts traffic only from dmz01 (.31 on the
+# range /24), leaks dataadm creds in appadm's home.
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: appadm account
+  ansible.builtin.user:
+    name: appadm
+    password: "{{ 'AppT13r!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/appadm
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: db-notes.txt — leaks data-tier creds
+  ansible.builtin.copy:
+    dest: /home/appadm/db-notes.txt
+    content: |
+      data01 (this /24, .33) — only trusts this host.
+        dataadm / D4t4!
+      dataadm has sudo there — final flag is /root/flag.txt.
+    owner: appadm
+    mode: "0600"
+
+- name: dmz source IP on the range /24
+  ansible.builtin.set_fact:
+    dmz_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.31"
+
+- name: nftables — accept only from dmz01
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ dmz_ip }} accept
+          reject
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started

@@ -1,0 +1,53 @@
+---
+# net-t2 internal — trusts ONLY edge01's address. Everything else REJECTs,
+# so it can't even be port-scanned from kali. Edge IP is derived from the
+# range /24 + the quest's ip_last_octet (21) — same convention Ludus uses.
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: internal_svc account (creds leak on edge01's config.php)
+  ansible.builtin.user:
+    name: internal_svc
+    password: "{{ 'L3tM3In!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/internal_svc
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: edge source IP on the range /24
+  ansible.builtin.set_fact:
+    edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.21"
+
+- name: nftables — accept only from edge01, reject the rest
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ edge_ip }} accept
+          reject
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started

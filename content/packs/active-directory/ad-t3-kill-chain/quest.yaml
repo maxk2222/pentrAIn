@@ -1,0 +1,132 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ad-t3-kill-chain
+  track: active-directory
+  tier: 3
+  title: "Enterprise"
+  version: 1
+display:
+  tagline: "The flagship: two DCs, two workstations, one full kill chain from nothing to Enterprise Admin."
+requirements:
+  min_ram_gb: 48
+  min_vcpus: 16
+  min_disk_gb: 360
+  est_deploy_min: 60
+  needs_windows: true
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: dc01
+      template: win2022-server-x64-template
+      ram_gb: 8
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 51
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        name: corp.pentrain.local
+      roles: [pentrain_ad_t3_dc]
+    - name: dc02
+      template: win2022-server-x64-template
+      ram_gb: 8
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 54
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        name: corp.pentrain.local
+        replica: true
+      roles: [pentrain_ad_t3_dc2]
+    - name: ws01
+      template: win11-22h2-x64-template
+      ram_gb: 6
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 53
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        name: corp.pentrain.local
+        member: true
+      roles: [pentrain_ad_t3_ws1]
+    - name: ws02
+      template: win11-22h2-x64-template
+      ram_gb: 6
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 55
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        name: corp.pentrain.local
+        member: true
+      roles: [pentrain_ad_t3_ws2]
+flags:
+  - id: ws-flag
+    name: "Workstation flag — first domain host"
+    kind: file
+    points: 150
+    vm: ws01
+    file_path: "C:\\flags\\ws01.txt"
+  - id: ws2-flag
+    name: "Second workstation flag — reuse across the fleet"
+    kind: file
+    points: 200
+    vm: ws02
+    file_path: "C:\\flags\\ws02.txt"
+  - id: dc-flag
+    name: "DC flag — domain admin"
+    kind: file
+    points: 350
+    vm: dc01
+    file_path: "C:\\flags\\dc01.txt"
+  - id: forest-flag
+    name: "Enterprise flag — the replica DC, end of the chain"
+    kind: file
+    points: 400
+    vm: dc02
+    file_path: "C:\\flags\\forest.txt"
+hints:
+  - id: h1
+    cost: 50
+    stage: recon
+    text: "Start with the workstations — ws01 has a local admin in a readme on C:\\ops; enumerate domain users from there (netexec/SharpHound)."
+  - id: h2
+    cost: 70
+    stage: exploit
+    text: "ws01's notes name ws02's local admin (reused password). On ws02, a helpdesk script leaks svc-rep credentials — that account reaches the DCs."
+  - id: h3
+    cost: 90
+    stage: privesc
+    text: "svc-rep is a domain admin — run dcsync/secretsdump on dc01 then pivot to dc02 (replica, same domain) for the final flag."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Domain enumeration"
+      detect: { command_match: "(netexec|nxc|SharpHound|bloodhound|enum4linux|nmap)" }
+      hint_after_s: 900
+    - id: cp-lateral
+      name: "Lateral movement"
+      detect: { command_match: "(evil-winrm|winrm|psexec|wmiexec|xfreerdp|smbexec)" }
+      hint_after_s: 1000
+    - id: cp-dcsync
+      name: "DC compromise attempt"
+      detect: { command_match: "(secretsdump|dcsync|ntds|Administrator|svc-rep)" }
+      hint_after_s: 1000
+  escalation: { observe_grace_s: 360, nudge_s: 900, hint_s: 1500 }
+scoring:
+  base: 1100
+  time_bonus_max: 400
+  par_s: 5400
+  takeover_cost: 250

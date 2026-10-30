@@ -56,6 +56,9 @@ restart) exec $COMPOSE restart "$@" ;;
 pack-lint)
   exec backend/.venv/bin/python scripts/lint_packs.py content/packs ;;
 
+new-quest)
+  exec backend/.venv/bin/python scripts/new_quest.py "$@" ;;
+
 engine-status)
   curl -fsS "$API/api/engine/status" | python3 -m json.tool ;;
 
@@ -74,6 +77,7 @@ pentrain — platform CLI
   build          rebuild images
   engine-status  show engine health/mode from the backend
   pack-lint      validate quest packs
+  new-quest      scaffold a new quest (+role with --role)
   sync-packs     reload packs into a running backend
   install        run the Ansible installer (nested|direct)
 

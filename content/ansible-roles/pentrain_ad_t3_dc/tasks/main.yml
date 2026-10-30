@@ -1,0 +1,14 @@
+---
+# ad-t3 dc01 — the DA service account + flag dir (winrm, post-promotion).
+- name: flag directory
+  ansible.windows.win_file:
+    path: C:\flags
+    state: directory
+
+- name: svc-rep — domain admin service account (the script-leak target)
+  community.windows.win_domain_user:
+    name: svc-rep
+    password: "RepSvc2024!"
+    state: present
+    password_never_expires: true
+    groups: ["Domain Admins"]

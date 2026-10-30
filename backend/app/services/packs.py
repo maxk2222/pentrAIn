@@ -153,6 +153,7 @@ def validate_quest_dir(qdir: Path) -> tuple[QuestYaml | None, list[str]]:
     if spec.coach.briefing_ref and not (qdir / spec.coach.briefing_ref).exists():
         errs.append(f"{qdir.name}: coach.briefing_ref {spec.coach.briefing_ref} not found")
     vm_names = {v.name for v in spec.topology.vms}
+    windows_vms = {v.name for v in spec.topology.vms if v.windows or not v.linux}
     for f in spec.flags:
         if f.kind == "file":
             if not f.vm:
@@ -165,6 +166,10 @@ def validate_quest_dir(qdir: Path) -> tuple[QuestYaml | None, list[str]]:
                 errs.append(f"{qdir.name}: command flag {f.id} needs command.cmd")
             if cmd.get("vm") and cmd["vm"] not in vm_names:
                 errs.append(f"{qdir.name}: command flag {f.id} references unknown vm {cmd['vm']}")
+            elif cmd.get("vm") in windows_vms:
+                errs.append(
+                    f"{qdir.name}: command flag {f.id} targets windows vm {cmd['vm']} "
+                    "— command checks run a POSIX shell, use kind=file")
         else:
             errs.append(f"{qdir.name}: flag {f.id} has unknown kind {f.kind!r}")
     return spec, errs

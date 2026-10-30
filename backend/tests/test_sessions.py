@@ -68,6 +68,29 @@ async def test_one_active_session_only(db_with_packs):
     # aborted → next session allowed
     s2 = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     await _wait_state(s2.id, "ready")
+    await sessions_svc.abort(db, s2.id)
+
+
+# every quest in the expanded library must survive a mock deploy —
+# compile_topology + provider roundtrip + flag seeding
+@pytest.mark.parametrize("quest_id", [
+    "web-t3-api-chain",
+    "net-t1-services", "net-t2-two-segments", "net-t3-the-dmz",
+    "for-t1-break-in", "for-t2-webshell", "for-t3-correlated",
+    "ad-t1-first-domain", "ad-t2-corp-lan", "ad-t3-kill-chain",
+])
+async def test_new_quest_deploys_on_mock(db_with_packs, quest_id):
+    db = db_with_packs
+    # quests with tier>1 are progression-gated — mark predecessors solved
+    quest = await db.get(Quest, quest_id)
+    for t in range(1, quest.tier):
+        prev = (await db.execute(select(Quest.id).where(
+            Quest.track_slug == quest.track_slug, Quest.tier == t))).scalar_one()
+        db.add(Session(quest_id=prev, state="solved"))
+    await db.commit()
+    s = await sessions_svc.create_session(db, quest_id)
+    await _wait_state(s.id, "ready")
+    await sessions_svc.abort(db, s.id)
 
 
 async def test_full_session_lifecycle_mock(db_with_packs):

@@ -1,0 +1,43 @@
+---
+# web-t3 "Broken Trust" — two containers on an isolated docker network:
+# public-web (Flask SSRF app, :80) + internal-api (Flask, unreachable directly).
+# Flags are injected post-deploy via docker exec — containers only need /bin/sh.
+- name: app sources
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /opt/webt3/{{ item }}
+    mode: preserve
+  loop: [public-web, internal-api]
+  register: copied
+
+- name: build public-web image
+  ansible.builtin.command: docker build -t pentrain/webt3-public /opt/webt3/public-web
+  register: b1
+  changed_when: b1.rc == 0
+
+- name: build internal-api image
+  ansible.builtin.command: docker build -t pentrain/webt3-api /opt/webt3/internal-api
+  register: b2
+  changed_when: b2.rc == 0
+
+- name: shared backend network (unpublished api stays unreachable from outside)
+  ansible.builtin.command: docker network create webt3-backend
+  register: net
+  changed_when: net.rc == 0
+  failed_when: net.rc != 0 and 'already exists' not in (net.stderr | default(''))
+
+- name: run internal-api (backend net only)
+  ansible.builtin.command: >-
+    docker run -d --name internal-api --restart unless-stopped
+    --network webt3-backend pentrain/webt3-api
+  register: c2
+  changed_when: c2.rc == 0
+  failed_when: c2.rc != 0 and 'Conflict' not in (c2.stderr | default(''))
+
+- name: run public-web (backend net + published :80)
+  ansible.builtin.command: >-
+    docker run -d --name public-web --restart unless-stopped
+    --network webt3-backend -p 80:80 pentrain/webt3-public
+  register: c1
+  changed_when: c1.rc == 0
+  failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))

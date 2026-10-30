@@ -1,0 +1,69 @@
+---
+# for-t3 app01 — the pivot: appadm's account, tooling in /var/tmp/.s2,
+# history pointing at db01. Source in auth.log is edge01's address.
+- name: analyst account + sudo
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+
+- name: analyst sudoers
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-analyst
+    content: "analyst ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: compromised appadm account
+  ansible.builtin.user:
+    name: appadm
+    password: "{{ 'appadm123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/appadm
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: pivot staging dir
+  ansible.builtin.file:
+    path: /var/tmp/.s2
+    state: directory
+    mode: "0755"
+
+- name: forwarding tool note
+  ansible.builtin.copy:
+    dest: /var/tmp/.s2/fwd.sh
+    content: "#!/bin/sh\n# stage2: jump helpers — db tier from here\nssh -N -D 1080 dbadm@db01 &\n"
+    mode: "0755"
+
+- name: appadm history — names db01 next
+  ansible.builtin.copy:
+    dest: /home/appadm/.bash_history
+    content: |
+      mkdir /var/tmp/.s2
+      vi /var/tmp/.s2/fwd.sh
+      sh /var/tmp/.s2/fwd.sh
+      ssh -N -D 1080 dbadm@db01
+      exit
+    owner: appadm
+    mode: "0600"
+
+- name: edge source IP on the range /24
+  ansible.builtin.set_fact:
+    edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.41"
+
+- name: pivot window in auth.log (source = edge01)
+  ansible.builtin.blockinfile:
+    path: /var/log/auth.log
+    marker: "# {mark} PENTRAIN FOR-T3 APP"
+    block: |
+      Mar 15 03:07:02 app01 sshd[2401]: Accepted password for appadm from {{ edge_ip }} port 50822 ssh2
+      Mar 15 03:07:02 app01 sshd[2401]: pam_unix(sshd:session): session opened for user appadm
+    create: true

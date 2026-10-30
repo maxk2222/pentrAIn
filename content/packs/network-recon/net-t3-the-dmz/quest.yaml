@@ -1,0 +1,95 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t3-the-dmz
+  track: network-recon
+  tier: 3
+  title: "Three Hops Deep"
+  version: 1
+display:
+  tagline: "DMZ → app tier → data tier. Every hop trusts only the previous one — chain your pivots."
+requirements:
+  min_ram_gb: 20
+  min_vcpus: 10
+  min_disk_gb: 140
+  est_deploy_min: 18
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: dmz01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 31
+      roles: [pentrain_net_t3_dmz]
+    - name: app01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 32
+      roles: [pentrain_net_t3_app]
+    - name: data01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 33
+      roles: [pentrain_net_t3_data]
+flags:
+  - id: dmz-flag
+    name: "DMZ flag — first foothold"
+    kind: file
+    points: 150
+    vm: dmz01
+    file_path: /home/ops/flag.txt
+  - id: app-flag
+    name: "App-tier flag — through the first pivot"
+    kind: file
+    points: 250
+    vm: app01
+    file_path: /home/appadm/flag.txt
+  - id: data-flag
+    name: "Data-tier flag — deepest point of the chain"
+    kind: file
+    points: 400
+    vm: data01
+    file_path: /root/flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Only dmz01 answers you — app01 and data01 drop your packets. dmz01's web page source leaks a maintenance login."
+  - id: h2
+    cost: 50
+    stage: pivot
+    text: "sshuttle -r ops@<dmz01> <subnet>/24 makes the whole app tier reachable; or stack ssh -J one hop at a time. Each host leaks the next hop's creds in a notes file in the login user's home."
+  - id: h3
+    cost: 70
+    stage: exploit
+    text: "Chain: ops/ops123@dmz01 → appadm (see ~/notes.txt) → dataadm (see appadm's notes) → sudo on data01 for the root flag."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-dmz
+      name: "Found dmz01's entry"
+      detect: { command_match: "nmap|curl|gobuster|ssh.*ops" }
+      hint_after_s: 600
+    - id: cp-pivot1
+      name: "First pivot standing"
+      detect: { command_match: "sshuttle|-J |ProxyJump|proxychains" }
+      hint_after_s: 900
+    - id: cp-pivot2
+      name: "Second pivot standing"
+      detect: { command_match: "dataadm|data01|\\.33" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 240, nudge_s: 600, hint_s: 1000 }
+scoring:
+  base: 800
+  time_bonus_max: 300
+  par_s: 3000
+  takeover_cost: 200

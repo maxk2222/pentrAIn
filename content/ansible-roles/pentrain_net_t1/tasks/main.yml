@@ -1,0 +1,83 @@
+---
+# net-t1 "The Perimeter" — one host, five services, chained credential leak:
+# anon-FTP flag → hidden web dir flag → mysql weak creds → dbadm ssh → flag.
+# Flag *content* is injected post-deploy; we only create dirs/files/vulns.
+- name: install services
+  ansible.builtin.apt:
+    name: [vsftpd, apache2, default-mysql-server, redis-server, openssh-server]
+    state: present
+    update_cache: true
+
+- name: anonymous ftp root
+  ansible.builtin.file:
+    path: /srv/ftp
+    state: directory
+    mode: "0755"
+
+- name: anonymous welcome note
+  ansible.builtin.copy:
+    dest: /srv/ftp/welcome.txt
+    content: "pub area — dumps and flag.txt mirrored here by ops\n"
+    mode: "0644"
+
+- name: enable anonymous ftp
+  ansible.builtin.lineinfile:
+    path: /etc/vsftpd.conf
+    regexp: "^{{ item.k }}"
+    line: "{{ item.k }}={{ item.v }}"
+    create: true
+  loop:
+    - { k: anonymous_enable, v: "YES" }
+    - { k: anon_root, v: "/srv/ftp" }
+    - { k: no_anon_password, v: "YES" }
+  notify: restart vsftpd
+
+- name: hidden web backup dir (flag injected post-deploy)
+  ansible.builtin.file:
+    path: /var/www/html/backup
+    state: directory
+    mode: "0755"
+
+- name: decoy page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: "<h1>ops intranet</h1><p>backup moved — ask infra</p>\n"
+
+- name: dbadm shell account (creds live in the mysql secrets table)
+  ansible.builtin.user:
+    name: dbadm
+    password: "{{ 'Summer2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/dbadm
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: mysql binds the network (the exposure)
+  ansible.builtin.lineinfile:
+    path: /etc/mysql/mariadb.conf.d/50-server.cnf
+    regexp: "^bind-address"
+    line: "bind-address = 0.0.0.0"
+  notify: restart mariadb
+
+- name: mysql root weak password + remotely reachable account
+  ansible.builtin.command: >-
+    mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA
+    mysql_native_password USING PASSWORD('mysql');
+    CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY 'mysql';
+    GRANT ALL PRIVILEGES ON *.* TO 'root'@'%'; FLUSH PRIVILEGES;"
+  changed_when: false
+  ignore_errors: true
+
+- name: secrets.creds table — the credential leak that chains to ssh
+  ansible.builtin.command: >-
+    mysql -u root -pmysql -e "CREATE DATABASE IF NOT EXISTS secrets;
+    CREATE TABLE IF NOT EXISTS secrets.creds (u varchar(64), p varchar(64));
+    INSERT INTO secrets.creds SELECT 'dbadm','Summer2024!' FROM DUAL
+    WHERE NOT EXISTS (SELECT 1 FROM secrets.creds);"
+  changed_when: false

@@ -1,0 +1,85 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: net-t1-services
+  track: network-recon
+  tier: 1
+  title: "The Perimeter"
+  version: 1
+display:
+  tagline: "One host, five open services — enumerate everything, then follow the credentials."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: svc01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_net_t1]
+flags:
+  - id: ftp-flag
+    name: "FTP flag — anonymous share"
+    kind: file
+    points: 100
+    vm: svc01
+    file_path: /srv/ftp/flag.txt
+  - id: web-flag
+    name: "Web flag — hidden directory"
+    kind: file
+    points: 200
+    vm: svc01
+    file_path: /var/www/html/backup/flag.txt
+  - id: dbadm-flag
+    name: "Shell flag — creds are inside the database"
+    kind: file
+    points: 250
+    vm: svc01
+    file_path: /home/dbadm/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "nmap -sV --top-ports 1000 <svc01> — five services answer. Try each before going deep."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "FTP allows anonymous login (ftp <ip>, user 'anonymous'). The web root hides a directory — gobuster/dirb with a common wordlist finds it."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "MySQL takes root/mysql. Inside, the 'secrets' database has a 'creds' table — those credentials are SSH login."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-scan
+      name: "Ran a port scan"
+      detect: { command_match: "nmap|masscan|rustscan" }
+      hint_after_s: 480
+    - id: cp-ftp
+      name: "Connected to FTP"
+      detect: { command_match: "ftp |lftp|wget.*ftp://|curl.*ftp://" }
+      hint_after_s: 720
+    - id: cp-webenum
+      name: "Enumerated the web server"
+      detect: { command_match: "gobuster|dirb|ffuf|feroxbuster|nikto" }
+      hint_after_s: 720
+    - id: cp-mysql
+      name: "Logged into MySQL"
+      detect: { command_match: "mysql |mysqldump" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 550
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

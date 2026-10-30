@@ -47,6 +47,8 @@ ludus_admin_user: pentrain
 ludus_templates:               # multi-GB downloads — enable with --with-templates
   - kali-x64-desktop-template
   - debian-12-x64-server-template
+  # required for the active-directory track (ad-t1..t3) — multi-hour packer build:
+  - win2022-server-x64-template
 install_templates: false
 
 # ----- safety -----

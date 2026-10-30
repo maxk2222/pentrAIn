@@ -59,16 +59,24 @@ The Kali VM is implicit per session — add every other box under `vms`.
 flags:
   - id: user-flag               # stable key — flag secrets derive from (session, id)
     name: "User flag — read user.txt"
-    kind: file                  # file | command | web | manual
+    kind: file                  # file | command
     points: 100
     vm: target01
     file_path: /home/student/user.txt
 ```
 
-Flag values are randomized per session (HMAC over the session's `flag_seed`);
-the role plants them during deploy, the backend verifies submissions. Never
-hard-code `PenTrAIn{...}` values in pack files — use the flag placeholders
-the `pentrain_*` roles expose.
+Flag values are randomized per session (HMAC over the session's `flag_seed`).
+The platform injects them **after** deploy via the qemu guest agent
+(`flags_svc.inject_flags` → `pve.agent_write_file`); the backend verifies
+submissions. Roles must therefore **never** write `PenTrAIn{...}` files —
+only create the vulnerability and any directory the flag file lands in.
+
+- `kind: file` — backend writes `{secret}` to `file_path` on `vm`. With
+  `container: <name>` it goes through `docker exec` into that container.
+- `kind: command` — backend runs `command.cmd` on `command.vm` and compares
+  stdout to the flag (substring `expect` or exitcode). The check runs a
+  **POSIX shell** — not valid on `windows:`/`linux: false` VMs (linted).
+- Windows VMs: use `kind: file` only; the guest agent handles `C:\...` paths.
 
 ### Hints
 
@@ -126,14 +134,40 @@ Ludus applies `roles: [...]` to each VM during deploy. Conventions:
 - Role name in `quest.yaml` must match the role directory.
 - Idempotent tasks — ranges get soft-reset (snapshot rollback), but roles may
   also re-run after hard resets.
-- Flag files are planted with content `{{ pentrain_flag('<flag-id>') }}` —
-  the lookup is provided by the platform at deploy time.
+- Do **not** plant flag content — the platform injects `PenTrAIn{...}`
+  secrets post-deploy via the guest agent. Roles may `file: state=directory`
+  the flag's parent dir so a restricted path still resolves.
 - The Kali box always gets `pentrain_kali_agent` (telemetry sidecar + shell
   hook). Do not remove it — checkpoints and the coach die silently without it.
   Its files mirror `telemetry-agent/`; the linter fails on drift.
 
+### Windows / Active Directory quests
+
+- `topology.vms[].linux: false` + `windows: {...}` + `domain: {...}` are
+  passed through to Ludus — use `win2022-server-x64-template` (needs a
+  `--with-templates` build; see docs/ops.md).
+- Only `kind: file` flags — `kind: command` runs a POSIX shell and will
+  never execute on Windows (the pack linter rejects the combination).
+- Domain config (OU structure, GPO-equivalent hardening, users) belongs in
+  the quest's `pentrain_ad_*` roles, not the `gpos` field.
+
+### Checklist before committing a quest
+
+- [ ] `python scripts/lint_packs.py` — 0 errors
+- [ ] Roles are idempotent and use `validate:` on config writes
+- [ ] Every flag's `vm` exists in `topology.vms`; `file_path` parent dirs
+      are created by a role (or default to `/root`, `C:\flags`)
+- [ ] Checkpoint regexes match *real* commands a trainee would type
+- [ ] `requirements` reflect the sum of VM RAM/CPUs + kali — `check_unlock`
+      hard-blocks quests that exceed the admin-configured budget
+- [ ] `briefing.md` states the goal without leaking the path;
+      `defense.md` has detect+fix+verify for every vulnerability
+- [ ] `coach_context.md` lists the intended path and common wrong turns
+
 ## Testing a pack
 
+0. `python scripts/new_quest.py <track> <quest-id> --tier N --role` — scaffolds
+   the quest dir + optional role skeleton and validates immediately.
 1. `python scripts/lint_packs.py` — schema + agent-sync check.
 2. `docker compose -f engine/docker-compose.dev.yml up` — MockProvider
    accepts every topology; the full UI flow (deploy → flags → reset) is

@@ -1,0 +1,15 @@
+---
+# Role template — copy to content/ansible-roles/pentrain_<quest_id>/
+#
+# Conventions:
+#   - idempotent: every task must be safe to re-run (creates=, state=, validate:)
+#   - write configs via copy/template with `validate:` where supported
+#   - restart services via handlers, never `service:` inline mid-play
+#   - do NOT write PenTrAIn{...} flag files — flags are injected post-deploy
+#     by the platform via the qemu guest agent (see backend/app/services/flags.py)
+#   - plant breadcrumbs/vulns the quest.yaml hints + coach_context.md reference
+- name: example — install a package
+  ansible.builtin.apt:
+    name: some-package
+    state: present
+    update_cache: true

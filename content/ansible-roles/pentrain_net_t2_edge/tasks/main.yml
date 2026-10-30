@@ -1,0 +1,38 @@
+---
+# net-t2 edge — leaks credentials for BOTH hosts via config.php.
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, openssh-server]
+    state: present
+    update_cache: true
+
+- name: deploy maintenance account (weak — creds leak in config.php)
+  ansible.builtin.user:
+    name: deploy
+    password: "{{ 'deploy123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/deploy
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: status page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: "<h1>edge gateway</h1><p>status ok</p>\n"
+
+- name: config.php — the credential leak (web root, world-readable)
+  ansible.builtin.copy:
+    dest: /var/www/html/config.php
+    content: |
+      <?php
+      // site config — TODO move creds to vault
+      $edge_maint = ['user' => 'deploy', 'pass' => 'deploy123'];
+      $internal   = ['host' => 'internal01', 'user' => 'internal_svc', 'pass' => 'L3tM3In!'];
+      ?>
+    mode: "0644"

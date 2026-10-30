@@ -1,0 +1,67 @@
+---
+# for-t3 edge01 — entry point of the kill chain: brute-forced webops,
+# staging dir /var/tmp/.s1, history that names the next hop.
+- name: analyst account + sudo
+  ansible.builtin.user:
+    name: analyst
+    password: "{{ 'analysis' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/analyst
+    create_home: true
+
+- name: analyst sudoers
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-analyst
+    content: "analyst ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: compromised webops account
+  ansible.builtin.user:
+    name: webops
+    password: "{{ 'webops123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/webops
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: entry staging dir
+  ansible.builtin.file:
+    path: /var/tmp/.s1
+    state: directory
+    mode: "0755"
+
+- name: attacker scanner tool
+  ansible.builtin.copy:
+    dest: /var/tmp/.s1/scan.sh
+    content: "#!/bin/sh\n# stage1: probe app tier\nfor p in 22 80 443; do nc -zvw1 $1 $p; done\n"
+    mode: "0755"
+
+- name: webops history — names app01 next
+  ansible.builtin.copy:
+    dest: /home/webops/.bash_history
+    content: |
+      mkdir /var/tmp/.s1
+      cp ~/tools/scan.sh /var/tmp/.s1/
+      /var/tmp/.s1/scan.sh app01
+      ssh appadm@app01
+      exit
+    owner: webops
+    mode: "0600"
+
+- name: entry window in auth.log
+  ansible.builtin.blockinfile:
+    path: /var/log/auth.log
+    marker: "# {mark} PENTRAIN FOR-T3 EDGE"
+    block: |
+      Mar 15 02:58:11 edge01 sshd[2110]: Failed password for webops from 10.66.6.6 port 49812 ssh2
+      Mar 15 02:58:24 edge01 sshd[2110]: Failed password for webops from 10.66.6.6 port 49812 ssh2
+      Mar 15 02:58:37 edge01 sshd[2110]: Accepted password for webops from 10.66.6.6 port 49812 ssh2
+      Mar 15 02:58:37 edge01 sshd[2110]: pam_unix(sshd:session): session opened for user webops
+    create: true

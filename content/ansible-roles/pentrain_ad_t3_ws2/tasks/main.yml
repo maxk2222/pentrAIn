@@ -1,0 +1,26 @@
+---
+# ad-t3 ws02 — second workstation: reused wadmin + the dc-script.ps1 that
+# leaks the DA service account.
+- name: flag + helpdesk dirs
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop: ["C:\\flags", "C:\\helpdesk"]
+
+- name: same local admin (reuse vulnerability)
+  ansible.windows.win_user:
+    name: wadmin
+    password: "WAdmin2024!"
+    state: present
+    groups: Administrators
+
+- name: dc-script — helpdesk script embedding DA creds
+  ansible.windows.win_copy:
+    dest: C:\helpdesk\dc-script.ps1
+    content: |
+      # helpdesk — quick replication check against the DCs
+      $user = "CORP\svc-rep"
+      $pass = ConvertTo-SecureString "RepSvc2024!" -AsPlainText -Force
+      $cred = New-Object System.Management.Automation.PSCredential($user, $pass)
+      # repadmin /showrepl dc01
+      # repadmin /showrepl dc02

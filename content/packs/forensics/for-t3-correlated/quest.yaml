@@ -1,0 +1,95 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: for-t3-correlated
+  track: forensics
+  tier: 3
+  title: "Correlated"
+  version: 1
+display:
+  tagline: "A three-host intrusion: entry on the edge, pivot through the app tier, exfil from the DB — assemble the kill chain."
+requirements:
+  min_ram_gb: 18
+  min_vcpus: 8
+  min_disk_gb: 120
+  est_deploy_min: 15
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: edge01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 41
+      roles: [pentrain_for_t3_edge]
+    - name: app01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 42
+      roles: [pentrain_for_t3_app]
+    - name: db01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 43
+      roles: [pentrain_for_t3_db]
+flags:
+  - id: entry-flag
+    name: "Entry flag — the attacker's marker on the edge host"
+    kind: file
+    points: 150
+    vm: edge01
+    file_path: /var/tmp/.s1/flag.txt
+  - id: pivot-flag
+    name: "Pivot flag — tooling left on the app tier"
+    kind: file
+    points: 200
+    vm: app01
+    file_path: /var/tmp/.s2/flag.txt
+  - id: exfil-flag
+    name: "Exfil flag — staged where the data went out"
+    kind: file
+    points: 300
+    vm: db01
+    file_path: /var/tmp/.s3/flag.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "All three hosts answer ssh as analyst/analysis. Start at edge01's auth.log — the Accepted line names the compromised account."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "The attacker staged tools in /var/tmp/.s1, .s2, .s3 — one per host, in order. Cross-check each host's auth.log for ssh *from* the previous hop."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "db01 runs the collector: /var/log/collected.log has forwarded syslog from all three — sort it by time to read the kill chain left-to-right."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-edge
+      name: "Triaged edge01"
+      detect: { command_match: "edge01|auth\\.log|\\.s1" }
+      hint_after_s: 720
+    - id: cp-pivot
+      name: "Traced the lateral movement"
+      detect: { command_match: "app01|\\.s2|lateral|jump" }
+      hint_after_s: 900
+    - id: cp-correlate
+      name: "Correlated the timeline"
+      detect: { command_match: "collected\\.log|db01|exfil|sort" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 240, nudge_s: 600, hint_s: 1000 }
+scoring:
+  base: 700
+  time_bonus_max: 250
+  par_s: 2700
+  takeover_cost: 200

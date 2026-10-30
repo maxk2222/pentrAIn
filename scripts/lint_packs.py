@@ -31,9 +31,27 @@ def check_agent_sync() -> list[str]:
     return errors
 
 
+def check_roles(found) -> list[str]:
+    """Every role a quest references must exist under content/ansible-roles —
+    a typo'd name would only fail at deploy time on a live range."""
+    roles_root = REPO / "content" / "ansible-roles"
+    errors: list[str] = []
+    for qdir, spec in found:
+        for v in spec.topology.vms:
+            for r in v.roles:
+                name = r["name"] if isinstance(r, dict) else r
+                if not isinstance(name, str):
+                    continue
+                if not (roles_root / name / "tasks" / "main.yml").exists():
+                    errors.append(f"{qdir.name}: role {name!r} on vm {v.name} "
+                                  "missing content/ansible-roles/" + name)
+    return errors
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else "content/packs")
     found, errors = discover_quests(root)
+    errors = errors + check_roles(found)
     for qdir, spec in found:
         flags = len(spec.flags)
         vms = len(spec.topology.vms) + 1  # +kali
@@ -42,6 +60,7 @@ def main() -> int:
     for e in errors + check_agent_sync():
         print(f"ERR {e}")
     total = len(errors) + len(check_agent_sync())
+    # role-existence errors were folded into `errors` already
     print(f"\n{len(found)} quest(s), {total} error(s)")
     return 1 if total else 0
 

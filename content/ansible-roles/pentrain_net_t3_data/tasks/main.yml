@@ -1,0 +1,59 @@
+---
+# net-t3 data01 — deepest tier: accepts only from app01 (.32), dataadm has
+# NOPASSWD sudo; the root flag is the end of the chain.
+- name: packages
+  ansible.builtin.apt:
+    name: [openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: dataadm account
+  ansible.builtin.user:
+    name: dataadm
+    password: "{{ 'D4t4!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/dataadm
+    create_home: true
+
+- name: dataadm sudo (NOPASSWD — the misconfiguration)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-dataadm
+    content: "dataadm ALL=(root) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: app source IP on the range /24
+  ansible.builtin.set_fact:
+    app_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.32"
+
+- name: nftables — accept only from app01
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ app_ip }} accept
+          reject
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
