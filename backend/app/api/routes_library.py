@@ -69,9 +69,12 @@ async def quest_detail(quest_id: str, db: AsyncSession = Depends(get_db)):
                                  Session.state == SessionState.SOLVED.value)
         .limit(1))).scalar_one_or_none() is not None
     flags = (await db.execute(select(Flag).where(Flag.quest_id == q.id))).scalars().all()
+    track = await db.get(Track, q.track_slug)
     return QuestDetailOut(
         **_quest_out(q, locked=not ok, reason=reason, solved=solved).model_dump(),
         briefing_md=q.briefing_md, defense_md=q.defense_md, topology=q.topology or {},
+        cheatsheet_md=q.cheatsheet_md or "",
+        track_cheatsheet_md=(track.cheatsheet_md if track else "") or "",
         hints=[{"id": h.get("id"), "cost": h.get("cost"), "stage": h.get("stage")}
                for h in q.hints_cfg or []],
         flags=[FlagOut(key=f.key, name=f.name, kind=f.kind, points=f.points) for f in flags],

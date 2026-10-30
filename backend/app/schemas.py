@@ -48,6 +48,8 @@ class QuestOut(BaseModel):
 class QuestDetailOut(QuestOut):
     briefing_md: str
     defense_md: str
+    cheatsheet_md: str = ""
+    track_cheatsheet_md: str = ""
     topology: dict = Field(default_factory=dict)
     hints: list[dict]
     flags: list[FlagOut]

@@ -53,6 +53,7 @@ class Track(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     icon: Mapped[str] = mapped_column(String(64), default="target")
     order: Mapped[int] = mapped_column(Integer, default=0)
+    cheatsheet_md: Mapped[str] = mapped_column(Text, default="")  # track-level reference card
 
     quests: Mapped[list[Quest]] = relationship(back_populates="track", order_by="Quest.tier")
 
@@ -77,6 +78,7 @@ class Quest(Base):
 
     briefing_md: Mapped[str] = mapped_column(Text, default="")
     defense_md: Mapped[str] = mapped_column(Text, default="")
+    cheatsheet_md: Mapped[str] = mapped_column(Text, default="")    # optional quest reference card
     coach_context_md: Mapped[str] = mapped_column(Text, default="")  # hidden from UI
 
     track: Mapped[Track] = relationship(back_populates="quests")

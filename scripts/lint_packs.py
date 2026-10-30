@@ -48,20 +48,38 @@ def check_roles(found) -> list[str]:
     return errors
 
 
+def check_cheatsheets(found) -> list[str]:
+    """cheatsheet.md is optional — warn, never fail. Tracks get the same
+    courtesy: content/packs/<track>/cheatsheet.md feeds the sheet panel."""
+    warnings: list[str] = []
+    seen_tracks: set[str] = set()
+    for qdir, _spec in found:
+        if not (qdir / "cheatsheet.md").exists():
+            warnings.append(f"{qdir.name}: no cheatsheet.md (optional)")
+        seen_tracks.add(qdir.parent)
+    for tdir in sorted(seen_tracks):
+        if not (tdir / "cheatsheet.md").exists():
+            warnings.append(f"track {tdir.name}: no track-level cheatsheet.md (optional)")
+    return warnings
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else "content/packs")
     found, errors = discover_quests(root)
     errors = errors + check_roles(found)
-    for qdir, spec in found:
+    warnings = check_cheatsheets(found)
+    for _qdir, spec in found:
         flags = len(spec.flags)
         vms = len(spec.topology.vms) + 1  # +kali
         print(f"OK  {spec.meta.id:32s} tier={spec.meta.tier} track={spec.meta.track:18s} "
               f"vms={vms} flags={flags} hints={len(spec.hints)}")
+    for w in warnings:
+        print(f"WARN {w}")
     for e in errors + check_agent_sync():
         print(f"ERR {e}")
     total = len(errors) + len(check_agent_sync())
     # role-existence errors were folded into `errors` already
-    print(f"\n{len(found)} quest(s), {total} error(s)")
+    print(f"\n{len(found)} quest(s), {total} error(s), {len(warnings)} warning(s)")
     return 1 if total else 0
 
 

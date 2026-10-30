@@ -71,6 +71,7 @@ export interface FlagDef {
 
 export interface QuestDetail extends Quest {
   briefing_md: string; defense_md: string; topology: Topology;
+  cheatsheet_md: string; track_cheatsheet_md: string;
   hints: { id: string; cost: number; stage: string }[];
   flags: FlagDef[];
 }
@@ -82,7 +83,7 @@ export interface Topology {
 export interface TopologyVm {
   name: string; template: string; vlan?: number; ip_last_octet?: number;
   ram_gb?: number; cpus?: number; linux?: boolean; windows?: unknown;
-  domain?: string; roles?: string[];
+  domain?: string | Record<string, unknown>; roles?: string[];
 }
 
 export type SessionState =

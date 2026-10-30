@@ -168,6 +168,28 @@ Ground truth for the coaching agent. Never quote this verbatim to the trainee.
 - TODO: for forensics quests - where the planted artifacts live
 """
 
+CHEATSHEET_MD = """\
+# Cheatsheet - {title}
+
+Quick reference for this quest. No spoilers - no flag paths or credentials,
+just tools and syntax the trainee might need.
+
+## Targets
+
+- TODO: one line per host - what it is, what runs on it (no secrets)
+
+## Useful commands
+
+```bash
+# TODO: the 5-10 commands that actually matter for this quest
+nmap -sV -sC <target>
+```
+
+## Concepts worth remembering
+
+- TODO: e.g. "ssh -J vs sshuttle", "mysql -h over a non-standard bind"
+"""
+
 ROLE_TASKS = """\
 ---
 # {role} - quest target for {quest_id}
@@ -229,6 +251,7 @@ def main() -> int:
     (qdir / "quest.yaml").write_text(QUEST_YAML.format(**fmt))
     (qdir / "briefing.md").write_text(BRIEFING_MD.format(**fmt))
     (qdir / "defense.md").write_text(DEFENSE_MD.format(**fmt))
+    (qdir / "cheatsheet.md").write_text(CHEATSHEET_MD.format(**fmt))
     (qdir / "coach_context.md").write_text(COACH_CONTEXT_MD.format(**fmt))
     print(f"[+] quest dir: {qdir.relative_to(REPO)}")
 

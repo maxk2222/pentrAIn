@@ -35,6 +35,17 @@ async def test_sync_creates_tracks_quests_flags(db):
     assert sum(f.points for f in flags) == 300
 
 
+async def test_sync_loads_cheatsheets(db):
+    """Quest- and track-level cheatsheet.md land on their models."""
+    await sync_packs(db, PACKS_DIR)
+    quest = await db.get(Quest, "net-t1-services")
+    assert quest is not None
+    assert "mysql -h" in quest.cheatsheet_md  # the quest reference card
+    track = await db.get(Track, "network-recon")
+    assert track is not None
+    assert "ssh -J" in track.cheatsheet_md    # the track reference card
+
+
 async def test_sync_is_idempotent_and_replaces_flags(db):
     await sync_packs(db, PACKS_DIR)
     await sync_packs(db, PACKS_DIR)

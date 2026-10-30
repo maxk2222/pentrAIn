@@ -214,8 +214,12 @@ async def sync_packs(db: AsyncSession, content_dir: str | Path) -> dict:
         seen_tracks.add(track_slug)
         title, desc, icon, order = TRACK_TITLES.get(track_slug, (track_slug, "", "target", 99))
         track = await db.get(Track, track_slug)
+        sheet = _read(root / track_slug / "cheatsheet.md")
         if track is None:
-            db.add(Track(slug=track_slug, title=title, description=desc, icon=icon, order=order))
+            db.add(Track(slug=track_slug, title=title, description=desc, icon=icon,
+                         order=order, cheatsheet_md=sheet))
+        else:
+            track.cheatsheet_md = sheet
 
     for qdir, spec in found:
         qid = spec.meta.id
@@ -233,6 +237,7 @@ async def sync_packs(db: AsyncSession, content_dir: str | Path) -> dict:
             coach_cfg=spec.coach.model_dump(),
             briefing_md=_read(qdir / "briefing.md"),
             defense_md=_read(qdir / "defense.md"),
+            cheatsheet_md=_read(qdir / "cheatsheet.md"),
             coach_context_md=coach_ctx,
         )
         if quest is None:

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MarkdownView } from "@/components/markdown";
 import { ArrowLeft, Cpu, Flag, HardDrive, Lightbulb, Lock, PlayCircle, Server, ShieldCheck, Trophy } from "lucide-react";
 import { api, type QuestDetail, type QuestLeaderboard, type Session } from "@/lib/api";
+import { domainLabel } from "@/lib/netmap";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Tabs } from "@/components/ui";
 import { DifficultyBadge } from "./Library";
@@ -68,6 +69,7 @@ export function QuestDetailPage() {
       <Tabs tabs={[
         { id: "briefing", label: "Briefing" },
         { id: "topology", label: `Topology (${vms.length + 1})` },
+        ...(q.cheatsheet_md ? [{ id: "sheet", label: "Cheatsheet" }] : []),
         { id: "defense", label: <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Defense</span> },
         { id: "leaderboard", label: `Leaderboard (${board?.history.length ?? 0})` },
       ]} active={tab} onChange={setTab} className="max-w-xl" />
@@ -133,8 +135,8 @@ export function QuestDetailPage() {
                   <div className="mt-1 text-xs text-muted">{vm.template}</div>
                   <div className="mt-1 text-xs text-muted">
                     {vm.ram_gb ?? "?"} GB · {vm.cpus ?? "?"} vCPU
-                    {vm.ip_last_octet ? ` · 10.10.${vm.vlan ?? 10}.${vm.ip_last_octet}` : ""}
-                    {vm.domain ? ` · ${vm.domain}` : ""}
+                    {vm.ip_last_octet ? ` · 10.x.${vm.vlan ?? 10}.${vm.ip_last_octet}` : ""}
+                    {vm.domain ? ` · ${domainLabel(vm.domain)}` : ""}
                   </div>
                 </div>
                 {vm.roles?.length ? <Badge variant="outline">{vm.roles.join(", ")}</Badge> : null}
@@ -142,6 +144,15 @@ export function QuestDetailPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {tab === "sheet" && q.cheatsheet_md && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Cheatsheet — shown in-session</CardTitle></CardHeader>
+          <CardContent className="prose-sm text-sm leading-relaxed text-muted [&_h1]:text-foreground [&_h2]:text-foreground [&_h3]:text-foreground [&_code]:rounded [&_code]:bg-surface-2 [&_code]:px-1 [&_code]:text-accent [&_li]:ml-4 [&_li]:list-disc">
+            <MarkdownView>{q.cheatsheet_md}</MarkdownView>
+          </CardContent>
+        </Card>
       )}
 
       {tab === "defense" && (

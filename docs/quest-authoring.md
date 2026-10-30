@@ -7,10 +7,27 @@ linux-t1-first-foothold/
 ├── quest.yaml        # the whole contract — topology, flags, hints, coach, scoring
 ├── briefing.md       # shown in the UI before/during the quest (GFM)
 ├── defense.md        # what broke, how to detect it, how to fix it
+├── cheatsheet.md     # optional — quick reference shown in the session side panel
 └── coach_context.md  # private briefing for the coach (never shown to the trainee)
 ```
 
+A track may also carry `content/packs/<track>/cheatsheet.md` — a shared
+reference card (tool syntax for the discipline) that the in-session panel
+renders under "Track reference" for every quest in the track.
+
 Validate with `python scripts/lint_packs.py` — CI runs it on every push.
+Missing `cheatsheet.md` is a warning, not an error.
+
+## Cheatsheet conventions
+
+The cheatsheet panel sits next to the console and the coach — it is
+**reference, not hint**: tool syntax, host inventory, concepts worth
+remembering. Spoiler policy:
+
+- **Allowed**: commands with placeholders (`ssh -J user@<hop>`), which tools
+  apply, non-secret host descriptions, "watch for X" nudges.
+- **Not allowed**: flag paths, credentials, the actual vulnerable parameter,
+  anything `hints:` would charge points for.
 
 ## quest.yaml
 
@@ -170,7 +187,8 @@ Ludus applies `roles: [...]` to each VM during deploy. Conventions:
 - [ ] `requirements` reflect the sum of VM RAM/CPUs + kali — `check_unlock`
       hard-blocks quests that exceed the admin-configured budget
 - [ ] `briefing.md` states the goal without leaking the path;
-      `defense.md` has detect+fix+verify for every vulnerability
+      `defense.md` has detect+fix+verify for every vulnerability;
+      `cheatsheet.md` stays spoiler-free (syntax/concepts only)
 - [ ] `coach_context.md` lists the intended path and common wrong turns
 
 ## Testing a pack

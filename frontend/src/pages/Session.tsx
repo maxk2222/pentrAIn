@@ -1,16 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckSquare, FileText, Play, RotateCcw, Square } from "lucide-react";
+import {
+  BookOpen, Bot, CheckSquare, FileText, NotebookPen, PanelLeft,
+  PanelRight, Play, RotateCcw, Square,
+} from "lucide-react";
 import { api, wsUrl, type Session, type WsEvent } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, Tabs } from "@/components/ui";
 import { ConsoleView } from "@/components/console";
 import { ChatPanel } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
+import { SheetPanel } from "@/components/sheet";
+import { NotesPanel } from "@/components/notes";
 import { DeployLog } from "@/components/deploylog";
+import { cn } from "@/lib/utils";
 
 const TERMINAL = new Set(["solved", "aborted", "failed"]);
+const PANELS_KEY = "pentrain-panels";
+
+type Panels = { sheet: boolean; notes: boolean; chat: boolean };
+
+function loadPanels(): Panels {
+  try {
+    return { sheet: true, notes: true, chat: true,
+      ...JSON.parse(localStorage.getItem(PANELS_KEY) ?? "{}") };
+  } catch { return { sheet: true, notes: true, chat: true }; }
+}
 
 export function SessionPage() {
   const { sessionId: sid } = useParams();
@@ -21,6 +37,8 @@ export function SessionPage() {
   const [tab, setTab] = useState("chat");
   const [events, setEvents] = useState<WsEvent[]>([]);
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [panels, setPanels] = useState<Panels>(loadPanels);
+  const [unread, setUnread] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
   const { data: session, isLoading } = useQuery({
@@ -72,6 +90,26 @@ export function SessionPage() {
     };
   }, [sessionId, qc]);
 
+  // unread coach messages while the chat panel is collapsed — dedupe on the
+  // event identity so collapsing right after a message doesn't false-flag
+  const lastCounted = useRef<WsEvent | null>(null);
+  useEffect(() => {
+    const ev = events[events.length - 1];
+    if (ev?.type === "coach_message" && !panels.chat && ev !== lastCounted.current) {
+      lastCounted.current = ev;
+      setUnread((u) => u + 1);
+    }
+  }, [events, panels.chat]);
+  useEffect(() => { if (panels.chat) setUnread(0); }, [panels.chat]);
+
+  function togglePanel(key: keyof Panels) {
+    setPanels((p) => {
+      const next = { ...p, [key]: !p[key] };
+      localStorage.setItem(PANELS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function activate() {
     await api.post(`/api/sessions/${sessionId}/activate`);
     qc.invalidateQueries({ queryKey: ["session", sessionId] });
@@ -111,7 +149,7 @@ export function SessionPage() {
           )}
           {session?.error && <span className="text-xs text-danger">{session.error}</span>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           {state === "ready" && (
             <Button size="sm" variant="success" onClick={activate}>
               <Play className="h-3.5 w-3.5" /> Start hacking
@@ -137,41 +175,96 @@ export function SessionPage() {
               <Square className="h-3.5 w-3.5" /> Tear down
             </Button>
           )}
+          <div className="ml-1 flex items-center gap-0.5 border-l border-border pl-2">
+            <PanelToggle icon={PanelLeft} label="Reference sheet"
+              active={panels.sheet} onClick={() => togglePanel("sheet")} />
+            <PanelToggle icon={NotebookPen} label="Notes"
+              active={panels.notes} onClick={() => togglePanel("notes")} />
+            <PanelToggle icon={PanelRight} label="Coach panel"
+              active={panels.chat} unread={unread} onClick={() => togglePanel("chat")} />
+          </div>
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
-          {consoleReady ? (
-            // remount on ready_at → after a reset the stale VNC session reconnects
-            <ConsoleView key={`${sessionId}-${session?.ready_at ?? ""}`}
-              sessionId={sessionId} />
-          ) : isLoading ? (
-            <div className="grid h-full place-items-center text-sm text-muted">Loading…</div>
-          ) : state === "deploying" || state === "queued" || state === "resetting" ? (
-            <DeployLog lines={logLines} state={state} />
-          ) : (
-            <div className="grid h-full place-items-center text-sm text-muted">
-              Session is {state ?? "unknown"}.
-              {state === "solved" && (
-                <span className="mt-2 text-accent">Quest solved — check the leaderboard.</span>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="flex w-[380px] flex-col border-l border-border bg-surface">
-          <Tabs className="m-2" tabs={[
-            { id: "chat", label: <span className="flex items-center gap-1"><Bot className="h-3.5 w-3.5" /> Coach</span> },
-            { id: "objectives", label: <span className="flex items-center gap-1"><CheckSquare className="h-3.5 w-3.5" /> Objectives</span> },
-            { id: "log", label: <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> Log</span> },
-          ]} active={tab} onChange={setTab} />
+        <div className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
-            {tab === "chat" && <ChatPanel sessionId={sessionId} events={events} />}
-            {tab === "objectives" && <ObjectivesPanel sessionId={sessionId} events={events} />}
-            {tab === "log" && <DeployLog lines={logLines} state={state} fill />}
+            {consoleReady ? (
+              // remount on ready_at → after a reset the stale VNC session reconnects
+              <ConsoleView key={`${sessionId}-${session?.ready_at ?? ""}`}
+                sessionId={sessionId} />
+            ) : isLoading ? (
+              <div className="grid h-full place-items-center text-sm text-muted">Loading…</div>
+            ) : state === "deploying" || state === "queued" || state === "resetting" ? (
+              <DeployLog lines={logLines} state={state} />
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted">
+                Session is {state ?? "unknown"}.
+                {state === "solved" && (
+                  <span className="mt-2 text-accent">Quest solved — check the leaderboard.</span>
+                )}
+              </div>
+            )}
           </div>
+          <NotesPanel sessionId={sessionId} open={panels.notes}
+            onToggle={() => togglePanel("notes")} />
         </div>
+
+        {panels.sheet ? (
+          <div className="w-[340px] shrink-0 border-l border-border">
+            <SheetPanel sessionId={sessionId} events={events} />
+          </div>
+        ) : (
+          <CollapsedStrip icon={BookOpen} label="Reference"
+            onClick={() => togglePanel("sheet")} />
+        )}
+
+        {panels.chat ? (
+          <div className="flex w-[380px] shrink-0 flex-col border-l border-border bg-surface">
+            <Tabs className="m-2" tabs={[
+              { id: "chat", label: <span className="flex items-center gap-1"><Bot className="h-3.5 w-3.5" /> Coach</span> },
+              { id: "objectives", label: <span className="flex items-center gap-1"><CheckSquare className="h-3.5 w-3.5" /> Objectives</span> },
+              { id: "log", label: <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> Log</span> },
+            ]} active={tab} onChange={setTab} />
+            <div className="min-h-0 flex-1">
+              {tab === "chat" && <ChatPanel sessionId={sessionId} events={events} />}
+              {tab === "objectives" && <ObjectivesPanel sessionId={sessionId} events={events} />}
+              {tab === "log" && <DeployLog lines={logLines} state={state} fill />}
+            </div>
+          </div>
+        ) : (
+          <CollapsedStrip icon={Bot} label="Coach" unread={unread}
+            onClick={() => togglePanel("chat")} />
+        )}
       </div>
     </div>
+  );
+}
+
+function PanelToggle({ icon: Icon, label, active, unread, onClick }: {
+  icon: React.ElementType; label: string; active: boolean; unread?: number; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick} title={`${active ? "Hide" : "Show"} ${label}`}
+      className={cn("relative rounded-md p-1.5 transition-colors cursor-pointer",
+        active ? "text-primary bg-primary/10" : "text-muted hover:bg-surface-2 hover:text-foreground")}>
+      <Icon className="h-4 w-4" />
+      {!!unread && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-accent" />}
+    </button>
+  );
+}
+
+function CollapsedStrip({ icon: Icon, label, unread, onClick }: {
+  icon: React.ElementType; label: string; unread?: number; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick} title={`Show ${label}`}
+      className="flex w-11 shrink-0 flex-col items-center gap-3 border-l border-border bg-surface py-3 text-muted hover:text-foreground cursor-pointer">
+      <span className="relative">
+        <Icon className="h-4 w-4" />
+        {!!unread && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-accent" />}
+      </span>
+      <span className="text-[10px] tracking-wide [writing-mode:vertical-rl]">{label}</span>
+    </button>
   );
 }
