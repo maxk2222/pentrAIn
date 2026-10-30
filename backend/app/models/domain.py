@@ -158,8 +158,20 @@ class Attempt(Base):
     flags_total: Mapped[int] = mapped_column(Integer, default=0)
     hints_used: Mapped[int] = mapped_column(Integer, default=0)
     coach_interventions: Mapped[int] = mapped_column(Integer, default=0)
+    # which aids were used: {hints, coach_msgs, coach_nudges, takeovers, sheet, chat}
+    assistance: Mapped[dict] = mapped_column(JSON, default=dict)
     duration_s: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class AssistUse(Base):
+    """UI-side aid the trainee opted into (lazy-modal confirms sheet/chat opens)."""
+    __tablename__ = "assist_uses"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # sheet|chat
+    used_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class TelemetryEvent(Base):

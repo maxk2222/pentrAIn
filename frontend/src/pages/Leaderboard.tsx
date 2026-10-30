@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Trophy } from "lucide-react";
 import { api, type GlobalBoardRow, type Quest, type QuestLeaderboard } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, Select } from "@/components/ui";
+import { AssistBadges } from "@/components/assist";
 import { fmtDuration } from "@/lib/utils";
 
 export function LeaderboardPage() {
@@ -36,7 +37,7 @@ export function LeaderboardPage() {
               <thead>
                 <tr className="border-b border-border text-left text-muted">
                   <th className="px-4 py-3">Quest</th><th className="px-4 py-3">Best score</th>
-                  <th className="px-4 py-3">Attempts</th>
+                  <th className="px-4 py-3">Aids used</th><th className="px-4 py-3">Attempts</th>
                 </tr>
               </thead>
               <tbody>
@@ -48,11 +49,12 @@ export function LeaderboardPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-2.5 font-medium text-accent">{r.best_score}</td>
+                    <td className="px-4 py-2.5"><AssistBadges attempt={r} /></td>
                     <td className="px-4 py-2.5">{r.attempts}</td>
                   </tr>
                 ))}
                 {!global?.length && (
-                  <tr><td colSpan={3} className="px-4 py-10 text-center text-muted">
+                  <tr><td colSpan={4} className="px-4 py-10 text-center text-muted">
                     No completions yet — finish a quest to claim the top spot.
                   </td></tr>
                 )}
@@ -72,7 +74,7 @@ export function LeaderboardPage() {
                 <tr className="border-b border-border text-left text-muted">
                   <th className="px-4 py-3">#</th><th className="px-4 py-3">Score</th>
                   <th className="px-4 py-3">Flags</th><th className="px-4 py-3">Time</th>
-                  <th className="px-4 py-3">Hints</th><th className="px-4 py-3">When</th>
+                  <th className="px-4 py-3">Aids used</th><th className="px-4 py-3">When</th>
                 </tr>
               </thead>
               <tbody>
@@ -82,7 +84,7 @@ export function LeaderboardPage() {
                     <td className="px-4 py-2.5 font-medium text-accent">{a.score}</td>
                     <td className="px-4 py-2.5">{a.flags_found}/{a.flags_total}</td>
                     <td className="px-4 py-2.5">{fmtDuration(a.duration_s)}</td>
-                    <td className="px-4 py-2.5">{a.hints_used}</td>
+                    <td className="px-4 py-2.5"><AssistBadges attempt={a} /></td>
                     <td className="px-4 py-2.5 text-muted">{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
                   </tr>
                 ))}

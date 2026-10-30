@@ -12,8 +12,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.domain import (
+    AssistUse,
     Attempt,
     CoachAction,
+    CoachMessage,
     Flag,
     FlagSubmission,
     HintUse,
@@ -55,6 +57,8 @@ async def finalize_attempt(db: AsyncSession, session: Session) -> Attempt:
             CoachAction.status.in_(["ok", "confirmed"])))).scalar() or 0
     takeover_penalty = takeover_cost if interventions > 0 else 0
 
+    assistance = await _assistance(db, session.id, hint_count, int(interventions))
+
     score = max(0, flag_pts + time_bonus - hint_cost - takeover_penalty)
     existing = (await db.execute(
         select(Attempt).where(Attempt.session_id == session.id))).scalar_one_or_none()
@@ -64,6 +68,7 @@ async def finalize_attempt(db: AsyncSession, session: Session) -> Attempt:
         quest_id=session.quest_id, session_id=session.id, score=score,
         flags_found=len(solved), flags_total=len(flags),
         hints_used=hint_count, coach_interventions=int(interventions),
+        assistance=assistance,
         duration_s=duration,
     )
     db.add(attempt)
@@ -74,6 +79,33 @@ async def finalize_attempt(db: AsyncSession, session: Session) -> Attempt:
         attempt = (await db.execute(
             select(Attempt).where(Attempt.session_id == session.id))).scalar_one()
     return attempt
+
+
+async def _assistance(db: AsyncSession, session_id: int, hint_count: int,
+                      interventions: int) -> dict:
+    """Snapshot of every aid the trainee used — shown on the leaderboard as
+    'solve style' so a clean solo run reads differently from an assisted one."""
+    coach_msgs = (await db.execute(
+        select(func.count(CoachMessage.id)).where(
+            CoachMessage.session_id == session_id,
+            CoachMessage.role == "user"))).scalar() or 0
+    nudges = (await db.execute(
+        select(func.count(CoachMessage.id)).where(
+            CoachMessage.session_id == session_id,
+            CoachMessage.role == "coach",
+            CoachMessage.kind.in_(["hint", "nudge", "suggestion"])))).scalar() or 0
+    ui_aids = (await db.execute(
+        select(AssistUse.kind, func.count(AssistUse.id))
+        .where(AssistUse.session_id == session_id).group_by(AssistUse.kind))).all()
+    aids = {k: int(n) for k, n in ui_aids}
+    return {
+        "hints": hint_count,
+        "coach_msgs": int(coach_msgs),
+        "coach_nudges": int(nudges),
+        "takeovers": interventions,
+        "sheet": aids.get("sheet", 0),
+        "chat": aids.get("chat", 0),
+    }
 
 
 async def quest_leaderboard(db: AsyncSession, quest_id: str) -> dict:
@@ -94,7 +126,18 @@ async def global_leaderboard(db: AsyncSession) -> list[dict]:
         select(Attempt.quest_id, func.max(Attempt.score).label("best"),
                func.count(Attempt.id).label("tries"))
         .group_by(Attempt.quest_id))).all()
-    return [{"quest_id": q, "best_score": int(b), "attempts": int(t)} for q, b, t in rows]
+    # best attempt per quest → its solve style (single-user scale, one pass)
+    atts = (await db.execute(
+        select(Attempt).order_by(Attempt.score.desc(), Attempt.duration_s.asc())
+    )).scalars().all()
+    best_by_quest: dict[str, Attempt] = {}
+    for a in atts:
+        best_by_quest.setdefault(a.quest_id, a)
+    return [
+        {"quest_id": q, "best_score": int(b), "attempts": int(t),
+         "assistance": (best_by_quest[q].assistance or {}) if q in best_by_quest else {}}
+        for q, b, t in rows
+    ]
 
 
 def _att(a: Attempt) -> dict:
@@ -102,5 +145,6 @@ def _att(a: Attempt) -> dict:
         "id": a.id, "quest_id": a.quest_id, "session_id": a.session_id,
         "score": a.score, "flags_found": a.flags_found, "flags_total": a.flags_total,
         "hints_used": a.hints_used, "coach_interventions": a.coach_interventions,
+        "assistance": a.assistance or {},
         "duration_s": a.duration_s, "created_at": a.created_at.isoformat() if a.created_at else None,
     }

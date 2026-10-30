@@ -6,6 +6,7 @@ import { api, type QuestDetail, type QuestLeaderboard, type Session } from "@/li
 import { domainLabel } from "@/lib/netmap";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Tabs } from "@/components/ui";
+import { AssistBadges } from "@/components/assist";
 import { DifficultyBadge } from "./Library";
 import { fmtDuration } from "@/lib/utils";
 import { useState } from "react";
@@ -172,6 +173,7 @@ export function QuestDetailPage() {
               <span className="font-medium">Personal best:</span>
               <span className="text-accent">{board.best.score} pts</span>
               <span className="text-muted">in {fmtDuration(board.best.duration_s)}</span>
+              <AssistBadges attempt={board.best} />
             </div>
           )}
           <CardContent className="p-0">
@@ -180,7 +182,7 @@ export function QuestDetailPage() {
                 <tr className="border-b border-border text-left text-muted">
                   <th className="px-4 py-3">#</th><th className="px-4 py-3">Score</th>
                   <th className="px-4 py-3">Flags</th><th className="px-4 py-3">Time</th>
-                  <th className="px-4 py-3">Hints</th><th className="px-4 py-3">Coach takeovers</th>
+                  <th className="px-4 py-3">Aids used</th>
                   <th className="px-4 py-3">When</th>
                 </tr>
               </thead>
@@ -191,13 +193,12 @@ export function QuestDetailPage() {
                     <td className="px-4 py-2.5 font-medium text-accent">{a.score}</td>
                     <td className="px-4 py-2.5">{a.flags_found}/{a.flags_total}</td>
                     <td className="px-4 py-2.5">{fmtDuration(a.duration_s)}</td>
-                    <td className="px-4 py-2.5">{a.hints_used}</td>
-                    <td className="px-4 py-2.5">{a.coach_interventions}</td>
+                    <td className="px-4 py-2.5"><AssistBadges attempt={a} /></td>
                     <td className="px-4 py-2.5 text-muted">{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
                   </tr>
                 ))}
                 {!board?.history.length && (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted">No completions yet — be first.</td></tr>
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted">No completions yet — be first.</td></tr>
                 )}
               </tbody>
             </table>

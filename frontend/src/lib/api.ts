@@ -105,14 +105,23 @@ export interface SessionFlags {
   flags: FlagDef[]; solved: number; total: number;
 }
 
+/** Solve-style counters on an attempt — which aids the trainee used. */
+export interface Assistance {
+  hints?: number; coach_msgs?: number; coach_nudges?: number;
+  takeovers?: number; sheet?: number; chat?: number;
+}
+
 export interface Attempt {
   id: number; quest_id: string; session_id: number; score: number;
   flags_found: number; flags_total: number; hints_used: number;
-  coach_interventions: number; duration_s: number; created_at: string | null;
+  coach_interventions: number; assistance?: Assistance;
+  duration_s: number; created_at: string | null;
 }
 
 export interface QuestLeaderboard { best: Attempt | null; history: Attempt[] }
-export interface GlobalBoardRow { quest_id: string; best_score: number; attempts: number }
+export interface GlobalBoardRow {
+  quest_id: string; best_score: number; attempts: number; assistance?: Assistance;
+}
 
 export interface ChatMessage {
   id: number; role: "user" | "coach" | "system"; kind: string;

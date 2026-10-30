@@ -75,6 +75,7 @@ def _additive_columns(conn) -> None:
     wanted = {
         "quests": {"cheatsheet_md": "TEXT NOT NULL DEFAULT ''"},
         "tracks": {"cheatsheet_md": "TEXT NOT NULL DEFAULT ''"},
+        "attempts": {"assistance": "JSON NOT NULL DEFAULT '{}'"},
     }
     existing_tables = set(inspect(conn).get_table_names())
     for table, cols in wanted.items():

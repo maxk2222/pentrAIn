@@ -5,7 +5,14 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.models.domain import ExpectedFlag, Flag, FlagSubmission, Session
+from app.models.domain import (
+    AssistUse,
+    CoachMessage,
+    ExpectedFlag,
+    Flag,
+    FlagSubmission,
+    Session,
+)
 from app.services import flags as flags_svc
 from app.services import scoring as scoring_svc
 
@@ -55,6 +62,29 @@ async def test_takeover_penalty_applied(db_with_packs):
     att = await scoring_svc.finalize_attempt(db, s)
     assert att.score == 50   # 150 time bonus − 100 takeover_cost (linux-t1 cfg)
     assert att.coach_interventions == 1
+
+
+async def test_assistance_snapshot(db_with_packs):
+    """Attempt carries a solve-style summary: hints, coach use, takeovers, UI aids."""
+    db = db_with_packs
+    s = Session(quest_id="linux-t1-first-foothold", state="active",
+                started_at=datetime.now(UTC).replace(tzinfo=None))
+    db.add(s)
+    await db.flush()
+    db.add_all([
+        AssistUse(session_id=s.id, kind="sheet"),
+        CoachMessage(session_id=s.id, role="user", kind="chat", content="stuck"),
+        CoachMessage(session_id=s.id, role="coach", kind="nudge", content="look at ports"),
+        CoachMessage(session_id=s.id, role="coach", kind="chat", content="hi"),
+        scoring_svc.HintUse(session_id=s.id, hint_id="h1", cost=25),
+    ])
+    await db.commit()
+
+    att = await scoring_svc.finalize_attempt(db, s)
+    assert att.assistance == {
+        "hints": 1, "coach_msgs": 1, "coach_nudges": 1,
+        "takeovers": 0, "sheet": 1, "chat": 0,
+    }
 
 
 async def test_expected_flags_unique_per_session(db_with_packs):

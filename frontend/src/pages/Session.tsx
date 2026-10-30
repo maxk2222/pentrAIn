@@ -57,6 +57,16 @@ export function SessionPage() {
     refetchInterval: (q) => (q.state.data && TERMINAL.has(q.state.data.state) ? false : 8000),
   });
 
+  // restored-open assistance panels carry over from older sessions — the aid
+  // still counts toward THIS session's solve style, so record it once on mount
+  useEffect(() => {
+    if (!sessionId) return;
+    const p = loadPanels();
+    for (const kind of ["sheet", "chat"] as const) {
+      if (p[kind]) api.post(`/api/sessions/${sessionId}/assist`, { kind }).catch(() => {});
+    }
+  }, [sessionId]);
+
   // hydrate deploy log once
   useEffect(() => {
     if (!sessionId) return;
@@ -134,6 +144,8 @@ export function SessionPage() {
       return next;
     });
     setLazyAsk(null);
+    // opting into an aid is part of the attempt's solve style → leaderboard
+    api.post(`/api/sessions/${sessionId}/assist`, { kind: key }).catch(() => {});
   }
 
   async function activate() {

@@ -4,8 +4,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models.domain import Flag, FlagSubmission, Session, TelemetryEvent
+from ..models.domain import AssistUse, Flag, FlagSubmission, Session, TelemetryEvent
 from ..schemas import (
+    AssistIn,
     ConfirmActionIn,
     FlagCheckIn,
     FlagOut,
@@ -139,6 +140,16 @@ async def use_hint(session_id: int, body: HintUseIn, db: AsyncSession = Depends(
         return await sessions_svc.use_hint(db, session_id, body.hint_id)
     except sessions_svc.SessionError as e:
         raise HTTPException(404, str(e)) from e
+
+
+@router.post("/sessions/{session_id}/assist", status_code=204)
+async def record_assist(session_id: int, body: AssistIn,
+                        db: AsyncSession = Depends(get_db)):
+    """Frontend reports an assistance panel opt-in (lazy-modal confirmed open)."""
+    if not await db.get(Session, session_id):
+        raise HTTPException(404, "session not found")
+    db.add(AssistUse(session_id=session_id, kind=body.kind))
+    await db.commit()
 
 
 @router.post("/sessions/{session_id}/reset", response_model=SessionOut)

@@ -95,6 +95,11 @@ class HintUseIn(BaseModel):
     hint_id: str
 
 
+class AssistIn(BaseModel):
+    """UI aid the trainee opted into — leaderboard 'solve style'."""
+    kind: str = Field(pattern="^(sheet|chat)$")
+
+
 class ResetIn(BaseModel):
     hard: bool = False
 
@@ -116,6 +121,7 @@ class AttemptOut(BaseModel):
     flags_total: int
     hints_used: int
     coach_interventions: int
+    assistance: dict = Field(default_factory=dict)
     duration_s: int
     created_at: str | None
 
