@@ -43,6 +43,7 @@ class QuestOut(BaseModel):
     lock_reason: str = ""
     solved: bool = False
     best_score: int | None = None
+    exam: bool = False
 
 
 class QuestDetailOut(QuestOut):

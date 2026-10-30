@@ -30,6 +30,22 @@ async def _wait_state(session_id: int, want: str, timeout_s: float = 15.0) -> Se
         raise AssertionError(f"timeout waiting for {want} (last={last and last.state})")
 
 
+async def _solve_prereqs(db, quest: Quest) -> None:
+    """Mark everything check_unlock needs as solved for `quest`.
+
+    Non-exam quests at tier <= quest.tier in the same track — for exam
+    quests the same-tier peers are the actual gate, for regular quests
+    marking lower tiers solved satisfies the any-solved predecessor rule.
+    """
+    rows = (await db.execute(select(Quest.id).where(
+        Quest.track_slug == quest.track_slug,
+        Quest.tier <= quest.tier,
+        Quest.exam.is_not(True)))).scalars().all()
+    for qid in rows:
+        db.add(Session(quest_id=qid, state="solved"))
+    await db.commit()
+
+
 async def test_unlock_gates_on_resource_budget(db_with_packs):
     db = db_with_packs
     # clear the tier gate so only the resource gate can fire
@@ -59,6 +75,72 @@ async def test_unlock_gates_on_tier_progression(db_with_packs):
     assert ok
 
 
+async def test_unlock_tier_any_solved(db_with_packs):
+    """Multiple quests share a tier — ANY solved predecessor unlocks the next."""
+    db = db_with_packs
+    t2 = await db.get(Quest, "linux-t2-privesc-chain")
+    ok, _ = await sessions_svc.check_unlock(db, t2)
+    assert not ok
+
+    # solving the *other* tier-1 quest (not the canonical first) unlocks t2
+    db.add(Session(quest_id="linux-t1-suid-hunt", state="solved"))
+    await db.commit()
+    ok, _ = await sessions_svc.check_unlock(db, t2)
+    assert ok
+
+
+async def test_exam_gate_requires_all_tier_quests(db_with_packs):
+    """meta.exam quests stay locked until every same-tier non-exam quest is solved."""
+    db = db_with_packs
+    exam = await db.get(Quest, "linux-t1-exam")
+    assert exam is not None and exam.exam
+
+    ok, reason = await sessions_svc.check_unlock(db, exam)
+    assert not ok and "exam" in reason.lower()
+
+    # one of the two t1 quests is not enough
+    db.add(Session(quest_id="linux-t1-first-foothold", state="solved"))
+    await db.commit()
+    ok, _ = await sessions_svc.check_unlock(db, exam)
+    assert not ok
+
+    # all t1 non-exam quests solved → exam unlocks
+    db.add(Session(quest_id="linux-t1-suid-hunt", state="solved"))
+    await db.commit()
+    ok, _ = await sessions_svc.check_unlock(db, exam)
+    assert ok
+
+
+async def test_exam_solve_does_not_unlock_next_tier(db_with_packs):
+    """Exams are capstones — solving one alone must not open tier+1."""
+    db = db_with_packs
+    db.add(Session(quest_id="linux-t1-exam", state="solved"))
+    await db.commit()
+    t2 = await db.get(Quest, "linux-t2-privesc-chain")
+    ok, _ = await sessions_svc.check_unlock(db, t2)
+    assert not ok
+
+
+async def test_t2_exam_needs_prev_tier_and_all_peers(db_with_packs):
+    """A t2 exam is gated twice: any t1 solve AND all t2 non-exam quests."""
+    db = db_with_packs
+    exam = await db.get(Quest, "linux-t2-exam")
+    assert exam is not None and exam.exam
+
+    # t2 peers solved but no t1 → still locked on the tier gate
+    for qid in ("linux-t2-privesc-chain", "linux-t2-wildcard-cron"):
+        db.add(Session(quest_id=qid, state="solved"))
+    await db.commit()
+    ok, _ = await sessions_svc.check_unlock(db, exam)
+    assert not ok
+
+    # + one t1 quest → fully unlocked
+    db.add(Session(quest_id="linux-t1-first-foothold", state="solved"))
+    await db.commit()
+    ok, _ = await sessions_svc.check_unlock(db, exam)
+    assert ok
+
+
 async def test_one_active_session_only(db_with_packs):
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
@@ -71,23 +153,22 @@ async def test_one_active_session_only(db_with_packs):
     await sessions_svc.abort(db, s2.id)
 
 
-# every quest in the expanded library must survive a mock deploy —
-# compile_topology + provider roundtrip + flag seeding
-@pytest.mark.parametrize("quest_id", [
-    "web-t3-api-chain",
-    "net-t1-services", "net-t2-two-segments", "net-t3-the-dmz",
-    "for-t1-break-in", "for-t2-webshell", "for-t3-correlated",
-    "ad-t1-first-domain", "ad-t2-corp-lan", "ad-t3-kill-chain",
-])
+# every quest in the library must survive a mock deploy —
+# compile_topology + provider roundtrip + flag seeding.
+# Discovered dynamically so newly-authored quests are covered automatically.
+from app.services.packs import discover_quests  # noqa: E402
+
+from .conftest import PACKS_DIR  # noqa: E402
+
+_ALL_QUEST_IDS = [s.meta.id for _d, s in discover_quests(PACKS_DIR)[0]]
+
+
+@pytest.mark.parametrize("quest_id", _ALL_QUEST_IDS)
 async def test_new_quest_deploys_on_mock(db_with_packs, quest_id):
     db = db_with_packs
-    # quests with tier>1 are progression-gated — mark predecessors solved
+    # progression + exam gates — mark all non-exam prereqs solved
     quest = await db.get(Quest, quest_id)
-    for t in range(1, quest.tier):
-        prev = (await db.execute(select(Quest.id).where(
-            Quest.track_slug == quest.track_slug, Quest.tier == t))).scalar_one()
-        db.add(Session(quest_id=prev, state="solved"))
-    await db.commit()
+    await _solve_prereqs(db, quest)
     s = await sessions_svc.create_session(db, quest_id)
     await _wait_state(s.id, "ready")
     await sessions_svc.abort(db, s.id)
@@ -167,7 +248,8 @@ async def test_compile_topology_ludus_format(db_with_packs):
     for v in vms:
         if v is not kali:
             assert v["ram_min_gb"] == v["ram_gb"] // 2
-    assert cfg["router"] == {"ram_gb": 2, "ram_min_gb": 1}
+    assert cfg["router"] == {"template": "debian-12-x64-server-template",
+                             "ram_gb": 2, "ram_min_gb": 1}
     assert "pentrain_kali_agent" in (kali.get("roles") or [])
     names = {v["vm_name"] for v in vms}
     assert "{{ range_id }}-kali" in names

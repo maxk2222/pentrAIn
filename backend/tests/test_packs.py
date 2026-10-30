@@ -35,6 +35,23 @@ async def test_sync_creates_tracks_quests_flags(db):
     assert sum(f.points for f in flags) == 300
 
 
+async def test_sync_maps_exam_flag(db, tmp_path):
+    """meta.exam in quest.yaml lands on Quest.exam after sync."""
+    q = tmp_path / "t" / "x-exam"
+    q.mkdir(parents=True)
+    (q / "defense.md").write_text("x")
+    (q / "quest.yaml").write_text("""
+apiVersion: pentrain/v1
+kind: Quest
+meta: {id: x-exam, track: t, tier: 1, title: X, exam: true}
+""")
+    await sync_packs(db, tmp_path)
+    exam = await db.get(Quest, "x-exam")
+    assert exam is not None and exam.exam is True
+    regular = await db.get(Quest, "linux-t1-first-foothold")
+    assert regular is None or regular.exam is False
+
+
 async def test_sync_loads_cheatsheets(db):
     """Quest- and track-level cheatsheet.md land on their models."""
     await sync_packs(db, PACKS_DIR)

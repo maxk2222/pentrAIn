@@ -63,6 +63,7 @@ export interface Quest {
   requirements: Record<string, number>;
   scoring: { par_s?: number; time_bonus_max?: number; takeover_cost?: number };
   locked: boolean; lock_reason: string; solved: boolean; best_score: number | null;
+  exam: boolean;
 }
 
 export interface FlagDef {

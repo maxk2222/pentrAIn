@@ -7,14 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from coach.llm import LlmClient, parse_actions
+from coach.llm import LlmClient, _fold_history, parse_actions
 
 
 class _Resp:
-    status_code = 200
-
-    def __init__(self, payload):
+    def __init__(self, payload, status=200):
         self._p = payload
+        self.status_code = status
         self.text = json.dumps(payload)
 
     def json(self):
@@ -64,6 +63,37 @@ def test_parse_strips_unterminated_think_block():
     out = parse_actions("<think>trail off with no close")
     assert out[0]["type"] == "none"
     assert out[0]["reason"] == "response was only a think block"
+
+
+def test_fold_history_keeps_context_in_system():
+    msgs = [{"role": "system", "content": "SYS"},
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"}]
+    out = _fold_history(msgs)
+    assert out[0]["role"] == "system" and "SYS" in out[0]["content"]
+    assert "Trainee: q1" in out[0]["content"] and "Coach: a1" in out[0]["content"]
+    assert out[1] == {"role": "user", "content": "q2"}
+    assert len(out) == 2
+
+
+async def test_chat_folds_on_template_400():
+    c = LlmClient("http://x/v1", "", "m")
+    bodies = []
+
+    async def fake_post(path, json=None):
+        bodies.append(dict(json or {}))
+        if len(bodies) == 1:
+            return _Resp({"error": "jinja: No user query found"}, 400)
+        return _Resp({"choices": [{"message": {"content": "ok"}}]})
+
+    c._client.post = fake_post
+    r = await c.chat([{"role": "system", "content": "S"},
+                      {"role": "assistant", "content": "old"},
+                      {"role": "user", "content": "hi"}], json_mode=False)
+    assert r["content"] == "ok"
+    assert len(bodies[1]["messages"]) == 2            # retried folded
+    assert bodies[1]["messages"][1]["role"] == "user"
 
 
 def test_think_block_never_leaks_to_chat_fallback():

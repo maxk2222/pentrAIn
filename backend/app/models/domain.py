@@ -69,6 +69,7 @@ class Quest(Base):
     pack_path: Mapped[str] = mapped_column(String(500))   # abs path to quest dir
     version: Mapped[int] = mapped_column(Integer, default=1)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    exam: Mapped[bool] = mapped_column(Boolean, default=False)  # capstone — unlocks only when all same-tier quests are solved
 
     requirements: Mapped[dict] = mapped_column(JSON, default=dict)
     topology: Mapped[dict] = mapped_column(JSON, default=dict)

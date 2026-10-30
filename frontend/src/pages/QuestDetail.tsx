@@ -45,6 +45,7 @@ export function QuestDetailPage() {
           <h1 className="text-2xl font-bold">{q.title}</h1>
           <div className="mt-1 flex items-center gap-2">
             <DifficultyBadge tier={q.tier} />
+            {q.exam && <Badge variant="accent">exam</Badge>}
             {q.solved && <Badge variant="success">solved</Badge>}
             {q.best_score != null && <Badge variant="accent">best {q.best_score} pts</Badge>}
             <span className="text-sm text-muted">{q.track_slug}</span>

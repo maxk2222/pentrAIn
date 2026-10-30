@@ -36,7 +36,10 @@ function QuestCard({ q }: { q: Quest }) {
         <CardHeader className="pb-2">
           <div className="flex items-start justify-between gap-2">
             <CardTitle className="text-base leading-snug">{q.title}</CardTitle>
-            <DifficultyBadge tier={q.tier} />
+            <span className="flex items-center gap-1.5">
+              {q.exam && <Badge variant="accent">exam</Badge>}
+              <DifficultyBadge tier={q.tier} />
+            </span>
           </div>
         </CardHeader>
         <CardContent>

@@ -110,6 +110,7 @@ class QuestMeta(BaseModel):
     tier: int = 1
     title: str
     version: int = 1
+    exam: bool = False        # capstone — check_unlock requires all same-tier non-exam quests solved
 
 
 class QuestYaml(BaseModel):
@@ -230,6 +231,7 @@ async def sync_packs(db: AsyncSession, content_dir: str | Path) -> dict:
         quest = await db.get(Quest, qid)
         payload = dict(
             track_slug=spec.meta.track, tier=spec.meta.tier, title=spec.meta.title,
+            exam=spec.meta.exam,
             summary=spec.display.get("tagline", ""), pack_path=str(qdir),
             version=spec.meta.version, active=True,
             requirements=spec.requirements.model_dump(),

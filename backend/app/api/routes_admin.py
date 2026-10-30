@@ -222,7 +222,7 @@ async def llm_test(body: dict, db: AsyncSession = Depends(get_db),
     try:
         async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as c:
             r = await c.post(f"{url}/chat/completions", headers=headers, json={
-                "model": model, "max_tokens": 8,
+                "model": model, "max_tokens": 64,
                 "messages": [{"role": "user", "content": content}],
             })
     except httpx.HTTPError as e:
@@ -232,7 +232,10 @@ async def llm_test(body: dict, db: AsyncSession = Depends(get_db),
         return {"ok": False, "latency_ms": latency_ms,
                 "error": f"{r.status_code}: {r.text[:300]}"}
     try:
-        sample = (r.json()["choices"][0]["message"]["content"] or "")[:200]
+        msg = r.json()["choices"][0]["message"]
+        sample = (msg.get("content") or "")[:200]
+        if not sample and (rc := msg.get("reasoning_content")):
+            sample = f"(reasoning) {rc[:160]}"
     except (ValueError, KeyError, IndexError, TypeError) as e:
         return {"ok": False, "latency_ms": latency_ms,
                 "error": f"malformed response: {type(e).__name__}"}

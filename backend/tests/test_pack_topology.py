@@ -89,7 +89,8 @@ def test_flag_ids_unique_per_quest():
 
 
 def test_hint_stages_valid():
-    ok = {"recon", "enum", "exploit", "privesc", "pivot", "post", "general"}
+    ok = {"recon", "enum", "exploit", "privesc", "pivot", "post", "general",
+          "triage", "analysis", "persistence"}  # forensics stages are legit too
     for _qdir, spec in _quests():
         for h in spec.hints:
             assert h.stage in ok, f"{spec.meta.id}: hint {h.id} bad stage {h.stage!r}"

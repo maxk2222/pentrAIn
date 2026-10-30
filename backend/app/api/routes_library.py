@@ -17,7 +17,7 @@ def _quest_out(q: Quest, *, locked=False, reason="", solved=False, best=None) ->
         id=q.id, track_slug=q.track_slug, tier=q.tier, title=q.title,
         summary=q.summary, requirements=q.requirements or {},
         scoring=q.scoring_cfg or {}, locked=locked, lock_reason=reason,
-        solved=solved, best_score=best)
+        solved=solved, best_score=best, exam=q.exam)
 
 
 @router.get("/tracks", response_model=list[TrackOut])
@@ -44,7 +44,7 @@ async def list_quests(track: str | None = None, db: AsyncSession = Depends(get_d
     if track:
         q = q.where(Quest.track_slug == track)
     quests = (await db.execute(
-        q.order_by(Quest.track_slug, Quest.tier))).scalars().all()
+        q.order_by(Quest.track_slug, Quest.tier, Quest.exam))).scalars().all()
     solved_ids = {r[0] for r in (await db.execute(
         select(Session.quest_id).where(Session.state == SessionState.SOLVED.value)
         .distinct())).all()}

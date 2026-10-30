@@ -134,6 +134,12 @@
   changed_when: "'present' not in tpl.stdout"
   when: install_templates | bool
 
+- name: passlib for the system ansible (py3.13 dropped crypt — password_hash needs it)
+  ansible.builtin.pip:
+    name: passlib
+    executable: pip3
+  ignore_errors: true
+
 - name: create pve api token for the platform backend
   # pveum takes <userid> <tokenid> as separate args — split 'root@pam!pentrain'
   ansible.builtin.shell: |

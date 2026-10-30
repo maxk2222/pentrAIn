@@ -7,6 +7,7 @@ the engine-PVE client — the engine is ours anyway.
 """
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any
 
 import httpx
@@ -66,6 +67,10 @@ class LudusProvider:
     # ---------------- RangeProvider ----------------
 
     async def deploy_range(self, name: str, config: dict, *, force: bool = False) -> str:
+        # a previous deploy may have left testing mode on — while it is, Ludus
+        # refuses ANY new range config with 409. Stop it first; harmless when off.
+        with suppress(LudusError):
+            await self._req("PUT", "/testing/stop")
         # range config is a YAML file upload, multipart field name "file"
         payload = yaml.safe_dump(config, sort_keys=False).encode()
         await self._req(
@@ -94,7 +99,7 @@ class LudusProvider:
             state_s = str(data.get("rangeState") or data.get("status") or data.get("state") or "").lower()
             if "deploying" in state_s or "building" in state_s:
                 state = RangeState.DEPLOYING
-            elif "deployed" in state_s or "running" in state_s:
+            elif "deployed" in state_s or "running" in state_s or "success" in state_s:
                 state = RangeState.RUNNING
             elif "error" in state_s or "fail" in state_s:
                 state = RangeState.FAILED
@@ -105,10 +110,13 @@ class LudusProvider:
                 vms.append(
                     VMHandle(
                         name=name,
-                        vmid=v.get("vmid") or v.get("vmID") or v.get("vm_id"),
+                        # ludus 2 exposes the hypervisor id as proxmoxID
+                        vmid=v.get("vmid") or v.get("vmID") or v.get("vm_id")
+                             or v.get("proxmoxID"),
                         ip=v.get("ip") or v.get("ipAddress") or v.get("ip_address"),
                         template=v.get("template"),
-                        role="kali" if "kali" in name.lower() else "target",
+                        role=("router" if v.get("isRouter")
+                              else "kali" if "kali" in name.lower() else "target"),
                     )
                 )
             rid = data.get("rangeID") or data.get("range_id") or range_id
@@ -127,6 +135,9 @@ class LudusProvider:
         return data if isinstance(data, str) else str(data)
 
     async def destroy_range(self, range_id: str | None = None) -> None:
+        # don't leave the wire shut behind a deleted range
+        with suppress(LudusError):
+            await self._req("PUT", "/testing/stop")
         params = {"userID": range_id} if range_id else {}
         await self._try("DELETE", "/range", "/range/vms", params=params)
 

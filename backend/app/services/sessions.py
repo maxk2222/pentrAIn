@@ -116,9 +116,13 @@ def compile_topology(quest: Quest) -> dict:
         if v.get("roles"):
             entry["roles"] = v["roles"]
         vms.append(entry)
-    # Ludus auto-adds the router VM (default 2G); sizing it explicitly makes
-    # the range footprint honest and lets it balloon on small hosts too
-    return {"ludus": vms, "router": {"ram_gb": 2, "ram_min_gb": 1}}
+    # Ludus auto-adds the router VM (default debian-13 template, 2G). We pin
+    # debian-12 — the server template every linux quest already requires —
+    # and size it explicitly so it balloons on small hosts too.
+    router = {"template": "debian-12-x64-server-template",
+              "ram_gb": 2, "ram_min_gb": 1,
+              **(topo.get("router") or {})}
+    return {"ludus": vms, "router": router}
 
 
 async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
@@ -136,17 +140,30 @@ async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
             continue
         if need > budget:
             return False, f"requires {need}{unit} (budget {budget})"
+    if quest.tier > 1 or quest.exam:
+        solved_ids = {r[0] for r in (await db.execute(
+            select(Session.quest_id)
+            .where(Session.state == SessionState.SOLVED.value).distinct())).all()}
     if quest.tier > 1:
-        prev = (await db.execute(
-            select(Quest).where(Quest.track_slug == quest.track_slug,
-                                Quest.tier == quest.tier - 1))).scalar_one_or_none()
-        if prev:
-            solved = (await db.execute(
-                select(Session.id).where(Session.quest_id == prev.id,
-                                         Session.state == SessionState.SOLVED.value)
-                .limit(1))).scalar_one_or_none()
-            if not solved:
-                return False, f"solve tier {quest.tier - 1} first ({prev.title})"
+        # any non-exam quest at the previous tier unlocks this one —
+        # exams are capstones, not stepping stones
+        prevs = (await db.execute(
+            select(Quest.id).where(Quest.track_slug == quest.track_slug,
+                                   Quest.tier == quest.tier - 1,
+                                   Quest.exam.is_not(True)))).scalars().all()
+        if prevs and not any(p in solved_ids for p in prevs):
+            return False, f"solve a tier {quest.tier - 1} quest in this track first"
+    if quest.exam:
+        # capstone gate: every non-exam quest at this tier must be solved
+        peers = (await db.execute(
+            select(Quest.id).where(Quest.track_slug == quest.track_slug,
+                                   Quest.tier == quest.tier,
+                                   Quest.exam.is_not(True)))).scalars().all()
+        missing = [p for p in peers if p not in solved_ids]
+        if missing:
+            done = len(peers) - len(missing)
+            return False, (f"exam: solve all tier {quest.tier} quests first "
+                           f"({done}/{len(peers)} done)")
     return True, ""
 
 

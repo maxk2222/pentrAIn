@@ -37,6 +37,9 @@ class LlmClient:
         self.temperature = temperature
         self.reasoning = reasoning
         self.reasoning_effort = reasoning_effort
+        # learned endpoint quirks — once a fallback succeeded we skip straight
+        # to it instead of paying a failed-request round-trip on every turn
+        self._compat: set[str] = set()
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
@@ -65,19 +68,35 @@ class LlmClient:
             body["reasoning_effort"] = self.reasoning_effort
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+        if "fold" in self._compat and len(body["messages"]) > 2:
+            body["messages"] = _fold_history(body["messages"])
+        if "no_response_format" in self._compat:
+            body.pop("response_format", None)
         if on_delta is not None:
             resp = await self._chat_stream(body, on_delta)
             if resp is not None:
                 return resp
             # endpoint refused/broke the stream before any token — plain call
         r = await self._client.post("/chat/completions", json=body)
-        if r.status_code >= 400:
-            # some endpoints reject response_format — retry without
-            if json_mode and r.status_code == 400:
+        for _ in range(2):
+            if r.status_code < 400:
+                break
+            if json_mode and "response_format" in body:
+                # some endpoints reject response_format — retry without
                 body.pop("response_format", None)
-                r = await self._client.post("/chat/completions", json=body)
-            if r.status_code >= 400:
-                raise LlmError(f"llm {r.status_code}: {r.text[:300]}")
+                self._compat.add("no_response_format")
+            elif r.status_code == 400 and len(body["messages"]) > 2:
+                # exotic chat templates (some MLX builds) require the first
+                # non-system message to be a user turn — an assistant message
+                # earlier in history breaks jinja rendering. Fold history into
+                # the system prompt and retry once.
+                body["messages"] = _fold_history(body["messages"])
+                self._compat.add("fold")
+            else:
+                break
+            r = await self._client.post("/chat/completions", json=body)
+        if r.status_code >= 400:
+            raise LlmError(f"llm {r.status_code}: {r.text[:300]}")
         try:
             data = r.json()
             content = data["choices"][0]["message"]["content"]
@@ -135,6 +154,31 @@ class LlmClient:
             self.tokens_used += int(usage.get("total_tokens", 0))
         return {"content": full, "actions": parse_actions(full),
                 "raw": {"usage": usage}}
+
+
+def _fold_history(messages: list[dict]) -> list[dict]:
+    """Collapse a [system, ...history..., user] list into [system', user] —
+    prior turns serialized as text inside the system prompt. Keeps context
+    while satisfying chat templates that demand a user-first structure."""
+    system_parts: list[str] = []
+    history_lines: list[str] = []
+    last_user: dict | None = None
+    for m in messages:
+        role, content = m.get("role"), m.get("content")
+        if role == "system":
+            system_parts.append(str(content))
+        elif role == "user" and m is messages[-1]:
+            last_user = m
+        elif role in ("user", "assistant"):
+            tag = "Trainee" if role == "user" else "Coach"
+            history_lines.append(f"{tag}: {content}")
+    if history_lines:
+        system_parts.append(
+            "CONVERSATION SO FAR (context only — continue from here):\n"
+            + "\n".join(history_lines))
+    folded = [{"role": "system", "content": "\n\n".join(p for p in system_parts if p)}]
+    folded.append(last_user or {"role": "user", "content": "continue"})
+    return folded
 
 
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/",
