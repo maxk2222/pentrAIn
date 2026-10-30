@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t2-juice-shop
+  track: web-appsec
+  tier: 2
+  title: "Juice Heist"
+  version: 1
+display:
+  tagline: "OWASP Juice Shop: score-board recon, the ftp easter egg, and an admin-section challenge."
+requirements:
+  min_ram_gb: 14
+  min_vcpus: 6
+  min_disk_gb: 90
+  est_deploy_min: 12
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: juice01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 23
+      roles: [pentrain_docker_host, pentrain_juice_shop]
+flags:
+  - id: ftp-flag
+    name: "FTP leak flag — /ftp/flag1.txt (unauthenticated)"
+    kind: file
+    points: 150
+    vm: juice01
+    container: juice-shop
+    file_path: /juice-shop/ftp/flag1.txt
+  - id: admin-section-flag
+    name: "Admin section challenge solved"
+    kind: command
+    points: 250
+    vm: juice01
+    command:
+      vm: juice01
+      cmd: "curl -s http://localhost:3000/api/Challenges | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(c[\"solved\"] for c in d[\"data\"] if c.get(\"key\")==\"adminSection\"))'"
+      expect: "True"
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "Juice Shop runs on :3000. The score board is hidden — try /#/score-board or check the JS bundle for routes."
+  - id: h2
+    cost: 50
+    stage: exploit
+    text: "/ftp is a public directory — browse it (careful, some files are quarantine bait). The flag file is there."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "The admin-section challenge solves when you view /#/administration while logged in as ANY user. Login page has a SQLi flaw — try ' OR 1=1-- in the email field."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-recon
+      name: "Found Juice Shop / score board"
+      detect: { command_match: "(3000|score-board|juice|#/)" }
+      hint_after_s: 600
+    - id: cp-ftp
+      name: "Browsed the ftp dir"
+      detect: { command_match: "/ftp/" }
+      hint_after_s: 600
+    - id: cp-sqli
+      name: "Attempted login bypass"
+      detect: { command_match: "(rest/user/login|OR 1=1|sqlmap|' or |-- )" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

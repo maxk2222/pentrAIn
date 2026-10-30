@@ -1,0 +1,94 @@
+---
+# Ludus on the engine PVE + PenTRAIN's ansible roles + API token.
+# Runs on the engine host (nested VM in nested mode, the host itself in direct).
+
+- name: install ludus server + client
+  ansible.builtin.shell: |
+    set -e
+    if command -v ludus >/dev/null 2>&1; then exit 0; fi
+    cd /tmp
+    curl -fsSL https://packages.ludus.cloud/latest/ludus-server_linux_amd64.deb -o ludus-server.deb
+    curl -fsSL https://packages.ludus.cloud/latest/ludus_linux_amd64 -o /usr/local/bin/ludus
+    chmod +x /usr/local/bin/ludus
+    dpkg -i ludus-server.deb || apt -f install -y
+    systemctl enable --now ludus-server
+  args:
+    creates: /usr/local/bin/ludus
+  register: ludus_inst
+
+- name: wait for ludus api
+  ansible.builtin.uri:
+    url: "https://localhost:8081/version"
+    validate_certs: false
+    status_code: [200, 401, 403]
+  register: lapi
+  until: lapi.status is defined
+  retries: 30
+  delay: 10
+
+- name: create ludus admin user (pentrain range owner)
+  ansible.builtin.shell: |
+    set -e
+    if ludus user list 2>/dev/null | grep -q {{ ludus_admin_user }}; then exit 0; fi
+    ludus user add -n "{{ ludus_admin_user }}" -a -U || true
+  register: luser
+  changed_when: luser.rc == 0
+
+- name: capture ludus api key
+  ansible.builtin.shell: |
+    ludus user apikey get -n {{ ludus_admin_user }} 2>/dev/null | grep -oE '[a-f0-9]{32,}' | head -1
+  register: lkey
+  changed_when: false
+  ignore_errors: true
+
+- name: push pentrain ansible roles to the engine
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../content/ansible-roles/"
+    dest: /opt/pentrain/ansible-roles/
+    mode: preserve
+
+- name: register each role with ludus
+  ansible.builtin.shell: |
+    set -e
+    for r in /opt/pentrain/ansible-roles/*/; do
+      name=$(basename "$r")
+      ludus ansible roles list 2>/dev/null | grep -q "$name" || \
+        ludus ansible roles add -d "$r" || true
+    done
+  changed_when: false
+  ignore_errors: true
+
+- name: build required templates (opt-in — multi-GB downloads)
+  ansible.builtin.shell: |
+    for t in {{ ludus_templates | join(' ') }}; do
+      ludus templates list 2>/dev/null | grep -q "$t" && continue
+      ludus templates build -n "$t" || true
+    done
+  changed_when: false
+  when: install_templates | bool
+
+- name: create pve api token for the platform backend
+  # pveum takes <userid> <tokenid> as separate args — split 'root@pam!pentrain'
+  ansible.builtin.shell: |
+    set -e
+    USERID="{{ pve_api_token_id.split('!')[0] }}"
+    TOKENID="{{ pve_api_token_id.split('!')[1] }}"
+    pveum user token list "$USERID" --output-format json 2>/dev/null \
+      | grep -q "\"$TOKENID\"" \
+      || pveum user token add "$USERID" "$TOKENID" --privsep 0 --expire 0 >/dev/null
+  register: tok
+  changed_when: tok.rc == 0
+  ignore_errors: true
+
+- name: grant token admin rights on /
+  ansible.builtin.command: pveum acl modify / --tokens "{{ pve_api_token_id }}" --roles Administrator
+  changed_when: false
+  ignore_errors: true
+
+- name: engine ready
+  ansible.builtin.debug:
+    msg: >-
+      Ludus installed. Range user: {{ ludus_admin_user }}.
+      API key: {{ lkey.stdout | trim | default('(see `ludus user apikey get -n ' ~ ludus_admin_user ~ '`)') }}.
+      Configure the backend's engine.* + ludus.* settings via the web wizard
+      (Ludus URL https://<engine>:8081).

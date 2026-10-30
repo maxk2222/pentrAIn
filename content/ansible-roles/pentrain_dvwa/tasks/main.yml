@@ -1,0 +1,19 @@
+---
+# DVWA container on a docker host. Flags are injected post-deploy by the
+# backend via guest-agent + docker exec (see backend flags service).
+- name: pull DVWA image
+  ansible.builtin.command: docker pull vulnerables/web-dvwa:latest
+  register: pull
+  changed_when: "'Downloaded newer' in pull.stdout or 'Status: Downloaded' in pull.stdout"
+
+- name: run DVWA container
+  ansible.builtin.command: >-
+    docker run -d --name dvwa --restart unless-stopped
+    -p 80:80 vulnerables/web-dvwa:latest
+  register: ctr
+  changed_when: ctr.rc == 0
+  failed_when: ctr.rc != 0 and 'Conflict' not in (ctr.stderr | default(''))
+
+- name: flag staging dir inside container (backend fills per-session)
+  ansible.builtin.command: docker exec dvwa mkdir -p /flags
+  ignore_errors: true

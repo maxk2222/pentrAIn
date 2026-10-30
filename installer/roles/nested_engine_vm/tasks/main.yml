@@ -1,0 +1,117 @@
+---
+# Create the nested-engine VM on the outer PVE (runs ON the outer host, via qm).
+# Debian cloud image → import → cloud-init → start → discover IP via guest agent.
+
+- name: download debian cloud image
+  ansible.builtin.get_url:
+    url: "{{ engine_cloud_image_url }}"
+    dest: "/var/lib/vz/template/iso/{{ engine_name }}.qcow2"
+    mode: "0644"
+  register: dl
+  until: dl is succeeded
+  retries: 3
+
+- name: create engine VM shell
+  ansible.builtin.command: >
+    qm create {{ engine_vmid }}
+    --name {{ engine_name }}
+    --memory {{ engine_ram_mb }}
+    --cores {{ engine_cores }}
+    --cpu host
+    --net0 virtio,bridge={{ engine_bridge }}
+    --scsihw virtio-scsi-single
+    --agent enabled=1
+    --ostype l26
+  register: create
+  changed_when: true
+  failed_when: create.rc != 0 and 'already exists' not in (create.stderr | default(''))
+
+- name: detect host virt flag (vmx on intel, svm on amd)
+  ansible.builtin.shell: grep -o -m1 -E '(vmx|svm)' /proc/cpuinfo
+  register: virtflag
+  changed_when: false
+
+- name: nested virtualization CPU args (expose vmx/svm to the guest)
+  ansible.builtin.command: >
+    qm set {{ engine_vmid }} --args "-cpu host,+{{ virtflag.stdout | trim }}"
+  changed_when: false
+
+- name: is a disk already attached? (rerun-safe)
+  ansible.builtin.shell: qm config {{ engine_vmid }} | grep -c '^scsi0:'
+  register: has_scsi0
+  changed_when: false
+  failed_when: false
+
+- name: import disk into engine storage
+  ansible.builtin.command: >
+    qm importdisk {{ engine_vmid }}
+    /var/lib/vz/template/iso/{{ engine_name }}.qcow2 {{ engine_storage }}
+  register: imp
+  changed_when: imp.rc == 0
+  when: (has_scsi0.stdout | int) == 0
+
+- name: attach disk + boot + cloud-init
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - "qm set {{ engine_vmid }} --scsi0 {{ engine_storage }}:vm-{{ engine_vmid }}-disk-0"
+    - "qm set {{ engine_vmid }} --boot order=scsi0"
+    - "qm set {{ engine_vmid }} --ide2 {{ engine_storage }}:cloudinit"
+    - "qm set {{ engine_vmid }} --ciuser root --sshkey {{ vm_ssh_pubkey }}"
+    - "qm set {{ engine_vmid }} --serial0 socket --vga serial0"
+  register: cfg
+  changed_when: cfg.rc == 0
+  when: (has_scsi0.stdout | int) == 0
+
+- name: grow disk to target size (no-op when already correct)
+  ansible.builtin.command: qm resize {{ engine_vmid }} scsi0 {{ engine_disk_gb }}G
+  register: resized
+  changed_when: resized.rc == 0
+  failed_when: resized.rc != 0 and 'cannot shrink' not in (resized.stderr | default(''))
+
+- name: static ip when requested (engine_netmask must be a CIDR prefix, e.g. 24)
+  ansible.builtin.command: >
+    qm set {{ engine_vmid }}
+    --ipconfig0 "ip={{ engine_ip }}/{{ engine_netmask }},gw={{ engine_gateway }}"
+  when:
+    - engine_ip | length > 0
+    - engine_netmask | length > 0
+  changed_when: true
+
+- name: start engine VM
+  ansible.builtin.command: qm start {{ engine_vmid }}
+  register: st
+  changed_when: st.rc == 0
+  failed_when: st.rc != 0 and 'already running' not in (st.stderr | default(''))
+
+- name: wait for guest agent + read IP
+  ansible.builtin.shell: >
+    qm agent {{ engine_vmid }} network-get-interfaces 2>/dev/null
+    | grep -oE '"ip-address" *: *"[0-9.]+"' | grep -oE '[0-9.]+'
+    | grep -v '^127\.' | head -1
+  register: ipq
+  changed_when: false
+  until: (ipq.stdout | trim) | length > 0
+  retries: 60
+  delay: 10
+
+- name: engine ip fact
+  ansible.builtin.set_fact:
+    engine_discovered_ip: "{{ engine_ip | default(ipq.stdout | trim) }}"
+
+- name: add engine VM to in-memory inventory
+  ansible.builtin.add_host:
+    name: "{{ engine_name }}"
+    ansible_host: "{{ engine_discovered_ip }}"
+    ansible_user: root
+    groups: engine_vm
+
+- name: wait for ssh on engine
+  ansible.builtin.wait_for:
+    host: "{{ engine_discovered_ip }}"
+    port: 22
+    timeout: 600
+  delegate_to: localhost
+
+- name: engine VM ready
+  ansible.builtin.debug:
+    msg: "engine VM {{ engine_vmid }} up at {{ engine_discovered_ip }}"

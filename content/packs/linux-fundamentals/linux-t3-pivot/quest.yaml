@@ -1,0 +1,78 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t3-pivot
+  track: linux-fundamentals
+  tier: 3
+  title: "The Pivot"
+  version: 1
+display:
+  tagline: "Two hosts. The database box only talks to the web server — pivot through it."
+requirements:
+  min_ram_gb: 16
+  min_vcpus: 8
+  min_disk_gb: 100
+  est_deploy_min: 12
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: web01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 21
+      roles: [pentrain_linux_t3_web]
+    - name: db01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 22
+      roles: [pentrain_linux_t3_db]
+flags:
+  - id: web-flag
+    name: "Web tier flag — /var/www/flag.txt"
+    kind: file
+    points: 150
+    vm: web01
+    file_path: /var/www/flag.txt
+  - id: db-flag
+    name: "DB tier flag — /root/db.txt (requires pivot)"
+    kind: file
+    points: 350
+    vm: db01
+    file_path: /root/db.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "db01 drops SSH from everyone except web01. You can't reach it directly — find creds on the web tier."
+  - id: h2
+    cost: 50
+    stage: pivot
+    text: "Check /etc/intranet/config.ini on web01 — the app config leaks dbadm's ssh password."
+  - id: h3
+    cost: 60
+    stage: pivot
+    text: "ssh -L or ssh -J through web01: `ssh -J student/web01 dbadm@db01` or forward a local port to db01:22."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-web
+      name: "Found the config leak on web01"
+      detect: { command_match: "config.ini|dbadm|PivotOn24" }
+      hint_after_s: 600
+    - id: cp-pivot
+      name: "Attempted the pivot"
+      detect: { command_match: "(ssh.*db01|ssh.*10\\.|ssh -J|ssh -L|sshuttle|chisel)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 600
+  time_bonus_max: 250
+  par_s: 1800
+  takeover_cost: 200

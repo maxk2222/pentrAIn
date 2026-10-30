@@ -1,0 +1,17 @@
+from .domain import (  # noqa: F401
+    Attempt,
+    Base,
+    CoachAction,
+    CoachMessage,
+    ExpectedFlag,
+    Flag,
+    FlagSubmission,
+    HintUse,
+    Quest,
+    QuestCheckpoint,
+    Session,
+    Setting,
+    TelemetryEvent,
+    Track,
+    UserProfile,
+)

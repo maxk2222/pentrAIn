@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t1-first-foothold
+  track: linux-fundamentals
+  tier: 1
+  title: "First Foothold"
+  version: 1
+display:
+  tagline: "SSH in with weak creds, escalate via a sudo misconfiguration."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: target01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 21
+      roles: [pentrain_linux_t1]
+flags:
+  - id: user-flag
+    name: "User flag — read user.txt"
+    kind: file
+    points: 100
+    vm: target01
+    file_path: /home/student/user.txt
+  - id: root-flag
+    name: "Root flag — read root.txt"
+    kind: file
+    points: 200
+    vm: target01
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Start with what you know: credentials were leaked in the briefing. Try ssh student@<target>."
+  - id: h2
+    cost: 25
+    stage: privesc
+    text: "sudo -l lists what you may run as root. Vim can spawn a shell — search GTFOBins for 'vim'."
+  - id: h3
+    cost: 50
+    stage: privesc
+    text: "sudo vim -c ':!sh' or sudo vim then :!sh gives you a root shell."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Performed initial enumeration"
+      detect: { command_match: "(nmap|ss |netstat|ls -la /home|cat /etc/passwd)" }
+      hint_after_s: 480
+    - id: cp-ssh
+      name: "Logged in as student"
+      detect: { command_match: "ssh student@" }
+      hint_after_s: 600
+    - id: cp-sudo
+      name: "Checked sudo rights"
+      detect: { command_match: "sudo -l" }
+      hint_after_s: 480
+  escalation: { observe_grace_s: 120, nudge_s: 360, hint_s: 720 }
+scoring:
+  base: 300
+  time_bonus_max: 150
+  par_s: 900
+  takeover_cost: 100

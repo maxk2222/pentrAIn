@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t1-dvwa
+  track: web-appsec
+  tier: 1
+  title: "Damn Vulnerable"
+  version: 1
+display:
+  tagline: "OWASP basics on DVWA: file inclusion for the flag, uploads for the state."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: dvwa01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 21
+      roles: [pentrain_docker_host, pentrain_dvwa]
+flags:
+  - id: lfi-flag
+    name: "LFI flag — /flags/flag1.txt inside the app container"
+    kind: file
+    points: 150
+    vm: dvwa01
+    container: dvwa
+    file_path: /flags/flag1.txt
+  - id: webshell-flag
+    name: "Webshell flag — get a .php file into hackable/uploads"
+    kind: command
+    points: 200
+    vm: dvwa01
+    command:
+      vm: dvwa01
+      cmd: "docker exec dvwa sh -c 'ls /var/www/html/hackable/uploads/*.php 2>/dev/null | head -1'"
+      expect: ".php"
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "DVWA listens on port 80. Default creds: admin/password. Set security to 'low' to see the intended vulns."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "File Inclusion: ?page=../../../../flags/flag1.txt reads the flag file off disk."
+  - id: h3
+    cost: 50
+    stage: exploit
+    text: "Upload a .php webshell via hackable/uploads, then confirm it landed — the state flag auto-checks."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-recon
+      name: "Found DVWA"
+      detect: { command_match: "(curl|nikto|gobuster|dirb|browser|80)" }
+      hint_after_s: 600
+    - id: cp-login
+      name: "Logged into DVWA"
+      detect: { command_match: "(admin|password|login.php)" }
+      hint_after_s: 600
+    - id: cp-lfi
+      name: "Attempted file inclusion"
+      detect: { command_match: "(page=|\\.\\./|fi/|include)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 180, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 350
+  time_bonus_max: 150
+  par_s: 1200
+  takeover_cost: 120

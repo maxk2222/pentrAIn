@@ -1,0 +1,128 @@
+"""Typed settings registry — every user-facing config lives in DB, editable via WebGUI."""
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..models.domain import Setting
+
+# key -> (default, secret?)
+DEFAULTS: dict[str, tuple[Any, bool]] = {
+    "engine.mode": ("nested", False),              # nested|direct|mock
+    "engine.pve_url": ("", False),
+    "engine.pve_node": ("pve", False),
+    "engine.pve_token_id": ("", False),
+    "engine.pve_token_secret": ("", True),
+    "engine.ludus_url": ("", False),
+    "engine.ludus_api_key": ("", True),
+    "engine.testing_mode": (True, False),           # cut range internet after deploy
+    "engine.testing_allow": ([], False),            # CIDRs allowed while testing (app VM)
+    "platform.api_url": ("http://pentrain-app:8000", False),  # backend URL reachable from ranges
+    "resources.max_ram_gb": (48, False),
+    "resources.max_vcpus": (16, False),
+    "resources.max_disk_gb": (500, False),
+    "llm.base_url": ("http://localhost:11434/v1", False),
+    "llm.api_key": ("", True),
+    "llm.model": ("huihui-ai/Qwen3-30B-A3B-abliterated", False),
+    "llm.vision_model": ("", False),
+    "llm.temperature": (0.4, False),
+    "llm.daily_token_budget": (2_000_000, False),
+    "coach.default_autonomy": (2, False),
+    "coach.verbosity": ("normal", False),          # terse|normal|verbose
+    "coach.personality": ("mentor", False),
+    "coach.enabled": (True, False),
+    "coach.reflect_interval_s": (60, False),
+    "coach.nudge_after_s": (480, False),
+    "coach.hint_after_s": (900, False),
+    "coach.action_budget": (50, False),
+    "content.packs": (["bundled"], False),
+    "data.telemetry_retention_days": (30, False),
+    "security.admin_token_hash": ("", True),
+    "setup.completed": (False, False),
+}
+
+
+async def get_setting(db: AsyncSession, key: str, default: Any = None) -> Any:
+    row = await db.get(Setting, key)
+    if row is not None:
+        return row.value.get("v")
+    if key in DEFAULTS:
+        return DEFAULTS[key][0]
+    return default
+
+
+async def set_setting(db: AsyncSession, key: str, value: Any) -> None:
+    row = await db.get(Setting, key)
+    if row is None:
+        row = Setting(key=key, value={"v": value})
+        db.add(row)
+    else:
+        row.value = {"v": value}
+    await db.commit()
+
+
+async def all_settings(db: AsyncSession, *, redact: bool = True) -> dict[str, Any]:
+    rows = (await db.execute(select(Setting))).scalars().all()
+    stored = {r.key: r.value.get("v") for r in rows}
+    out: dict[str, Any] = {}
+    for key, (default, secret) in DEFAULTS.items():
+        v = stored.get(key, default)
+        out[key] = "********" if (secret and v and redact) else v
+    for key, v in stored.items():  # unknown custom keys pass through
+        out.setdefault(key, v)
+    return out
+
+
+def _coerce(key: str, value: Any) -> Any:
+    """Coerce a PATCHed value to the registered default's type.
+
+    Without this a UI bug could store "abc" into resources.max_ram_gb and
+    crash every int() consumer downstream. Raises ValueError on mismatch.
+    """
+    default = DEFAULTS[key][0]
+    if value is None:
+        return default
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        if isinstance(value, (int, float)):
+            return bool(value)
+        raise ValueError(f"{key}: expected bool")
+    if isinstance(default, int):  # after bool — bool is an int subclass
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key}: expected int") from None
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key}: expected number") from None
+    if isinstance(default, list):
+        if not isinstance(value, list):
+            raise ValueError(f"{key}: expected list")
+        return value
+    if isinstance(default, str):
+        if not isinstance(value, str):
+            raise ValueError(f"{key}: expected string")
+        return value
+    return value
+
+
+async def patch_settings(db: AsyncSession, updates: dict[str, Any]) -> None:
+    for key, value in updates.items():
+        if value == "********":  # redacted echo — keep stored secret
+            continue
+        if key in DEFAULTS:
+            value = _coerce(key, value)
+        await set_setting(db, key, value)
+
+
+async def get_secret(db: AsyncSession, key: str) -> str:
+    """Unredacted read for server-side use."""
+    row = await db.get(Setting, key)
+    return (row.value.get("v") if row else DEFAULTS.get(key, ("",))[0]) or ""

@@ -1,0 +1,50 @@
+---
+# Linux T3 (pivot) — db tier: only reachable via the web host (.21).
+# dbadm/Summer creds leak from the web tier's config.ini.
+- name: create dbadm user (sudo group — root flag needs it)
+  ansible.builtin.user:
+    name: dbadm
+    password: "{{ 'PivotOn24!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/dbadm
+    create_home: true
+    groups: sudo
+    append: true
+
+- name: install mariadb
+  ansible.builtin.apt:
+    name: [mariadb-server, iptables-persistent]
+    state: present
+    update_cache: true
+
+- name: compute web host (same subnet, .21)
+  ansible.builtin.set_fact:
+    pentrain_web_host: >-
+      {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.21
+
+- name: restrict ssh to the web host only (forces the pivot)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: 22
+    source: "{{ pentrain_web_host }}"
+    jump: ACCEPT
+  when: ansible_default_ipv4.address is defined
+
+- name: drop other ssh attempts from the range net
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: 22
+    jump: DROP
+
+- name: persist firewall rules
+  ansible.builtin.command: netfilter-persistent save
+  ignore_errors: true
+
+- name: enable password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

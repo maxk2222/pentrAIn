@@ -1,0 +1,19 @@
+---
+# OWASP Juice Shop container. ftp/ is exposed unauthenticated by design —
+# one quest flag lives there (injected post-deploy via docker exec).
+- name: pull Juice Shop image
+  ansible.builtin.command: docker pull bkimminich/juice-shop:latest
+  register: pull
+  changed_when: "'Downloaded newer' in pull.stdout or 'Status: Downloaded' in pull.stdout"
+
+- name: run Juice Shop container
+  ansible.builtin.command: >-
+    docker run -d --name juice-shop --restart unless-stopped
+    -p 3000:3000 bkimminich/juice-shop:latest
+  register: ctr
+  changed_when: ctr.rc == 0
+  failed_when: ctr.rc != 0 and 'Conflict' not in (ctr.stderr | default(''))
+
+- name: flag staging dir inside container (reachable via /ftp/…)
+  ansible.builtin.command: docker exec juice-shop mkdir -p /juice-shop/ftp
+  ignore_errors: true

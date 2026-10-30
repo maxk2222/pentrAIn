@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: install
+        run: pip install -e "./backend[dev]"
+      - name: lint
+        run: cd backend && python -m ruff check app tests
+      - name: test
+        run: cd backend && python -m pytest tests -q
+
+  coach:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: install
+        run: pip install -e "./coach[dev]"
+      - name: lint
+        run: cd coach && python -m ruff check coach tests
+      - name: test
+        run: cd coach && python -m pytest tests -q
+
+  packs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: lint packs
+        run: pip install pyyaml && python scripts/lint_packs.py content/packs
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: install + typecheck + build
+        run: |
+          cd frontend
+          npm ci
+          npx tsc --noEmit
+          npm run build
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compose config
+        run: |
+          cd engine && cp .env.example .env
+          docker compose config -q
+
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: ansible syntax check (both modes)
+        run: |
+          pip install ansible-core
+          ansible-galaxy collection install -r installer/requirements.yml
+          cd installer
+          ansible-playbook --syntax-check site.yml -i inventory.example.yml -e install_mode=nested
+          ansible-playbook --syntax-check site.yml -i inventory.example.yml -e install_mode=direct

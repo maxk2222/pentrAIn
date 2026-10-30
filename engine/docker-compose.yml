@@ -1,0 +1,45 @@
+# PenTRAIN platform stack — runs inside the pentrain-app VM.
+# backend = FastAPI + engine providers; coach = LLM coaching loop; frontend = SPA + WS proxy.
+name: pentrain
+
+services:
+  backend:
+    build:
+      context: ../backend
+    env_file: .env
+    environment:
+      PENTRAIN_DATABASE_URL: sqlite+aiosqlite:////data/pentrain.db
+      PENTRAIN_CONTENT_DIR: /content/packs
+    volumes:
+      - pentrain-data:/data
+      - ../content/packs:/content/packs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  coach:
+    build:
+      context: ../coach
+    env_file: .env
+    environment:
+      PENTRAIN_BACKEND_URL: http://backend:8000
+      PENTRAIN_BACKEND_WS_URL: ws://backend:8000/ws/coach
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+    ports:
+      - "${APP_PORT:-8000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pentrain-data:

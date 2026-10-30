@@ -1,0 +1,58 @@
+---
+# PenTRAIN installer variables — override via --extra-vars or edit here.
+
+# ----- mode -----
+# nested | direct  (install.sh --mode sets this)
+install_mode: nested
+
+# ----- engine VM (nested mode) -----
+engine_vmid: 300
+engine_name: pentrain-engine
+engine_cores: 16
+engine_ram_mb: 65536           # 64G — the nested hypervisor needs real headroom
+engine_disk_gb: 500
+engine_storage: local-lvm
+engine_bridge: vmbr0
+engine_ip: ""                  # dhcp if empty — we poll the guest agent
+engine_netmask: ""             # CIDR prefix only (e.g. 24), not dotted
+engine_gateway: ""
+engine_cloud_image_url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+
+# pubkey injected into cloud-init VMs (read on the PVE host; its private key
+# must live on the machine running this playbook)
+vm_ssh_pubkey: "/root/.ssh/id_rsa.pub"
+
+# ----- app VM (inside the engine, both modes) -----
+app_vmid: 301
+app_name: pentrain-app
+app_cores: 4
+app_ram_mb: 8192
+app_disk_gb: 60
+app_storage: local-lvm
+app_bridge: vmbr0
+app_ip: ""
+app_cloud_image_url: "{{ engine_cloud_image_url }}"
+
+# ----- platform -----
+pentrain_repo: "https://github.com/CHANGEME/pentrain.git"
+pentrain_repo_ref: main
+# for private repos / local installs, install.sh rsyncs the checkout instead
+pentrain_local_copy: true
+platform_domain: "pentrain.local"
+platform_http_port: 8000
+
+# ----- ludus -----
+ludus_version: "latest"        # pin a release tag for production installs
+ludus_admin_user: pentrain
+ludus_templates:               # multi-GB downloads — enable with --with-templates
+  - kali-x64-desktop-template
+  - debian-12-x64-server-template
+install_templates: false
+
+# ----- safety -----
+# required in direct mode when the host already runs VMs/CTs
+i_know_dedicated: false
+
+# ----- auth for the new engine PVE (nested mode) -----
+# API token the platform uses; created by the pve_api_token role
+pve_api_token_id: "root@pam!pentrain"

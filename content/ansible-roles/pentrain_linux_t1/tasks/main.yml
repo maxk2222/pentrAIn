@@ -1,0 +1,52 @@
+---
+# Linux T1 quest target — a single box with a weak SSH user and a
+# sudo misconfiguration (vim) as the intended privesc path.
+- name: create student user (weak password — the quest teaches enumeration)
+  ansible.builtin.user:
+    name: student
+    password: "{{ 'student123' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/student
+    create_home: true
+
+- name: student owns their home (flag1 lands in /home/student/user.txt)
+  ansible.builtin.file:
+    path: /home/student
+    owner: student
+    group: student
+    mode: "0750"
+
+- name: sudo misconfig — student may run vim as root (GTFOBins path)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-student-vim
+    content: "student ALL=(root) NOPASSWD: /usr/bin/vim\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: breadcrumb note that rewards basic enumeration
+  ansible.builtin.copy:
+    dest: /etc/backup-notes.txt
+    content: |
+      # Sysadmin notes — TODO move into the vault
+      # Local login: student / student123
+      # Backup script runs as root via /etc/cron.d — ask infra team before touching.
+      sudo -l shows what student can do.
+    mode: "0644"
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: password auth on (this is a training box)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: ensure vim installed
+  ansible.builtin.apt:
+    name: vim
+    state: present

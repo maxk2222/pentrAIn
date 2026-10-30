@@ -1,0 +1,97 @@
+---
+# Create the pentrain-app VM inside the engine PVE (both modes).
+# The platform runs here, not on the hypervisor, to keep Ludus/iptables clean.
+
+- name: download cloud image for app VM
+  ansible.builtin.get_url:
+    url: "{{ app_cloud_image_url }}"
+    dest: "/var/lib/vz/template/iso/{{ app_name }}.qcow2"
+    mode: "0644"
+  register: dl
+  until: dl is succeeded
+  retries: 3
+
+- name: stage controller ssh pubkey for cloud-init
+  # qm --sshkey reads a path on THIS host (the engine), but the private key
+  # lives on the ansible controller — stage the pubkey content here first.
+  ansible.builtin.copy:
+    content: "{{ lookup('ansible.builtin.file', vm_ssh_pubkey) }}"
+    dest: /tmp/pentrain-cloudinit.pub
+    mode: "0600"
+
+- name: create app VM
+  ansible.builtin.command: >
+    qm create {{ app_vmid }}
+    --name {{ app_name }}
+    --memory {{ app_ram_mb }}
+    --cores {{ app_cores }}
+    --net0 virtio,bridge={{ app_bridge }}
+    --scsihw virtio-scsi-single
+    --agent enabled=1
+    --ostype l26
+  register: create
+  changed_when: true
+  failed_when: create.rc != 0 and 'already exists' not in (create.stderr | default(''))
+
+- name: is a disk already attached? (rerun-safe)
+  ansible.builtin.shell: qm config {{ app_vmid }} | grep -c '^scsi0:'
+  register: app_has_scsi0
+  changed_when: false
+  failed_when: false
+
+- name: import + attach disk + cloud-init
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - "qm importdisk {{ app_vmid }} /var/lib/vz/template/iso/{{ app_name }}.qcow2 {{ app_storage }}"
+    - "qm set {{ app_vmid }} --scsi0 {{ app_storage }}:vm-{{ app_vmid }}-disk-0"
+    - "qm set {{ app_vmid }} --boot order=scsi0"
+    - "qm set {{ app_vmid }} --ide2 {{ app_storage }}:cloudinit"
+    - "qm set {{ app_vmid }} --ciuser root --sshkey /tmp/pentrain-cloudinit.pub"
+  register: cfg
+  changed_when: cfg.rc == 0
+  when: (app_has_scsi0.stdout | int) == 0
+
+- name: grow disk to target size (no-op when already correct)
+  ansible.builtin.command: qm resize {{ app_vmid }} scsi0 {{ app_disk_gb }}G
+  register: app_resized
+  changed_when: app_resized.rc == 0
+  failed_when: app_resized.rc != 0 and 'cannot shrink' not in (app_resized.stderr | default(''))
+
+- name: start app VM
+  ansible.builtin.command: qm start {{ app_vmid }}
+  register: st
+  changed_when: st.rc == 0
+  failed_when: st.rc != 0 and 'already running' not in (st.stderr | default(''))
+
+- name: wait for guest agent + read IP
+  ansible.builtin.shell: >
+    qm agent {{ app_vmid }} network-get-interfaces 2>/dev/null
+    | grep -oE '"ip-address" *: *"[0-9.]+"' | grep -oE '[0-9.]+'
+    | grep -v '^127\.' | head -1
+  register: ipq
+  changed_when: false
+  until: (ipq.stdout | trim) | length > 0
+  retries: 60
+  delay: 10
+
+- name: app ip fact
+  ansible.builtin.set_fact:
+    app_ip_addr: "{{ app_ip | default(ipq.stdout | trim) }}"
+
+- name: add app VM to in-memory inventory
+  ansible.builtin.add_host:
+    name: "{{ app_name }}"
+    ansible_host: "{{ app_ip_addr }}"
+    ansible_user: root
+    groups: app_vm
+
+- name: wait for ssh
+  ansible.builtin.wait_for:
+    host: "{{ app_ip_addr }}"
+    port: 22
+    timeout: 600
+  delegate_to: localhost
+
+- name: app VM up
+  ansible.builtin.debug:
+    msg: "pentrain-app VM {{ app_vmid }} at {{ app_ip_addr }}"

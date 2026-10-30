@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# pentrain — operator CLI for the platform.
+# doctor | up | down | logs | sync-packs | engine-status | pack-lint
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+COMPOSE="docker compose -f engine/docker-compose.yml"
+API="${PENTRAIN_API:-http://localhost:8000}"
+
+cmd="${1:-help}"
+shift || true
+
+c() { printf '\033[36m%s\033[0m\n' "$*"; }
+g() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+r() { printf '  \033[31m✗\033[0m %s\n' "$*"; }
+w() { printf '  \033[33m!\033[0m %s\n' "$*"; }
+
+case "$cmd" in
+doctor)
+  c "PenTRAIN doctor — checking environment"
+  rc=0
+
+  command -v docker >/dev/null && g "docker $(docker --version | cut -d' ' -f3 | tr -d ',')" || { r "docker missing"; rc=1; }
+  docker info >/dev/null 2>&1 && g "docker daemon running" || { r "docker daemon not running"; rc=1; }
+  $COMPOSE version >/dev/null 2>&1 && g "compose plugin present" || { r "compose plugin missing"; rc=1; }
+
+  if curl -fsS --max-time 3 "$API/api/health" >/dev/null 2>&1; then
+    g "backend healthy at $API"
+    ST=$(curl -fsS "$API/api/engine/status" 2>/dev/null || echo '{}')
+    echo "$ST" | grep -q '"mode":"mock"' && w "engine in MOCK mode (configure engine.* in Settings)" \
+      || g "engine mode: $(echo "$ST" | grep -o '"mode":"[^"]*"' | cut -d'"' -f4)"
+  else
+    w "backend not reachable at $API (is the stack up? 'pentrain up')"
+  fi
+
+  if command -v backend/.venv/bin/python >/dev/null; then
+    backend/.venv/bin/python scripts/lint_packs.py content/packs >/dev/null 2>&1 \
+      && g "quest packs valid" || { r "quest pack errors — run scripts/lint_packs.py"; rc=1; }
+  fi
+
+  command -v ansible-playbook >/dev/null && g "ansible present (installer ready)" \
+    || w "ansible missing — needed only for bare-metal install"
+  command -v pvesh >/dev/null && g "running on a Proxmox host" \
+    || w "not on Proxmox (fine for dev / app VM)"
+
+  echo; [[ $rc -eq 0 ]] && c "doctor: OK" || c "doctor: issues found"
+  exit $rc
+  ;;
+
+up)      exec $COMPOSE up -d --build "$@" ;;
+down)    exec $COMPOSE down "$@" ;;
+logs)    exec $COMPOSE logs -f --tail=200 "$@" ;;
+build)   exec $COMPOSE build "$@" ;;
+restart) exec $COMPOSE restart "$@" ;;
+
+pack-lint)
+  exec backend/.venv/bin/python scripts/lint_packs.py content/packs ;;
+
+engine-status)
+  curl -fsS "$API/api/engine/status" | python3 -m json.tool ;;
+
+sync-packs)
+  curl -fsS -X POST "$API/api/packs/sync" ;;
+
+install)
+  exec installer/install.sh "$@" ;;
+
+help|--help|-h|"")
+  cat <<'EOF'
+pentrain — platform CLI
+
+  doctor         full environment diagnostic (start here)
+  up|down|logs   manage the docker platform stack
+  build          rebuild images
+  engine-status  show engine health/mode from the backend
+  pack-lint      validate quest packs
+  sync-packs     reload packs into a running backend
+  install        run the Ansible installer (nested|direct)
+
+Dev: make dev   — backend+coach+frontend with MockProvider (no Proxmox)
+EOF
+  ;;
+
+*) echo "unknown command: $cmd"; exec "$0" help ;;
+esac

@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+
+# Data / runtime
+data/
+*.db
+*.sqlite3
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Ansible
+*.retry
+installer/vault.yml
+installer/inventory/local.ini
+installer/.secrets/
+
+# Terraform
+*.tfstate*
+.terraform/

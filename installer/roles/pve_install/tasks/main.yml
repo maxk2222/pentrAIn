@@ -1,0 +1,78 @@
+---
+# Install Proxmox VE INSIDE the engine VM (nested hypervisor).
+# Long-running — apt pulls the full pve stack. Idempotent-ish.
+
+- name: hostname must resolve (pve requires it)
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ ansible_default_ipv4.address }} {{ inventory_hostname }} {{ inventory_hostname.split('.')[0] }}"
+    regexp: "^{{ ansible_default_ipv4.address | regex_escape() }} "
+    state: present
+
+- name: disable enterprise repos (no subscription — use no-subscription repo)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pve-enterprise.list
+    - /etc/apt/sources.list.d/ceph.list
+
+- name: pve no-subscription repo
+  ansible.builtin.apt_repository:
+    repo: "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription"
+    filename: pve-install-repo
+    state: present
+
+- name: pve keyring
+  ansible.builtin.get_url:
+    url: "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg"
+    dest: /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
+    mode: "0644"
+
+- name: dist-upgrade base system (pve needs current debian)
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+  register: dup
+  # dist upgrade inside a nested guest can take a while
+  async: 1800
+  poll: 30
+
+- name: install proxmox-ve
+  ansible.builtin.apt:
+    name: [proxmox-ve, postfix, open-iscsi]
+    state: present
+  register: pve_inst
+  async: 2400
+  poll: 30
+
+- name: remove os-prober (not needed for a hypervisor)
+  ansible.builtin.apt:
+    name: os-prober
+    state: absent
+  ignore_errors: true
+
+- name: reboot after pve install (kernel switch)
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when: pve_inst.changed
+
+- name: verify pve is up
+  ansible.builtin.uri:
+    url: "https://localhost:8006/api2/json/version"
+    validate_certs: false
+    status_code: [200, 401]   # 401 = API up but no auth yet — fine
+  register: pve_api
+  until: pve_api.status is defined
+  retries: 20
+  delay: 15
+
+- name: nested virt sanity inside engine
+  ansible.builtin.command: kvm-ok
+  register: kvmok
+  changed_when: false
+  ignore_errors: true
+
+- name: nested engine ready
+  ansible.builtin.debug:
+    msg: "Proxmox VE up inside engine VM ({{ ansible_default_ipv4.address }})"

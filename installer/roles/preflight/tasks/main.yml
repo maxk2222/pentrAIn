@@ -1,0 +1,103 @@
+---
+# Preflight — runs on the hypervisor for the chosen mode.
+# nested: outer host must support nested virtualization + have resources.
+# direct: host must be Proxmox, and (if it already runs workloads) the
+#         operator must pass --i-know-dedicated.
+
+- name: confirm this is a Proxmox node
+  ansible.builtin.command: pveversion
+  register: pvever
+  changed_when: false
+  failed_when: pvever.rc != 0
+
+- name: nested-virt check (nested mode only — Intel kvm_intel or AMD kvm_amd)
+  when: install_mode == "nested"
+  block:
+    - name: which kvm module?
+      ansible.builtin.shell: |
+        if [ -d /sys/module/kvm_intel ]; then echo kvm_intel
+        elif [ -d /sys/module/kvm_amd ]; then echo kvm_amd
+        else echo none; fi
+      args:
+        executable: /bin/bash
+      register: kvm_mod
+      changed_when: false
+      failed_when: kvm_mod.stdout == "none"
+
+    - name: cpu exposes virt extensions (vmx or svm)
+      ansible.builtin.shell: grep -c -E '(vmx|svm)' /proc/cpuinfo
+      register: virt_count
+      changed_when: false
+      failed_when: (virt_count.stdout | int) < 1
+
+    - name: read nested flag
+      ansible.builtin.slurp:
+        src: "/sys/module/{{ kvm_mod.stdout }}/parameters/nested"
+      register: nested_val
+      failed_when: false
+
+    - name: enable nested if off
+      ansible.builtin.shell: |
+        modprobe -r {{ kvm_mod.stdout }} && modprobe {{ kvm_mod.stdout }} nested=1
+      when:
+        - nested_val.content is defined
+        - (nested_val.content | default('') | b64decode | trim) not in ['Y', '1']
+
+    - name: persist nested across reboots
+      ansible.builtin.copy:
+        dest: "/etc/modprobe.d/kvm-nested.conf"
+        content: "options {{ kvm_mod.stdout }} nested=1\n"
+
+- name: direct mode — dedicated-host safety gate
+  when: install_mode == "direct"
+  block:
+    - name: count existing VMs
+      ansible.builtin.command: qm list
+      register: vmlist
+      changed_when: false
+
+    - name: count existing containers
+      ansible.builtin.command: pct list
+      register: ctlist
+      changed_when: false
+      ignore_errors: true
+
+    - name: compute real workload count (exclude header lines, tolerate empty output)
+      ansible.builtin.set_fact:
+        existing_workloads: >-
+          {{ (vmlist.stdout_lines | default([]) | reject('search', 'VMID') | list | length) +
+             (ctlist.stdout_lines | default([]) | reject('search', 'CTID') | list | length) }}
+
+    - name: require --i-know-dedicated when the host is in use
+      ansible.builtin.fail:
+        msg: >-
+          This Proxmox host already runs {{ existing_workloads }} VM(s)/CT(s).
+          Ludus takes over the host (own users, networks, templates, firewall).
+          Re-run with --i-know-dedicated to confirm this host is dedicated to
+          PenTRAIN, or use --mode nested on a shared host.
+      when: (existing_workloads | int) > 0 and not (i_know_dedicated | bool)
+
+    - name: warn loudly even when acknowledged
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Ludus will manage this host (users, SDN, firewall, templates).
+          You confirmed dedicated usage (--i-know-dedicated).
+      when: (existing_workloads | int) > 0
+
+- name: ssh pubkey for cloud-init must exist on this host
+  ansible.builtin.stat:
+    path: "{{ vm_ssh_pubkey }}"
+  register: vm_pubkey
+  failed_when: not vm_pubkey.stat.exists
+  when: install_mode == "nested"
+
+- name: free RAM check (engine VM needs headroom)
+  ansible.builtin.assert:
+    that:
+      - ansible_memtotal_mb | int >= engine_ram_mb | int + 4096
+    fail_msg: "not enough RAM on hypervisor (need engine_ram_mb + 4GB host reserve)"
+  when: install_mode == "nested"
+
+- name: summary
+  ansible.builtin.debug:
+    msg: "preflight OK — mode={{ install_mode }} on {{ inventory_hostname }}"

@@ -1,0 +1,84 @@
+---
+# PenTRAIN kali agent: shell telemetry + coach tmux channel + qemu guest agent.
+- name: ensure qemu-guest-agent present and running
+  ansible.builtin.apt:
+    name: qemu-guest-agent
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+- name: enable qemu-guest-agent
+  ansible.builtin.service:
+    name: qemu-guest-agent
+    enabled: true
+    state: started
+
+- name: install pentrain dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /opt/pentrain
+    - /etc/pentrain
+    - /var/log/pentrain
+    - /var/spool/pentrain
+
+- name: install telemetried
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: telemetried.py, dest: /opt/pentrain/telemetried.py, mode: "0755" }
+    - { src: hook.sh, dest: /etc/pentrain/hook.sh, mode: "0644" }
+    - { src: pentrain-telemetried.service, dest: /etc/systemd/system/pentrain-telemetried.service, mode: "0644" }
+
+- name: default telemetried config (overwritten by backend at deploy)
+  ansible.builtin.copy:
+    dest: /etc/pentrain/telemetried.conf
+    content: "TOKEN=\nSESSION=\nAPI=http://pentrain-app:8000\n"
+    mode: "0640"
+
+- name: source telemetry hook in bash
+  ansible.builtin.lineinfile:
+    path: /etc/bash.bashrc
+    line: "[ -f /etc/pentrain/hook.sh ] && . /etc/pentrain/hook.sh"
+    create: true
+
+- name: source telemetry hook in zsh (kali default shell)
+  ansible.builtin.lineinfile:
+    path: /etc/zsh/zshrc
+    line: "[ -f /etc/pentrain/hook.sh ] && source /etc/pentrain/hook.sh"
+    create: true
+  ignore_errors: true
+
+- name: enable + start telemetried
+  ansible.builtin.systemd:
+    name: pentrain-telemetried
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: ensure tmux installed (coach takeover channel)
+  ansible.builtin.apt:
+    name: tmux
+    state: present
+
+- name: autostart coach tmux on desktop login (visible agent actions)
+  ansible.builtin.copy:
+    dest: /etc/xdg/autostart/pentrain-coach.desktop
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=PenTRAIN Coach Terminal
+      Exec=xfce4-terminal --title="pentrain-coach" -e "tmux new-session -A -s pentrain-coach"
+      X-GNOME-Autostart-enabled=true
+    mode: "0644"
+
+- name: pentrain motd
+  ansible.builtin.copy:
+    dest: /etc/motd
+    content: |
+      PenTRAIN attack box — telemetry active.
+      Your AI coach observes commands and may act in the 'pentrain-coach' tmux session.

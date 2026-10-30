@@ -1,0 +1,81 @@
+---
+# Linux T2 quest — layered misconfigs: leaked creds, sudo find, writable cron.
+# Privesc requires chaining: enumerate → creds → sudo -l → GTFOBins OR cron.
+- name: create ops user (password leaked in a world-readable note)
+  ansible.builtin.user:
+    name: ops
+    password: "{{ 'Summer2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/ops
+    create_home: true
+
+- name: ops home
+  ansible.builtin.file:
+    path: /home/ops
+    owner: ops
+    group: ops
+    mode: "0750"
+
+- name: leaked credentials note
+  ansible.builtin.copy:
+    dest: /etc/backup/restore-notes.txt
+    content: |
+      Restore procedure (DRAFT)
+      --------------------------
+      1. log in as ops / Summer2024!
+      2. restore /srv/backup with rsync
+      3. check cron status: sudo -l  (ops can run find as root for file checks)
+    mode: "0644"
+    mtime: preserve
+
+- name: /etc/backup dir
+  ansible.builtin.file:
+    path: /etc/backup
+    state: directory
+    mode: "0755"
+
+- name: sudo misconfig — ops may run find as root (find . -exec privesc)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-ops-find
+    content: "ops ALL=(root) NOPASSWD: /usr/bin/find\n"
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: world-writable cron script — alternative privesc path (misconfig)
+  ansible.builtin.copy:
+    dest: /opt/maintenance/cleanup.sh
+    content: |
+      #!/bin/bash
+      # nightly cleanup — runs as root, DO NOT break
+      find /var/tmp -mtime +7 -delete
+    mode: "0777"
+    owner: root
+    group: root
+
+- name: maintenance dir
+  ansible.builtin.file:
+    path: /opt/maintenance
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: cron entry running the root-owned-but-dir-writable script
+  ansible.builtin.cron:
+    name: nightly cleanup
+    minute: "*/2"
+    job: /opt/maintenance/cleanup.sh
+    user: root
+
+- name: ensure openssh-server + password auth
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: enable password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

@@ -1,0 +1,50 @@
+---
+# PenTRAIN installer — two modes:
+#   nested: outer_pve → engine VM → Proxmox inside → Ludus + app VM inside
+#   direct: direct_pve host IS the engine → Ludus + app VM on it
+#
+# Usage: ./install.sh --mode nested|direct [extra ansible args]
+
+# ---------- stage 0: preflight ----------
+- name: "preflight: hypervisor checks"
+  hosts: "{{ 'outer_pve' if install_mode == 'nested' else 'direct_pve' }}"
+  gather_facts: true
+  roles:
+    - role: preflight
+
+# ---------- stage 1: engine (nested only) ----------
+- name: "nested: create engine VM on outer PVE"
+  hosts: outer_pve
+  gather_facts: false
+  roles:
+    - role: nested_engine_vm
+      when: install_mode == "nested"
+
+# ---------- stage 2: engine OS (nested only) ----------
+- name: "nested: install Proxmox inside the engine VM"
+  hosts: engine_vm
+  gather_facts: true
+  roles:
+    - role: pve_install
+      when: install_mode == "nested"
+
+# ---------- stage 3: ludus on the engine ----------
+- name: "install + configure Ludus"
+  hosts: "{{ 'engine_vm' if install_mode == 'nested' else 'direct_pve' }}"
+  gather_facts: true
+  roles:
+    - role: ludus_setup
+
+# ---------- stage 4: app VM inside the engine ----------
+- name: "create the pentrain-app VM"
+  hosts: "{{ 'engine_vm' if install_mode == 'nested' else 'direct_pve' }}"
+  gather_facts: true
+  roles:
+    - role: app_vm
+
+# ---------- stage 5: platform stack ----------
+- name: "deploy PenTRAIN platform into the app VM"
+  hosts: app_vm
+  gather_facts: true
+  roles:
+    - role: platform

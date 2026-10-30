@@ -1,0 +1,54 @@
+---
+# Linux T3 (pivot) — web tier: nginx + an app config that leaks dbadm creds.
+# The db host is the same range subnet with last octet .22 (quest topology).
+- name: install nginx + a minimal web app placeholder
+  ansible.builtin.apt:
+    name: [nginx, curl]
+    state: present
+    update_cache: true
+
+- name: compute db host (same subnet, .22)
+  ansible.builtin.set_fact:
+    pentrain_db_host: >-
+      {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.22
+
+- name: app landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: |
+      <html><body><h1>intranet-web</h1>
+      <p>HR portal backend: see /etc/intranet/config.ini</p></body></html>
+    mode: "0644"
+
+- name: leaked app config with dbadm credentials
+  ansible.builtin.copy:
+    dest: /etc/intranet/config.ini
+    content: |
+      [app]
+      name = intranet-web
+
+      [database]
+      host = {{ pentrain_db_host }}
+      user = dbadm
+      # ops shared these with the web team — vault migration pending
+      ssh_user = dbadm
+      ssh_pass = PivotOn24!
+    mode: "0644"
+
+- name: /etc/intranet dir
+  ansible.builtin.file:
+    path: /etc/intranet
+    state: directory
+    mode: "0755"
+
+- name: ensure openssh-server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+
+- name: enable password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd

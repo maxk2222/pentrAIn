@@ -1,0 +1,30 @@
+# PenTRAIN installer inventory — copy to inventory.yml and fill in.
+#
+# Two modes:
+#   nested — create an engine VM on `outer_pve`, install Proxmox inside it.
+#   direct — use `direct_pve` itself as the engine (dedicated host only!).
+#
+# SSH access as root (or a sudo user) is required on the hypervisor host(s).
+
+all:
+  children:
+    outer_pve:                    # nested mode only — your existing home server
+      hosts:
+        hypervisor:
+          ansible_host: 192.168.1.10
+          ansible_user: root
+          # ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+
+    direct_pve:                   # direct mode only — dedicated Proxmox host
+      hosts:
+        engine:
+          ansible_host: 192.168.1.20
+          ansible_user: root
+
+    engine_vm:                    # populated by install.sh at runtime
+      hosts: {}
+      vars: {}
+
+    app_vm:
+      hosts: {}
+      vars: {}

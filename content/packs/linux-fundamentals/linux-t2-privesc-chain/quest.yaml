@@ -1,0 +1,75 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: linux-t2-privesc-chain
+  track: linux-fundamentals
+  tier: 2
+  title: "Privilege Chains"
+  version: 1
+display:
+  tagline: "Leaked creds, a sudo GTFOBins path, and a writable cron script — pick your route."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 8
+    cpus: 4
+  vms:
+    - name: server01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 22
+      roles: [pentrain_linux_t2]
+flags:
+  - id: user-flag
+    name: "User flag — /home/ops/user.txt"
+    kind: file
+    points: 150
+    vm: server01
+    file_path: /home/ops/user.txt
+  - id: root-flag
+    name: "Root flag — /root/root.txt"
+    kind: file
+    points: 250
+    vm: server01
+    file_path: /root/root.txt
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Filesystem enumeration pays: look for notes under /etc mentioning backups or restores."
+  - id: h2
+    cost: 40
+    stage: privesc
+    text: "ops can sudo /usr/bin/find. GTFOBins 'find' — use -exec to run a shell as root."
+  - id: h3
+    cost: 50
+    stage: privesc
+    text: "If sudo is noisy, check /opt/maintenance/cleanup.sh — a root cron job runs it and the file is world-writable."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Found the leaked credentials"
+      detect: { command_match: "(restore-notes|backup|Summer2024)" }
+      hint_after_s: 600
+    - id: cp-ssh
+      name: "Logged in as ops"
+      detect: { command_match: "ssh ops@" }
+      hint_after_s: 600
+    - id: cp-sudo
+      name: "Identified the privesc primitive"
+      detect: { command_match: "(sudo -l|gtfobins|cleanup.sh)" }
+      hint_after_s: 480
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1200
+  takeover_cost: 150

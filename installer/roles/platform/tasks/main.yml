@@ -1,0 +1,94 @@
+---
+# Deploy the PenTRAIN platform inside the app VM: docker + compose stack.
+
+- name: install docker
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, git]
+    state: present
+    update_cache: true
+
+- name: docker key + repo
+  ansible.builtin.apt_key:
+    url: https://download.docker.com/linux/debian/gpg
+    keyring: /usr/share/keyrings/docker.gpg
+    state: present
+
+- name: docker repo
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+    filename: docker
+    state: present
+
+- name: docker engine + compose
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+    state: present
+    update_cache: true
+
+- name: docker running
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: push the platform checkout (local copy — no git needed in the VM)
+  ansible.builtin.synchronize:
+    src: "{{ playbook_dir }}/../"
+    dest: /opt/pentrain/
+    recursive: true
+    delete: true
+    rsync_opts:
+      - "--exclude=node_modules"
+      - "--exclude=.venv"
+      - "--exclude=__pycache__"
+      - "--exclude=dist"
+      - "--exclude=.git"
+  register: sync
+  when: pentrain_local_copy | bool
+
+- name: or clone the repo when pentrain_local_copy is false
+  ansible.builtin.git:
+    repo: "{{ pentrain_repo }}"
+    dest: /opt/pentrain
+    version: "{{ pentrain_repo_ref }}"
+  when: not (pentrain_local_copy | bool)
+
+- name: ensure local secrets dir exists (persists generated passwords across reruns)
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/.secrets"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: platform env file
+  ansible.builtin.template:
+    src: pentrain.env.j2
+    dest: /opt/pentrain/engine/.env
+    mode: "0640"
+
+- name: compose up
+  ansible.builtin.command: docker compose -f /opt/pentrain/engine/docker-compose.yml up -d --build
+  args:
+    chdir: /opt/pentrain/engine
+  register: compose
+  changed_when: compose.rc == 0
+  async: 1800
+  poll: 30
+
+- name: health check
+  ansible.builtin.uri:
+    url: "http://localhost:{{ platform_http_port }}/api/health"
+    status_code: 200
+  register: hc
+  until: hc.status == 200
+  retries: 30
+  delay: 10
+  ignore_errors: true
+
+- name: done
+  ansible.builtin.debug:
+    msg: >-
+      PenTRAIN platform up at http://{{ app_ip_addr | default(inventory_hostname) }}:{{ platform_http_port }}.
+      Open it in a browser — the setup wizard will configure the engine + LLM.
