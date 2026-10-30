@@ -219,6 +219,17 @@ async def test_full_session_lifecycle_mock(db_with_packs):
     assert s.state == "aborted"
 
 
+async def test_check_flag_rejects_noncommand_flag(db_with_packs):
+    """check_flag on a file-kind flag surfaces the real reason, not 'None'."""
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    await sessions_svc.activate(db, s.id)
+    with pytest.raises(sessions_svc.SessionError, match="not a command flag"):
+        await sessions_svc.check_flag(db, s.id, "user-flag")
+    await sessions_svc.abort(db, s.id)
+
+
 async def test_soft_reset_regenerates_secrets(db_with_packs):
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")

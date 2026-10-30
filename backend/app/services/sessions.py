@@ -303,8 +303,8 @@ async def check_flag(db: AsyncSession, session_id: int, flag_key: str) -> dict:
         raise SessionError("session not active")
     engine = await get_engine(db)
     result = await flags_svc.check_and_record_flag(db, engine, session, flag_key)
-    if result.pop("error", None):
-        raise SessionError(result.get("error"))
+    if err := result.pop("error", None):
+        raise SessionError(err)
     await _broadcast(session_id, "flag", result)
     if result["all_solved"]:
         await _set_state(db, session, SessionState.SOLVED,
