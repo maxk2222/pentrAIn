@@ -29,9 +29,10 @@
     line: "PasswordAuthentication yes"
   notify: restart sshd
 
-- name: app source IP on the range /24
+- name: source IPs on the range /24 (app hop + router)
   ansible.builtin.set_fact:
     app_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.32"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
 
 - name: nftables — accept only from app01
   ansible.builtin.copy:
@@ -45,6 +46,8 @@
           iif lo accept
           ct state established,related accept
           ip saddr {{ app_ip }} accept
+          # range router/ansible channel — not a trainee pivot path
+          ip saddr {{ router_ip }} accept
           counter drop
         }
         chain forward { type filter hook forward priority 0; policy accept; }

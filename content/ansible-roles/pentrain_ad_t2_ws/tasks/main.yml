@@ -20,6 +20,6 @@
     members: ["CORP\\wuser"]
     state: present
   register: grp
-  retries: 12
+  retries: 30
   delay: 10
   until: grp is not failed   # dc01's role may still be creating the account

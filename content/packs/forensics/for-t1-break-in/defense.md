@@ -6,8 +6,9 @@
   `Accepted password` — the credentials were weak (`ops/ops123`).
 - **Stash**: dropped tools and the flag under `/tmp/.x11-cache/` — a
   dot-directory chosen to blend in.
-- **Persistence**: a cron job `/etc/cron.d/.sysupdate` running
-  `/tmp/.x11-cache/upd` every 10 minutes.
+- **Persistence**: a cron job `/etc/cron.d/sysupdate` running
+  `/tmp/.x11-cache/upd` every 10 minutes (a dot-prefixed name would be
+  skipped by cron — the attacker knew better).
 
 ## Detection lessons
 

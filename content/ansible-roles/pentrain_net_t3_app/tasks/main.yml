@@ -32,9 +32,10 @@
     owner: appadm
     mode: "0600"
 
-- name: dmz source IP on the range /24
+- name: source IPs on the range /24 (dmz hop + router)
   ansible.builtin.set_fact:
     dmz_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.31"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
 
 - name: nftables — accept only from dmz01
   ansible.builtin.copy:
@@ -48,6 +49,8 @@
           iif lo accept
           ct state established,related accept
           ip saddr {{ dmz_ip }} accept
+          # range router/ansible channel — not a trainee pivot path
+          ip saddr {{ router_ip }} accept
           counter drop
         }
         chain forward { type filter hook forward priority 0; policy accept; }

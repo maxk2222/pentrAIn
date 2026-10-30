@@ -51,7 +51,7 @@ hints:
   - id: h3
     cost: 50
     stage: post
-    text: "Persistence lives in cron: ls /etc/cron.d/ — the .sysupdate job hides a second flag file next to itself."
+    text: "Persistence lives in cron: ls /etc/cron.d/ — the sysupdate job drops connections; a hidden flag file sits next to it."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

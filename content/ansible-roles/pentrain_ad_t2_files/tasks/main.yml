@@ -27,6 +27,8 @@
     path: /etc/samba/smb.conf
     marker: "# {mark} PENTRAIN AD-T2"
     block: |
+      [global]
+        map to guest = Bad User
       [share]
         path = /srv/share
         guest ok = yes

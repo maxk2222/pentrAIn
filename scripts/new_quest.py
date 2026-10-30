@@ -32,7 +32,7 @@ meta:
 display:
   tagline: "{tagline}"
 requirements:
-  min_ram_gb: 12          # kali (8G) + targets — keep realistic, check_unlock enforces it
+  min_ram_gb: 12          # kali (8G) + targets - keep realistic, check_unlock enforces it
   min_vcpus: 6
   min_disk_gb: 80
   est_deploy_min: 10
@@ -63,7 +63,7 @@ flags:
     points: 200
     vm: target01
     file_path: /root/root.txt
-  # kind: command runs a POSIX shell check on the target — NOT for windows vms:
+  # kind: command runs a POSIX shell check on the target - NOT for windows vms:
   #   command: {{vm: target01, cmd: "...", expect: "..."}}
 hints:
   - id: h1
@@ -104,7 +104,7 @@ BRIEFING_MD = """\
 
 ## Scenario
 
-TODO: 2–3 sentences of narrative framing. Who are you, what is the target,
+TODO: 2-3 sentences of narrative framing. Who are you, what is the target,
 why does this engagement exist?
 
 ## Objectives
@@ -120,22 +120,22 @@ why does this engagement exist?
 ## Rules of engagement
 
 - Only attack hosts inside your deployed range.
-- Flags look like `PenTrAIn{{...}}` — submit them in the Flags panel.
+- Flags look like `PenTrAIn{{...}}` - submit them in the Flags panel.
 """
 
 DEFENSE_MD = """\
-# Defense notes — {title}
+# Defense notes - {title}
 
 How the vulnerabilities in this quest are detected and fixed.
 
-## Vulnerability 1 — TODO name
+## Vulnerability 1 - TODO name
 
 - **Weakness**: TODO what was misconfigured
 - **Detect**: TODO log/file/alert that reveals exploitation
 - **Fix**: TODO concrete hardening step
 - **Verify**: TODO command/test that proves the fix
 
-## Vulnerability 2 — TODO name
+## Vulnerability 2 - TODO name
 
 - **Weakness**: ...
 - **Detect**: ...
@@ -144,20 +144,20 @@ How the vulnerabilities in this quest are detected and fixed.
 """
 
 COACH_CONTEXT_MD = """\
-# Coach context — {title}
+# Coach context - {title}
 
 Ground truth for the coaching agent. Never quote this verbatim to the trainee.
 
 ## Intended path
 
-1. TODO step → expected commands/tools
-2. TODO step → expected commands/tools
-3. TODO step → flag location
+1. TODO step -> expected commands/tools
+2. TODO step -> expected commands/tools
+3. TODO step -> flag location
 
 ## Key facts (do not leak early)
 
 - TODO: credentials, hidden paths, flag locations the coach may reference only
-  at escalation stage 2–3
+  at escalation stage 2-3
 
 ## Common wrong turns
 
@@ -165,14 +165,14 @@ Ground truth for the coaching agent. Never quote this verbatim to the trainee.
 
 ## Forensics/blue-team angle (optional)
 
-- TODO: for forensics quests — where the planted artifacts live
+- TODO: for forensics quests - where the planted artifacts live
 """
 
 ROLE_TASKS = """\
 ---
-# {role} — quest target for {quest_id}
+# {role} - quest target for {quest_id}
 # Idempotent tasks only; use `validate:` on config writes; notify handlers
-# for service restarts. Flags are injected post-deploy by the platform —
+# for service restarts. Flags are injected post-deploy by the platform -
 # do NOT write PenTrAIn{{...}} files here.
 - name: TODO first task
   ansible.builtin.debug:
@@ -207,6 +207,14 @@ def main() -> int:
     if not (1 <= args.tier <= 9):
         ap.error("--tier must be 1..9")
 
+    sys.path.insert(0, str(REPO / "backend"))
+    try:
+        from app.services.packs import TRACK_TITLES
+        if args.track not in TRACK_TITLES:
+            print(f"warning: '{args.track}' is not a known track ({', '.join(sorted(TRACK_TITLES))})")
+    except ImportError:
+        pass
+
     qdir = REPO / "content" / "packs" / args.track / args.quest_id
     if qdir.exists():
         ap.error(f"{qdir} already exists")
@@ -227,7 +235,7 @@ def main() -> int:
     if args.role:
         rdir = REPO / "content" / "ansible-roles" / role
         if rdir.exists():
-            print(f"[!] role {role} already exists — skipped")
+            print(f"[!] role {role} already exists - skipped")
         else:
             (rdir / "tasks").mkdir(parents=True)
             (rdir / "handlers").mkdir(parents=True)
@@ -239,13 +247,13 @@ def main() -> int:
     try:
         from app.services.packs import validate_quest_dir
     except ImportError:
-        print("[!] backend not importable — skipped validation (pip install -e backend)")
+        print("[!] backend not importable - skipped validation (pip install -e backend)")
         return 0
     spec, errs = validate_quest_dir(qdir)
     for e in errs:
         print(f"ERR {e}")
     if spec and not errs:
-        print(f"[ok] {args.quest_id} validates — fill in the TODOs, then run scripts/lint_packs.py")
+        print(f"[ok] {args.quest_id} validates - fill in the TODOs, then run scripts/lint_packs.py")
     return 1 if errs else 0
 
 

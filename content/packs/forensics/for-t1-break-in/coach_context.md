@@ -10,7 +10,8 @@
    `cat /home/ops/.bash_history` → commands show them mkdir'ing
    `/tmp/.x11-cache`, dropping `upd`, writing the cron.
 4. `sudo ls -la /tmp/.x11-cache/` → `flag.txt` → **stash-flag**.
-5. `sudo ls /etc/cron.d/` → `.sysupdate` → the flag file sits beside it:
+5. `sudo ls -la /etc/cron.d/` → `sysupdate` (a valid job — cron skips
+   dot-names) → the flag file sits hidden beside it:
    `/etc/cron.d/.sysupdate-flag` → **persistence-flag**.
 
 ## Key facts (stage 2–3 only)

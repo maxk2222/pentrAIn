@@ -23,9 +23,10 @@
     line: "PasswordAuthentication yes"
   notify: restart sshd
 
-- name: edge source IP on the range /24
+- name: source IPs on the range /24 (edge hop + router)
   ansible.builtin.set_fact:
     edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.21"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
 
 - name: nftables — accept only from edge01, silently drop the rest
   ansible.builtin.copy:
@@ -39,6 +40,8 @@
           iif lo accept
           ct state established,related accept
           ip saddr {{ edge_ip }} accept
+          # range router/ansible channel — not a trainee pivot path
+          ip saddr {{ router_ip }} accept
           counter drop
         }
         chain forward { type filter hook forward priority 0; policy accept; }

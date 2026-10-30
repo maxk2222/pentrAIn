@@ -36,14 +36,15 @@
     owner: www-data
     mode: "0755"
 
-- name: uploads are stored, not served — the flag must be read on the box
+- name: the flag must be read on the box — only flag.txt is denied over HTTP
   ansible.builtin.blockinfile:
     path: /etc/apache2/apache2.conf
-    marker: "# {mark} PENTRAIN FOR-T2 UPLOADS DENY"
+    marker: "# {mark} PENTRAIN FOR-T2 FLAG DENY"
     block: |
-      <Directory /var/www/html/uploads>
+      # uploads stay reachable (evidence!), just not the injected flag
+      <LocationMatch "^/uploads/flag\.txt">
         Require all denied
-      </Directory>
+      </LocationMatch>
   notify: restart apache2
 
 - name: plant webshell
