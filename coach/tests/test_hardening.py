@@ -39,6 +39,7 @@ class RecordingLlm:
     """Fake LlmClient that counts calls."""
     def __init__(self):
         self.calls = 0
+        self.model = "recording"
 
     async def chat(self, messages, **_kw):
         self.calls += 1

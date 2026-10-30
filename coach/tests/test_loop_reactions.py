@@ -17,6 +17,7 @@ class FakeLlm:
         self.calls: list[list[dict]] = []
         self.actions = actions or [{"type": "none"}]
         self.content = content
+        self.model = "fake-llm"
 
     async def chat(self, messages, **kw):
         self.calls.append(messages)
@@ -60,6 +61,9 @@ class FakeClient:
 
     async def update_profile(self, track_levels=None, metrics=None):
         self.profiles.append({"track_levels": track_levels, "metrics": metrics})
+        return {}
+
+    async def report_llm_usage(self, sid, model, kind, usage, latency_ms):
         return {}
 
 

@@ -47,3 +47,4 @@ installer/.secrets/
 # Terraform
 *.tfstate*
 .terraform/
+*.tsbuildinfo

@@ -24,6 +24,26 @@ docker compose -f engine/docker-compose.yml logs -f coach
 Useful signals: `coach attached`, `deploy finished`, `packs synced`,
 `llm call failed`, `event stream dropped, reconnecting`.
 
+## Stats page (`/stats`)
+
+Three panels:
+
+- **Engine host** — CPU/RAM/network/load time series, proxied live from PVE
+  `GET /nodes/{node}/rrddata` (`GET /api/engine/metrics?timeframe=hour|day|week|month`).
+  Mock engine → panel degrades to "unavailable", nothing is stored locally.
+- **Session VMs** — live per-VM gauges (cpu, ram, balloon target) via
+  `GET /api/sessions/{id}/metrics` → `qemu/{vmid}/status/current`, 15s refresh.
+- **Coach LLM usage** — the coach posts a fire-and-forget row per request to
+  `POST /api/coach/llm-usage` (service token); `GET /api/llm/usage?days=N`
+  aggregates tokens/requests/latency per day plus the daily-budget fill level.
+  Rows live in the `llm_usage` table (~200B each, no retention job needed).
+
+Reasoning effort: the Settings dropdown is probed from the endpoint
+(`POST /api/llm/reasoning-efforts` sends an invalid effort and parses the
+"Supported values: …" reply — LM Studio/Qwen report `none,minimal,low,
+medium,high,xhigh`). Endpoints that ignore the field get the union fallback,
+marked "· defaults" in the UI.
+
 ## Common problems
 
 **Coach is silent.**
