@@ -60,10 +60,12 @@ new-quest)
   exec backend/.venv/bin/python scripts/new_quest.py "$@" ;;
 
 engine-status)
-  curl -fsS "$API/api/engine/status" | python3 -m json.tool ;;
+  curl -fsS ${PENTRAIN_TOKEN:+-H "Authorization: Bearer $PENTRAIN_TOKEN"} \
+    "$API/api/engine/status" | python3 -m json.tool ;;
 
 sync-packs)
-  curl -fsS -X POST "$API/api/packs/sync" ;;
+  curl -fsS -X POST ${PENTRAIN_TOKEN:+-H "Authorization: Bearer $PENTRAIN_TOKEN"} \
+    "$API/api/packs/sync" ;;
 
 install)
   exec installer/install.sh "$@" ;;
@@ -80,6 +82,9 @@ pentrain — platform CLI
   new-quest      scaffold a new quest (+role with --role)
   sync-packs     reload packs into a running backend
   install        run the Ansible installer (nested|direct)
+
+engine-status and sync-packs send a bearer token when PENTRAIN_TOKEN is set
+(required once an admin password is configured).
 
 Dev: make dev   — backend+coach+frontend with MockProvider (no Proxmox)
 EOF
