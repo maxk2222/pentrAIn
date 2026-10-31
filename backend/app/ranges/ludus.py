@@ -74,15 +74,42 @@ class LudusProvider:
             await self._req("PUT", "/testing/stop")
         # range config is a YAML file upload, multipart field name "file"
         payload = yaml.safe_dump(config, sort_keys=False).encode()
-        await self._req(
-            "PUT", "/range/config",
-            files={"file": ("range-config.yml", payload, "application/x-yaml")},
-        )
+        try:
+            await self._req(
+                "PUT", "/range/config",
+                files={"file": ("range-config.yml", payload, "application/x-yaml")},
+            )
+        except LudusError as e:
+            # destroy_range deletes the range OBJECT in Ludus 2 — PUT config on a
+            # missing default range 404s. Recreate the range, then retry once.
+            if "404" not in str(e):
+                raise
+            await self._create_range(name)
+            await self._req(
+                "PUT", "/range/config",
+                files={"file": ("range-config.yml", payload, "application/x-yaml")},
+            )
         await self._req("POST", "/range/deploy", json={})
         st = await self.status()
         # Never return `name` — it isn't a ludus rangeID and would poison later
         # status(rangeID=...) filters. "" → subsequent calls use the default range.
         return st.range_id or ""
+
+    async def _create_range(self, name: str) -> None:
+        """POST /api/v2/ranges/create — the first/only range becomes the user's
+        default automatically. rangeID must be a valid proxmox pool name; the
+        ludus API key is `<userID>.<secret>` so the user is derivable."""
+        user = self._api_key.split(".", 1)[0]
+        body: dict[str, Any] = {"rangeID": name, "name": name}
+        if user:
+            body["userID"] = [user]
+        try:
+            await self._req("POST", "/ranges/create", json=body)
+        except LudusError as e:
+            # 409 "already in use" → a range exists; PUT config will land on the
+            # default range — nothing to do.
+            if "409" not in str(e):
+                raise
 
     async def status(self, range_id: str | None = None) -> RangeStatus:
         params = {"userID": range_id} if range_id else {}

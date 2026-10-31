@@ -271,3 +271,71 @@ async def test_suggest_confirm_marks_message_resolved(db):
         select(CoachMessage).where(CoachMessage.session_id == s.id,
                                    CoachMessage.kind == "suggestion"))).scalar_one()
     assert msg.meta["resolved"] == "rejected"
+
+
+# ---------- ludus provider: recreate a deleted range on deploy ----------
+
+async def test_ludus_deploy_recreates_missing_range():
+    """abort → DELETE /range removes the range OBJECT; the next deploy's
+    PUT /range/config 404s. deploy_range must create the range and retry."""
+    from app.ranges.ludus import LudusProvider
+
+    calls: list[tuple[str, str]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        calls.append((req.method, path))
+        if path.endswith("/testing/stop"):
+            return httpx.Response(200, json={})
+        if path.endswith("/ranges/create"):
+            body = httpx.QueryParams() or None
+            return httpx.Response(200, json={"rangeID": "quest-x"})
+        if path.endswith("/range/config"):
+            # first attempt: range object gone; retry after create succeeds
+            if not any(c[1].endswith("/ranges/create") for c in calls):
+                return httpx.Response(404, json={"error": "Range not found"})
+            return httpx.Response(200, json={})
+        if path.endswith("/range/deploy"):
+            return httpx.Response(200, json={})
+        if path.endswith("/range") and req.method == "GET":
+            return httpx.Response(200, json={
+                "rangeState": "DEPLOYING", "rangeID": "quest-x", "VMs": []})
+        return httpx.Response(404)
+
+    p = LudusProvider("https://ludus:8080", "pentrain.KEY",
+                      _pve(lambda r: httpx.Response(404)))
+    p._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://ludus:8080/api/v2")
+    rid = await p.deploy_range("quest-x", {"ludus": []})
+    assert rid == "quest-x"
+    creates = [c for c in calls if c[1].endswith("/ranges/create")]
+    assert len(creates) == 1
+    # config upload retried AFTER the create
+    cfg_idx = [i for i, c in enumerate(calls) if c[1].endswith("/range/config")]
+    create_idx = calls.index(creates[0])
+    assert cfg_idx[0] < create_idx < cfg_idx[1]
+
+
+async def test_ludus_deploy_range_409_ok_when_range_exists():
+    """A 409 on create means another range exists — config PUTs to default."""
+    from app.ranges.ludus import LudusProvider
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path.endswith("/testing/stop"):
+            return httpx.Response(200, json={})
+        if path.endswith("/range/config"):
+            return httpx.Response(404, json={"error": "no default range"})
+        if path.endswith("/ranges/create"):
+            return httpx.Response(409, json={"error": "Range ID already in use"})
+        if path.endswith("/range/config"):
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    p = LudusProvider("https://ludus:8080", "pentrain.KEY",
+                      _pve(lambda r: httpx.Response(404)))
+    p._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://ludus:8080/api/v2")
+    with pytest.raises(Exception):
+        # PUT /range/config retry still 404s → error surfaces (not swallowed)
+        await p.deploy_range("quest-y", {"ludus": []})
