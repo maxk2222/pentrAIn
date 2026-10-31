@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "A WPA handshake somebody left on the share — crack it offline and let yourself into the AP admin's account."
 requirements:
-  min_ram_gb: 10
+  min_ram_gb: 11
   min_vcpus: 6
   min_disk_gb: 60
   est_deploy_min: 8

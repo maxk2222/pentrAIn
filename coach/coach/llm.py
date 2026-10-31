@@ -1,11 +1,9 @@
 """LLM client: any OpenAI-compatible chat endpoint (Ollama /v1, vLLM, LM Studio, gateways).
 
-Responses are asked for as a JSON action list — robust even on abliterated
-fine-tunes with weak native tool-calling support:
+Primary contract is native tool calling (coach/tools.py schemas); endpoints
+without tool support fall back to the JSON action list contract:
   {"actions":[{"type":"send_chat","content":"..."},
-              {"type":"suggest_command","command":"...","why":"..."},
               {"type":"exec_in_kali","command":"..."},
-              {"type":"mark_checkpoint","checkpoint_id":"c1"},
               {"type":"none","reason":"..."}]}
 """
 from __future__ import annotations
@@ -18,11 +16,13 @@ from collections.abc import Awaitable, Callable
 import httpx
 import structlog
 
+from .tools import calls_to_actions
+
 log = structlog.get_logger(__name__)
 
 ALLOWED_ACTIONS = {
     "send_chat", "offer_hint", "suggest_command", "exec_in_kali",
-    "mark_checkpoint", "capture_screen", "none",
+    "submit_flag", "check_flag", "mark_checkpoint", "capture_screen", "none",
 }
 
 
@@ -52,6 +52,7 @@ class LlmClient:
         await self._client.aclose()
 
     async def chat(self, messages: list[dict], *, json_mode: bool = True,
+                   tools: list[dict] | None = None,
                    model: str | None = None,
                    on_delta: Callable[[str], Awaitable[None]] | None = None) -> dict:
         body: dict = {
@@ -67,7 +68,10 @@ class LlmClient:
             body["chat_template_kwargs"] = {"enable_thinking": False}
         elif self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
-        if json_mode:
+        if tools and "no_tools" not in self._compat:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        elif json_mode:
             body["response_format"] = {"type": "json_object"}
         if "fold" in self._compat and len(body["messages"]) > 2:
             body["messages"] = _fold_history(body["messages"])
@@ -82,18 +86,31 @@ class LlmClient:
                 return resp
             # endpoint refused/broke the stream before any token — plain call
         r = await self._client.post("/chat/completions", json=body)
-        for _ in range(2):
+        for _ in range(3):
             if r.status_code < 400:
                 break
-            if json_mode and "response_format" in body:
-                # some endpoints reject response_format — retry without
-                body.pop("response_format", None)
-                self._compat.add("no_response_format")
-            elif r.status_code == 400 and len(body["messages"]) > 2:
+            err = (r.text or "")[:400].lower()
+            structural = any(k in err for k in (
+                "template", "jinja", "user query", "tool_call",
+                "tool role", "message")) and r.status_code == 400
+            if structural and len(body["messages"]) > 2:
                 # exotic chat templates (some MLX builds) require the first
                 # non-system message to be a user turn — an assistant message
                 # earlier in history breaks jinja rendering. Fold history into
                 # the system prompt and retry once.
+                body["messages"] = _fold_history(body["messages"])
+                self._compat.add("fold")
+            elif "tools" in body:
+                # endpoint rejects native tools — drop to the JSON contract
+                body.pop("tools", None)
+                body.pop("tool_choice", None)
+                body["response_format"] = {"type": "json_object"}
+                self._compat.add("no_tools")
+            elif "response_format" in body:
+                # some endpoints reject response_format — retry without
+                body.pop("response_format", None)
+                self._compat.add("no_response_format")
+            elif r.status_code == 400 and len(body["messages"]) > 2:
                 body["messages"] = _fold_history(body["messages"])
                 self._compat.add("fold")
             else:
@@ -103,14 +120,19 @@ class LlmClient:
             raise LlmError(f"llm {r.status_code}: {r.text[:300]}")
         try:
             data = r.json()
-            content = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            content = message.get("content") or ""
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             raise LlmError(f"llm malformed response ({type(e).__name__}): {r.text[:200]}") from e
         usage = data.get("usage") or {}
         if usage:
             self.tokens_used += int(usage.get("total_tokens", 0))
-        return {"content": content, "actions": parse_actions(content), "raw": data,
-                "usage": usage, "latency_ms": int((time.monotonic() - started) * 1000)}
+        calls = message.get("tool_calls") or []
+        actions = (calls_to_actions(message) if calls
+                   else parse_actions(content))
+        return {"content": content, "actions": actions, "tool_calls": calls,
+                "raw": data, "usage": usage,
+                "latency_ms": int((time.monotonic() - started) * 1000)}
 
     async def _chat_stream(self, body: dict,
                            on_delta: Callable[[str], Awaitable[None]]) -> dict | None:
@@ -119,6 +141,7 @@ class LlmClient:
         request); raises LlmError when it broke mid-generation — retrying
         would double-report a turn whose draft is already half-visible."""
         full = ""
+        calls_acc: dict[int, dict] = {}
         usage: dict = {}
         last_pushed = 0
         sbody = dict(body, stream=True,
@@ -142,8 +165,27 @@ class LlmClient:
                     if u := chunk.get("usage"):
                         usage = u
                     choices = chunk.get("choices") or []
-                    piece = (choices[0].get("delta") or {}).get("content") if choices else None
+                    delta = (choices[0].get("delta") or {}) if choices else {}
+                    for tc in delta.get("tool_calls") or []:
+                        acc = calls_acc.setdefault(
+                            int(tc.get("index") or 0),
+                            {"id": None, "type": "function",
+                             "function": {"name": "", "arguments": ""}})
+                        if tc.get("id"):
+                            acc["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            acc["function"]["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            acc["function"]["arguments"] += fn["arguments"]
+                    piece = delta.get("content")
                     if not piece:
+                        # a send_chat tool call streams its chat text inside
+                        # `arguments` — decode it for the live draft
+                        extracted = _stream_send_chat_arg(calls_acc)
+                        if extracted and len(extracted) > last_pushed:
+                            last_pushed = len(extracted)
+                            await on_delta(extracted)
                         continue
                     full += piece
                     extracted = _extract_stream_content(full)
@@ -151,14 +193,17 @@ class LlmClient:
                         last_pushed = len(extracted)
                         await on_delta(extracted)
         except (TimeoutError, httpx.HTTPError, OSError) as e:
-            if full:
+            if full or calls_acc:
                 raise LlmError(f"llm stream broke mid-response: {e}") from e
             return None
-        if not full:
+        calls = [calls_acc[i] for i in sorted(calls_acc)]
+        if not full and not calls:
             return None
         if usage:
             self.tokens_used += int(usage.get("total_tokens", 0))
-        return {"content": full, "actions": parse_actions(full),
+        message = {"content": full, "tool_calls": calls}
+        actions = calls_to_actions(message) if calls else parse_actions(full)
+        return {"content": full, "actions": actions, "tool_calls": calls,
                 "raw": {"usage": usage}}
 
 
@@ -175,9 +220,16 @@ def _fold_history(messages: list[dict]) -> list[dict]:
             system_parts.append(str(content))
         elif role == "user" and m is messages[-1]:
             last_user = m
+        elif role == "tool":
+            history_lines.append(f"Coach tool result: {content}")
         elif role in ("user", "assistant"):
             tag = "Trainee" if role == "user" else "Coach"
-            history_lines.append(f"{tag}: {content}")
+            for call in m.get("tool_calls") or []:
+                fn = call.get("function") or {}
+                history_lines.append(
+                    f"Coach tool call {fn.get('name')}({fn.get('arguments')})")
+            if content:
+                history_lines.append(f"{tag}: {content}")
     if history_lines:
         system_parts.append(
             "CONVERSATION SO FAR (context only — continue from here):\n"
@@ -189,6 +241,18 @@ def _fold_history(messages: list[dict]) -> list[dict]:
 
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/",
             "b": "\b", "f": "\f"}
+
+
+def _stream_send_chat_arg(calls_acc: dict[int, dict]) -> str | None:
+    """While tool_calls stream, the trainee-visible text lives inside the
+    send_chat call's `arguments` JSON — decode the partial `content` value
+    with the same tolerant extractor used for JSON-mode drafts."""
+    for i in sorted(calls_acc):
+        acc = calls_acc[i]
+        if acc["function"]["name"] != "send_chat":
+            continue
+        return _extract_stream_content(acc["function"]["arguments"])
+    return None
 
 
 def _extract_stream_content(raw: str) -> str | None:
@@ -246,7 +310,18 @@ def parse_actions(content: str) -> list[dict]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return [{"type": "send_chat", "content": text[:1500]}]
+        # prose + JSON mix or trailing garbage — decode the first complete
+        # JSON object at any '{' position instead of parroting the raw blob
+        data = None
+        dec = json.JSONDecoder()
+        for m in re.finditer(r"\{", text):
+            try:
+                data, _end = dec.raw_decode(text, m.start())
+                break
+            except json.JSONDecodeError:
+                continue
+        if data is None:
+            return [{"type": "send_chat", "content": text[:1500]}]
     if isinstance(data, dict) and "actions" in data:
         data = data["actions"]
     if isinstance(data, dict):

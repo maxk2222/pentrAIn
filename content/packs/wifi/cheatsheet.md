@@ -34,6 +34,12 @@ wifilab01 (10.x.10.25)
 `sudo` available on the lab user. If interfaces get stuck:
 `sudo iw dev <mon> del` or re-`modprobe` (role handles it).
 
+**Working style.** Prefer one-shot commands (`ssh wifi@wifilab01
+'sudo airodump-ng ...'`) or `scp` captures back to kali for cracking —
+your coach tracks kali-side commands and can't see inside an
+interactive ssh session. Heavy cracking (hashcat) is also faster on
+kali than on the little lab box.
+
 ## The recurring lesson
 
 A crackable PSK is a crackable everything — the lab accounts reuse the

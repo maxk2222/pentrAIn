@@ -62,7 +62,9 @@
 
 - name: ensure tmux installed (coach takeover channel)
   ansible.builtin.apt:
-    name: tmux
+    name:
+      - tmux
+      - sshpass
     state: present
 
 - name: core pentest tooling (must exist — every quest assumes these)
@@ -126,7 +128,8 @@
       [Desktop Entry]
       Type=Application
       Name=pentrAIn Coach Terminal
-      Exec=xfce4-terminal --title="pentrain-coach" -e "tmux new-session -A -s pentrain-coach"
+      # coach execs run as root via qemu-agent → attach to root's session
+      Exec=xfce4-terminal --title="pentrain-coach" -e "sudo tmux attach -t pentrain-coach 2>/dev/null || sudo tmux new-session -s pentrain-coach"
       X-GNOME-Autostart-enabled=true
     mode: "0644"
 

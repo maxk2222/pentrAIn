@@ -13,15 +13,20 @@ from coach.loop import CHAT_DEBOUNCE_S, SessionCoach
 
 
 class FakeLlm:
-    def __init__(self, actions=None, content="ok"):
+    def __init__(self, actions=None, content="ok", tool_calls=None):
         self.calls: list[list[dict]] = []
+        self.kwargs: list[dict] = []
         self.actions = actions or [{"type": "none"}]
         self.content = content
+        self.tool_calls = tool_calls or []
         self.model = "fake-llm"
 
     async def chat(self, messages, **kw):
         self.calls.append(messages)
-        return {"content": self.content, "actions": self.actions, "raw": {"usage": {"total_tokens": 10}}}
+        self.kwargs.append(kw)
+        return {"content": self.content, "actions": self.actions,
+                "tool_calls": self.tool_calls,
+                "raw": {"usage": {"total_tokens": 10}}}
 
     async def close(self): ...
 
@@ -29,6 +34,8 @@ class FakeLlm:
 class FakeClient:
     def __init__(self, ctx=None):
         self.chats: list[dict] = []
+        self.flags: list[str] = []
+        self.flag_checks: list[str] = []
         self.screens = 0
         self.profiles: list[dict] = []
         self.ctx = ctx or {
@@ -54,6 +61,14 @@ class FakeClient:
 
     async def exec_in_kali(self, sid, command):
         return {"out": "ok", "visible": True}
+
+    async def submit_flag(self, sid, value):
+        self.flags.append(value)
+        return {"correct": True, "all_solved": False}
+
+    async def check_flag(self, sid, key):
+        self.flag_checks.append(key)
+        return {"correct": True, "all_solved": False}
 
     async def capture_screen(self, sid):
         self.screens += 1
@@ -447,7 +462,8 @@ async def test_exec_count_only_on_real_exec():
 
 async def test_empty_send_chat_sends_nothing():
     coach, c = _coach()
-    assert await coach._dispatch({"type": "send_chat", "content": "   "}) is False
+    spoke, _ = await coach._dispatch({"type": "send_chat", "content": "   "})
+    assert spoke is False
     assert c.chats == []
 
 

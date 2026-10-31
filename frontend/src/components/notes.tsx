@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, NotebookPen } from "lucide-react";
+import { IconButton } from "@/components/ui";
 
 const keyFor = (sessionId: number) => `pentrain-notes-${sessionId}`;
 
@@ -59,9 +60,8 @@ export function NotesPanel({ sessionId, open, onToggle }: {
         {open && (
           <>
             {saved && <span className="flex items-center gap-0.5 text-[10px] text-success"><Check className="h-3 w-3" /> saved</span>}
-            <button onClick={copy} className="rounded p-0.5 hover:bg-surface-2" title="Copy notes">
-              {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
-            </button>
+            <IconButton size="sm" icon={copied ? Check : Copy} label="Copy notes"
+              onClick={copy} className={copied ? "text-success hover:text-success" : undefined} />
           </>
         )}
       </div>

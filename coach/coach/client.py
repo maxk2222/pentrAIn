@@ -50,6 +50,10 @@ class BackendClient:
     async def config(self) -> dict:
         return await self._get("/api/coach/config")
 
+    async def active_sessions(self) -> list:
+        """Sessions in ready/active state — for the post-restart attach sweep."""
+        return await self._get("/api/coach/active-sessions") or []
+
     async def session_context(self, session_id: int) -> dict:
         return await self._get(f"/api/coach/session/{session_id}/context")
 
@@ -81,6 +85,14 @@ class BackendClient:
     async def exec_in_kali(self, session_id: int, command: str) -> dict:
         return await self._post("/api/coach/exec",
                                 {"session_id": session_id, "command": command})
+
+    async def submit_flag(self, session_id: int, value: str) -> dict:
+        return await self._post("/api/coach/flag",
+                                {"session_id": session_id, "value": value})
+
+    async def check_flag(self, session_id: int, flag_key: str) -> dict:
+        return await self._post("/api/coach/flag-check",
+                                {"session_id": session_id, "flag_key": flag_key})
 
     async def mark_checkpoint(self, session_id: int, checkpoint_id: str) -> dict:
         return await self._post("/api/coach/checkpoint",
@@ -126,8 +138,10 @@ class BackendClient:
                 async with websockets.connect(url, ping_interval=20, max_size=4 * 1024 * 1024) as ws:
                     await log.ainfo("coach subscribed to event stream",
                                     reconnect=not first)
-                    if not first:
-                        yield {"type": "_reconnect"}
+                    # yield on every connect — including the first: the
+                    # service's sweep re-attaches sessions it missed while
+                    # down (or never saw, on fresh boot)
+                    yield {"type": "_reconnect"}
                     first = False
                     async for raw in ws:
                         try:

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import RFB from "@novnc/novnc";
 import { api, wsUrl } from "@/lib/api";
 import { Maximize2, RefreshCw } from "lucide-react";
+import { IconButton } from "@/components/ui";
 
 type Status = "connecting" | "connected" | "disconnected" | "error" | "mock";
 
@@ -76,14 +77,10 @@ export function ConsoleView({ sessionId }: { sessionId: number }) {
           {detail && <span className="truncate text-danger">— {detail}</span>}
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={() => setNonce((n) => n + 1)}
-            className="rounded p-1 text-muted hover:text-foreground cursor-pointer" title="Reconnect">
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-          <button onClick={() => hostRef.current?.requestFullscreen?.()}
-            className="rounded p-1 text-muted hover:text-foreground cursor-pointer" title="Fullscreen">
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
+          <IconButton size="sm" icon={RefreshCw} label="Reconnect"
+            onClick={() => setNonce((n) => n + 1)} />
+          <IconButton size="sm" icon={Maximize2} label="Fullscreen"
+            onClick={() => hostRef.current?.requestFullscreen?.()} />
         </div>
       </div>
 

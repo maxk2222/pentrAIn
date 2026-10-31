@@ -315,3 +315,34 @@ async def test_compile_topology_ludus_format(db_with_packs):
     names = {v["vm_name"] for v in vms}
     assert "{{ range_id }}-kali" in names
     assert "{{ range_id }}-web01" in names and "{{ range_id }}-db01" in names
+
+
+async def test_metrics_history_rejects_bad_timeframe(db_with_packs):
+    from fastapi import HTTPException
+
+    from app.api.routes_sessions import session_metrics_history
+    s = Session(quest_id="linux-t1-first-foothold", state="ready", kali_vmid=100)
+    db_with_packs.add(s)
+    await db_with_packs.commit()
+    with pytest.raises(HTTPException) as ei:
+        await session_metrics_history(s.id, "fortnight", db_with_packs)
+    assert ei.value.status_code == 400
+
+
+async def test_metrics_history_mock_engine(db_with_packs):
+    from app.api.routes_sessions import session_metrics_history
+    s = Session(quest_id="linux-t1-first-foothold", state="ready",
+                kali_vmid=100, target_vmids={"target01": 101})
+    db_with_packs.add(s)
+    await db_with_packs.commit()
+    r = await session_metrics_history(s.id, "hour", db_with_packs)
+    assert r["ok"] is False and r["reason"] == "mock engine" and r["vms"] == []
+
+
+async def test_metrics_history_missing_session(db_with_packs):
+    from fastapi import HTTPException
+
+    from app.api.routes_sessions import session_metrics_history
+    with pytest.raises(HTTPException) as ei:
+        await session_metrics_history(999, "hour", db_with_packs)
+    assert ei.value.status_code == 404

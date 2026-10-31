@@ -183,3 +183,14 @@ export interface LlmUsageDay {
   prompt: number; completion: number; avg_latency_ms: number;
 }
 export interface LlmUsageOut { days: LlmUsageDay[]; budget: number }
+
+export interface VmHistoryRow {
+  time: number; cpu?: number; maxcpu?: number;
+  memused?: number; maxmem?: number; netin?: number; netout?: number;
+}
+export interface SessionVmHistory {
+  name: string; role: string; vmid: number; rows?: VmHistoryRow[]; error?: string;
+}
+export interface SessionMetricsHistory {
+  ok: boolean; timeframe?: string; reason?: string; vms: SessionVmHistory[];
+}

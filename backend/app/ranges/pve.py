@@ -29,13 +29,22 @@ class PveError(RuntimeError):
 
 
 def _b64(raw: Any) -> str:
-    """Decode a base64 guest-agent field; '' on absent/undecodable input."""
+    """Decode a guest-agent field that may be base64 OR plain text.
+
+    PVE versions differ: some agent/exec responses come back base64-encoded,
+    others already decoded. We only treat the value as base64 when it
+    decodes cleanly AND re-encodes to the same string — otherwise pass the
+    raw text through (covers hostnames/paths that are accidentally
+    valid-looking base64 too)."""
     if not isinstance(raw, str) or not raw:
         return ""
     try:
-        return base64.b64decode(raw, validate=True).decode("utf-8", "replace")
+        dec = base64.b64decode(raw, validate=True)
+        if base64.b64encode(dec).decode().rstrip("=") == raw.rstrip("="):
+            return dec.decode("utf-8", "replace")
     except Exception:
-        return ""
+        pass
+    return raw
 
 
 class PveClient:

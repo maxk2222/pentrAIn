@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "A three-host intrusion: entry on the edge, pivot through the app tier, exfil from the DB — assemble the kill chain."
 requirements:
-  min_ram_gb: 16
+  min_ram_gb: 17
   min_vcpus: 8
   min_disk_gb: 120
   est_deploy_min: 15

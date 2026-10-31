@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrainCircuit, Gauge, Package, PlugZap, RefreshCw, Save, Server, Shield } from "lucide-react";
 import { api, type EngineResources, type EngineStatus, type LlmEffortsOut, type LlmModelsOut, type LlmTestOut, type Settings } from "@/lib/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Select, Slider, Switch } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 interface Spec {
   label: string; type: "text" | "int" | "float" | "bool" | "choice" | "password" | "model" | "effort";
@@ -87,19 +88,29 @@ export function SettingsPage() {
     queryFn: () => api.get<EngineStatus>("/api/engine/status"),
   });
   const [draft, setDraft] = useState<Record<string, unknown>>({});
-  const [saved, setSaved] = useState(false);
   const [detectMsg, setDetectMsg] = useState("");
 
   const save = useMutation({
     mutationFn: (updates: Record<string, unknown>) =>
       api.patch<Settings>("/api/settings", { updates }),
     onSuccess: () => {
-      setDraft({}); setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+      setDraft({});
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["engine-status"] });
     },
   });
+
+  // Ctrl/Cmd+S saves the draft instead of opening the browser save dialog
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && Object.keys(draft).length) {
+        e.preventDefault();
+        save.mutate(draft);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [draft, save]);
 
   const sync = useMutation({
     mutationFn: () => api.post("/api/packs/sync"),
@@ -138,9 +149,6 @@ export function SettingsPage() {
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => sync.mutate()} disabled={sync.isPending}>
             <Package className="h-4 w-4" /> {sync.isPending ? "Syncing…" : "Sync quest packs"}
-          </Button>
-          <Button onClick={() => save.mutate(draft)} disabled={!Object.keys(draft).length || save.isPending}>
-            <Save className="h-4 w-4" /> {saved ? "Saved" : "Save changes"}
           </Button>
         </div>
       </div>
@@ -190,6 +198,34 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       ))}
+
+      <UnsavedBar count={Object.keys(draft).length} pending={save.isPending}
+        error={save.isError ? (save.error instanceof Error ? save.error.message : "save failed") : ""}
+        onDiscard={() => setDraft({})} onSave={() => save.mutate(draft)} />
+    </div>
+  );
+}
+
+/** Floating pill that tracks the settings draft — slides up whenever there are
+ *  unsaved changes, sits above the content next to the nav rail. */
+function UnsavedBar({ count, pending, error, onDiscard, onSave }: {
+  count: number; pending: boolean; error: string; onDiscard: () => void; onSave: () => void;
+}) {
+  return (
+    <div className={cn(
+      "fixed bottom-6 left-[calc(50%+7.5rem)] z-40 max-w-[calc(100vw-17rem)] -translate-x-1/2",
+      "flex items-center gap-3 rounded-full border border-primary/40 bg-surface/95 px-4 py-2 shadow-2xl backdrop-blur",
+      "transition-all duration-200",
+      !count && "pointer-events-none translate-y-24 opacity-0")}>
+      <Save className="h-4 w-4 shrink-0 text-primary" />
+      <span className="whitespace-nowrap text-sm">
+        {count} unsaved change{count === 1 ? "" : "s"}
+      </span>
+      {error && <span className="truncate text-xs text-danger">{error}</span>}
+      <Button variant="ghost" size="sm" onClick={onDiscard}>Discard</Button>
+      <Button size="sm" onClick={onSave} disabled={pending}>
+        {pending ? "Saving…" : "Save changes"}
+      </Button>
     </div>
   );
 }

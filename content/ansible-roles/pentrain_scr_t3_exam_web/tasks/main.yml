@@ -21,8 +21,10 @@
       echo "Content-Type: text/plain"
       echo
       Q="${QUERY_STRING#host=}"
+      Q="${Q%%&*}"
+      Q=$(printf '%b' "${Q//%/\\x}")
       echo "== ping $Q =="
-      ping -c1 "$Q" 2>&1 | head -8
+      /bin/bash -c "ping -c1 $Q" 2>&1 | head -8
     mode: "0755"
 
 - name: enable cgi

@@ -129,6 +129,31 @@ async def session_metrics(session_id: int, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "vms": out}
 
 
+@router.get("/sessions/{session_id}/metrics/history")
+async def session_metrics_history(session_id: int, timeframe: str = "hour",
+                                  db: AsyncSession = Depends(get_db)):
+    """RRD time series per session VM — cpu/mem sparklines for the stats page."""
+    if timeframe not in ("hour", "day", "week"):
+        raise HTTPException(400, "invalid timeframe")
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine", "vms": []}
+    vms: list[dict] = [{"name": "kali", "role": "kali", "vmid": s.kali_vmid}] if s.kali_vmid else []
+    vms += [{"name": n, "role": "target", "vmid": v}
+            for n, v in (s.target_vmids or {}).items()]
+    out = []
+    for v in vms:
+        try:
+            rows = await engine.pve.vm_rrddata(v["vmid"], timeframe)
+            out.append({**v, "rows": rows})
+        except Exception as e:
+            out.append({**v, "error": str(e)[:120]})
+    return {"ok": True, "timeframe": timeframe, "vms": out}
+
+
 @router.get("/sessions/{session_id}/console")
 async def console_ticket(session_id: int, db: AsyncSession = Depends(get_db)):
     """Mint a PVE VNC ticket for this session's Kali; the WS proxy consumes the

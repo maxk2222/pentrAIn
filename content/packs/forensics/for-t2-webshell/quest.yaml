@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "Reconstruct a web compromise: SQLi in the access log, a webshell in uploads, an exfil archive in /tmp."
 requirements:
-  min_ram_gb: 10
+  min_ram_gb: 12
   min_vcpus: 6
   min_disk_gb: 80
   est_deploy_min: 10

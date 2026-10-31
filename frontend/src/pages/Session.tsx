@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookOpen, Bot, CheckSquare, FileText, NotebookPen, PanelLeft,
-  PanelRight, Play, RotateCcw, Square,
+  BookOpen, Bot, CheckSquare, FileText, NotebookPen, Play, RotateCcw,
+  RotateCw, Square,
 } from "lucide-react";
 import { api, wsUrl, type Session, type WsEvent } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
-import { Badge, Button, Tabs } from "@/components/ui";
+import { Badge, Button, IconButton, Tabs } from "@/components/ui";
+import { ResizeHandle } from "@/components/resizable";
 import { ConsoleView } from "@/components/console";
 import { ChatPanel } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
@@ -19,22 +20,43 @@ import { cn } from "@/lib/utils";
 
 const TERMINAL = new Set(["solved", "aborted", "failed"]);
 const PANELS_KEY = "pentrain-panels";
+const WIDTHS_KEY = "pentrain-panel-widths";
 
-type Panels = { sheet: boolean; notes: boolean; chat: boolean };
+type Panels = { progress: boolean; sheet: boolean; notes: boolean; chat: boolean };
+type PanelWidths = { progress: number; sheet: number; chat: number };
 
-const PANELS_VERSION = 2; // bump → stored prefs reset to new defaults once
+const PANELS_VERSION = 3; // bump → stored prefs reset to new defaults once
+const WIDTH_DEFAULTS: PanelWidths = { progress: 300, sheet: 340, chat: 380 };
+const WIDTH_MIN = 240, WIDTH_MAX = 720;
 
 function loadPanels(): Panels {
-  const defaults: Panels = { sheet: false, notes: true, chat: false };
+  const defaults: Panels = { progress: true, sheet: false, notes: true, chat: false };
   try {
     const raw = JSON.parse(localStorage.getItem(PANELS_KEY) ?? "{}");
-    if (raw.v !== PANELS_VERSION) return defaults;
-    return { ...defaults, sheet: raw.sheet, notes: raw.notes, chat: raw.chat };
+    // v2+ prefs carry over — keys added later fall back to defaults
+    if (!(raw.v >= 2)) return defaults;
+    for (const k of Object.keys(defaults) as (keyof Panels)[]) {
+      if (typeof raw[k] === "boolean") defaults[k] = raw[k];
+    }
+    return defaults;
   } catch { return defaults; }
 }
 
 function savePanels(p: Panels) {
   localStorage.setItem(PANELS_KEY, JSON.stringify({ v: PANELS_VERSION, ...p }));
+}
+
+const clampWidth = (px: number) => Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(px)));
+
+function loadWidths(): PanelWidths {
+  const w = { ...WIDTH_DEFAULTS };
+  try {
+    const raw = JSON.parse(localStorage.getItem(WIDTHS_KEY) ?? "{}");
+    for (const k of Object.keys(w) as (keyof PanelWidths)[]) {
+      if (typeof raw[k] === "number") w[k] = clampWidth(raw[k]);
+    }
+  } catch { /* fall back to defaults */ }
+  return w;
 }
 
 export function SessionPage() {
@@ -43,10 +65,11 @@ export function SessionPage() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const { setActiveSession } = useAppStore();
-  const [tab, setTab] = useState("chat");
+  const [progressTab, setProgressTab] = useState("objectives");
   const [events, setEvents] = useState<WsEvent[]>([]);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [panels, setPanels] = useState<Panels>(loadPanels);
+  const [widths, setWidths] = useState<PanelWidths>(loadWidths);
   const [unread, setUnread] = useState(0);
   const [lazyAsk, setLazyAsk] = useState<"sheet" | "chat" | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -123,14 +146,23 @@ export function SessionPage() {
   useEffect(() => { if (panels.chat) setUnread(0); }, [panels.chat]);
 
   function togglePanel(key: keyof Panels) {
-    // expanding an assistance panel costs a confirmation — collapsing is free
-    if (!panels[key] && key !== "notes") {
+    // expanding an assistance panel costs a confirmation — collapsing is free,
+    // and progress/notes aren't aids at all so they toggle unconditionally
+    if (!panels[key] && (key === "sheet" || key === "chat")) {
       setLazyAsk(key);
       return;
     }
     setPanels((p) => {
       const next = { ...p, [key]: !p[key] };
       savePanels(next);
+      return next;
+    });
+  }
+
+  function setPanelWidth(key: keyof PanelWidths, px: number) {
+    setWidths((w) => {
+      const next = { ...w, [key]: clampWidth(px) };
+      localStorage.setItem(WIDTHS_KEY, JSON.stringify(next));
       return next;
     });
   }
@@ -175,8 +207,8 @@ export function SessionPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
-        <div className="flex items-center gap-3">
-          <h1 className="font-semibold">{session?.quest_id ?? `session ${sessionId}`}</h1>
+        <div className="flex min-w-0 items-center gap-3">
+          <h1 className="min-w-0 truncate font-semibold">{session?.quest_id ?? `session ${sessionId}`}</h1>
           {state && (
             <Badge variant={
               state === "active" ? "success"
@@ -185,46 +217,71 @@ export function SessionPage() {
               {state}
             </Badge>
           )}
-          {session?.error && <span className="text-xs text-danger">{session.error}</span>}
+          {session?.error && <span className="max-w-48 truncate text-xs text-danger">{session.error}</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {state === "ready" && (
-            <Button size="sm" variant="success" onClick={activate}>
-              <Play className="h-3.5 w-3.5" /> Start hacking
+            <Button size="sm" variant="success" onClick={activate} title="Start hacking">
+              <Play className="h-3.5 w-3.5" /> <span className="hidden lg:inline">Start hacking</span>
             </Button>
           )}
           {consoleReady && (
             <>
-              <Button variant="secondary" size="sm" onClick={() => reset(false)}>
-                <RotateCcw className="h-3.5 w-3.5" /> Soft reset
+              <Button variant="secondary" size="sm" onClick={() => reset(false)}
+                title="Roll back all range VMs to the post-deploy snapshot">
+                <RotateCcw className="h-3.5 w-3.5" /> <span className="hidden lg:inline">Soft reset</span>
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => reset(true)}>
-                Hard reset
+              <Button variant="secondary" size="sm" onClick={() => reset(true)}
+                title="Destroy the range and redeploy from scratch">
+                <RotateCw className="h-3.5 w-3.5" /> <span className="hidden lg:inline">Hard reset</span>
               </Button>
             </>
           )}
-          {state && !TERMINAL.has(state) && (
-            <Button variant="danger" size="sm" onClick={abort}>
-              <Square className="h-3.5 w-3.5" /> End session
-            </Button>
-          )}
-          {state === "solved" && (
-            <Button variant="danger" size="sm" onClick={abort}>
-              <Square className="h-3.5 w-3.5" /> Tear down
-            </Button>
+          {state && state !== "aborted" && state !== "failed" && (
+            <div className="border-l border-border pl-2">
+              <Button variant="danger" size="sm" onClick={abort}
+                title={state === "solved" ? "Tear down the range" : "End session and destroy the range"}>
+                <Square className="h-3.5 w-3.5" />
+                <span className="hidden lg:inline">{state === "solved" ? "Tear down" : "End session"}</span>
+              </Button>
+            </div>
           )}
           <div className="ml-1 flex items-center gap-0.5 border-l border-border pl-2">
-            <PanelToggle icon={PanelLeft} label="Reference sheet"
+            <IconButton icon={CheckSquare} label="Progress"
+              active={panels.progress} onClick={() => togglePanel("progress")} />
+            <IconButton icon={BookOpen} label="Reference sheet"
               active={panels.sheet} onClick={() => togglePanel("sheet")} />
-            <PanelToggle icon={NotebookPen} label="Notes"
+            <IconButton icon={NotebookPen} label="Notes"
               active={panels.notes} onClick={() => togglePanel("notes")} />
-            <PanelToggle icon={PanelRight} label="Coach panel"
-              active={panels.chat} unread={unread} onClick={() => togglePanel("chat")} />
+            <IconButton icon={Bot} label="Coach panel"
+              active={panels.chat} badgeDot={unread > 0} onClick={() => togglePanel("chat")} />
           </div>
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
+        {panels.progress ? (
+          <>
+            <div className="flex shrink-0 flex-col border-r border-border bg-surface"
+              style={{ width: widths.progress }}>
+              <Tabs className="m-2" tabs={[
+                { id: "objectives", label: <span className="flex items-center gap-1"><CheckSquare className="h-3.5 w-3.5" /> Objectives</span> },
+                { id: "log", label: <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> Log</span> },
+              ]} active={progressTab} onChange={setProgressTab} />
+              <div className="min-h-0 flex-1">
+                {progressTab === "objectives" && <ObjectivesPanel sessionId={sessionId} events={events} />}
+                {progressTab === "log" && <DeployLog lines={logLines} state={state} fill />}
+              </div>
+            </div>
+            <ResizeHandle side="left" getWidth={() => widths.progress}
+              onResize={(px) => setPanelWidth("progress", px)}
+              onReset={() => setPanelWidth("progress", WIDTH_DEFAULTS.progress)} />
+          </>
+        ) : (
+          <CollapsedStrip edge="left" icon={CheckSquare} label="Progress"
+            onClick={() => togglePanel("progress")} />
+        )}
+
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
             {consoleReady ? (
@@ -249,27 +306,29 @@ export function SessionPage() {
         </div>
 
         {panels.sheet ? (
-          <div className="w-[340px] shrink-0 border-l border-border">
-            <SheetPanel sessionId={sessionId} events={events} />
-          </div>
+          <>
+            <ResizeHandle side="right" getWidth={() => widths.sheet}
+              onResize={(px) => setPanelWidth("sheet", px)}
+              onReset={() => setPanelWidth("sheet", WIDTH_DEFAULTS.sheet)} />
+            <div className="shrink-0 border-l border-border" style={{ width: widths.sheet }}>
+              <SheetPanel sessionId={sessionId} events={events} />
+            </div>
+          </>
         ) : (
           <CollapsedStrip icon={BookOpen} label="Reference"
             onClick={() => togglePanel("sheet")} />
         )}
 
         {panels.chat ? (
-          <div className="flex w-[380px] shrink-0 flex-col border-l border-border bg-surface">
-            <Tabs className="m-2" tabs={[
-              { id: "chat", label: <span className="flex items-center gap-1"><Bot className="h-3.5 w-3.5" /> Coach</span> },
-              { id: "objectives", label: <span className="flex items-center gap-1"><CheckSquare className="h-3.5 w-3.5" /> Objectives</span> },
-              { id: "log", label: <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> Log</span> },
-            ]} active={tab} onChange={setTab} />
-            <div className="min-h-0 flex-1">
-              {tab === "chat" && <ChatPanel sessionId={sessionId} events={events} />}
-              {tab === "objectives" && <ObjectivesPanel sessionId={sessionId} events={events} />}
-              {tab === "log" && <DeployLog lines={logLines} state={state} fill />}
+          <>
+            <ResizeHandle side="right" getWidth={() => widths.chat}
+              onResize={(px) => setPanelWidth("chat", px)}
+              onReset={() => setPanelWidth("chat", WIDTH_DEFAULTS.chat)} />
+            <div className="flex shrink-0 flex-col border-l border-border bg-surface"
+              style={{ width: widths.chat }}>
+              <ChatPanel sessionId={sessionId} events={events} />
             </div>
-          </div>
+          </>
         ) : (
           <CollapsedStrip icon={Bot} label="Coach" unread={unread}
             onClick={() => togglePanel("chat")} />
@@ -287,25 +346,14 @@ export function SessionPage() {
   );
 }
 
-function PanelToggle({ icon: Icon, label, active, unread, onClick }: {
-  icon: React.ElementType; label: string; active: boolean; unread?: number; onClick: () => void;
-}) {
-  return (
-    <button onClick={onClick} title={`${active ? "Hide" : "Show"} ${label}`}
-      className={cn("relative rounded-md p-1.5 transition-colors cursor-pointer",
-        active ? "text-primary bg-primary/10" : "text-muted hover:bg-surface-2 hover:text-foreground")}>
-      <Icon className="h-4 w-4" />
-      {!!unread && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-accent" />}
-    </button>
-  );
-}
-
-function CollapsedStrip({ icon: Icon, label, unread, onClick }: {
-  icon: React.ElementType; label: string; unread?: number; onClick: () => void;
+function CollapsedStrip({ icon: Icon, label, unread, edge = "right", onClick }: {
+  icon: React.ElementType; label: string; unread?: number;
+  edge?: "left" | "right"; onClick: () => void;
 }) {
   return (
     <button onClick={onClick} title={`Show ${label}`}
-      className="flex w-11 shrink-0 flex-col items-center gap-3 border-l border-border bg-surface py-3 text-muted hover:text-foreground cursor-pointer">
+      className={cn("flex w-11 shrink-0 flex-col items-center gap-3 bg-surface py-3 text-muted hover:text-foreground cursor-pointer",
+        edge === "left" ? "border-r border-border" : "border-l border-border")}>
       <span className="relative">
         <Icon className="h-4 w-4" />
         {!!unread && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-accent" />}

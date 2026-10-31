@@ -64,6 +64,10 @@ class Policy:
 
         # never spam: minimum gap between proactive messages (verbosity-scaled)
         min_gap = max(self.observe_grace_s, 300) * self.gap_factor
+        # takeover is an agent loop — the coach IS the worker; a 5-min gap
+        # between every action makes autonomous solves needlessly slow
+        if st.autonomy_level >= 4:
+            min_gap = min(min_gap, 90)
         if since_nudge < min_gap:
             return PolicyDecision(False, f"nudge cooldown ({int(min_gap - since_nudge)}s left)")
 

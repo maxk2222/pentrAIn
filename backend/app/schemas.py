@@ -178,6 +178,16 @@ class CheckpointIn(BaseModel):
     checkpoint_id: str
 
 
+class CoachFlagIn(BaseModel):
+    session_id: int
+    value: str = Field(max_length=256)
+
+
+class CoachFlagCheckIn(BaseModel):
+    session_id: int
+    flag_key: str = Field(max_length=64)
+
+
 class EngineStatusOut(BaseModel):
     mode: str
     health: dict

@@ -1,65 +1,65 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Cpu, HardDrive, Lock, Star } from "lucide-react";
+import { SearchX } from "lucide-react";
 import { api, type Quest, type Track } from "@/lib/api";
-import { Badge, Card, CardContent, CardHeader, CardTitle, Tabs } from "@/components/ui";
+import { Badge, Input, Tabs } from "@/components/ui";
+import { EmptyState } from "@/components/emptystate";
+import { TrackSection } from "@/components/questtree";
+
+const STATUS_TABS = ["all", "open", "solved", "locked"] as const;
 
 export function LibraryPage() {
   const [params, setParams] = useSearchParams();
   const track = params.get("track") ?? "";
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<string>("all");
   const { data: tracks } = useQuery({ queryKey: ["tracks"], queryFn: () => api.get<Track[]>("/api/tracks") });
-  const { data: quests } = useQuery({
-    queryKey: ["quests", track],
-    queryFn: () => api.get<Quest[]>(`/api/quests${track ? `?track=${track}` : ""}`),
-  });
+  const { data: quests } = useQuery({ queryKey: ["quests"], queryFn: () => api.get<Quest[]>("/api/quests") });
+
+  // filters dim nodes rather than removing them — the tree shape stays visible
+  const dim = (q: Quest): boolean => {
+    const needle = search.trim().toLowerCase();
+    if (needle && !`${q.title} ${q.summary}`.toLowerCase().includes(needle)) return true;
+    if (status === "open" && (q.locked || q.solved)) return true;
+    if (status === "solved" && !q.solved) return true;
+    if (status === "locked" && !q.locked) return true;
+    return false;
+  };
+
+  const shownTracks = (tracks ?? []).filter((t) => !track || t.slug === track);
+  const trackQuests = (slug: string) => (quests ?? []).filter((q) => q.track_slug === slug);
+  const visible = shownTracks.flatMap((t) => trackQuests(t.slug));
+  const allDimmed = visible.length > 0 && visible.every(dim);
 
   return (
     <div className="space-y-5 p-6">
       <h1 className="text-2xl font-bold">Quest Library</h1>
-      <Tabs
-        tabs={[{ id: "", label: "All" }, ...(tracks ?? []).map((t) => ({ id: t.slug, label: t.title }))]}
-        active={track}
-        onChange={(id) => setParams(id ? { track: id } : {})}
-      />
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {(quests ?? []).map((q) => <QuestCard key={q.id} q={q} />)}
-        {!quests?.length && <p className="col-span-full text-sm text-muted">No quests in this selection.</p>}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Tabs
+          tabs={[{ id: "", label: "All" }, ...(tracks ?? []).map((t) => ({ id: t.slug, label: t.title }))]}
+          active={track}
+          onChange={(id) => setParams(id ? { track: id } : {})}
+        />
+        <div className="flex items-center gap-2">
+          <Input className="w-56" placeholder="Search quests…" value={search}
+            onChange={(e) => setSearch(e.target.value)} />
+          <Tabs tabs={STATUS_TABS.map((s) => ({ id: s, label: s }))}
+            active={status} onChange={setStatus} />
+        </div>
       </div>
-    </div>
-  );
-}
 
-function QuestCard({ q }: { q: Quest }) {
-  return (
-    <Link to={`/quests/${q.id}`}>
-      <Card className={`h-full transition-colors ${q.locked ? "opacity-60" : "hover:border-primary/50"}`}>
-        <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-2">
-            <CardTitle className="text-base leading-snug">{q.title}</CardTitle>
-            <span className="flex items-center gap-1.5">
-              {q.exam && <Badge variant="accent">exam</Badge>}
-              <DifficultyBadge tier={q.tier} />
-            </span>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="mb-3 line-clamp-2 text-sm text-muted">{q.summary}</p>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
-            <span className="flex items-center gap-1"><HardDrive className="h-3 w-3" /> {q.requirements.min_ram_gb ?? "?"} GB</span>
-            <span className="flex items-center gap-1"><Cpu className="h-3 w-3" /> {q.requirements.min_vcpus ?? "?"} vCPU</span>
-            {q.best_score != null && (
-              <span className="flex items-center gap-1 text-accent"><Star className="h-3 w-3" /> best {q.best_score}</span>
-            )}
-          </div>
-          <div className="mt-3 flex items-center justify-between">
-            {q.locked
-              ? <span className="flex items-center gap-1 text-xs text-muted"><Lock className="h-3 w-3" /> {q.lock_reason || "Locked"}</span>
-              : <span className="text-xs text-success">Unlocked</span>}
-            {q.solved && <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" /> solved</Badge>}
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
+      {shownTracks.map((t) => (
+        <TrackSection key={t.slug} track={t} quests={trackQuests(t.slug)} dim={dim} />
+      ))}
+      {!visible.length && (
+        <EmptyState icon={SearchX} title="No quests in this selection" />
+      )}
+      {allDimmed && (
+        <EmptyState icon={SearchX} title="No quests match"
+          hint="Clear the search or status filter to see them again." />
+      )}
+    </div>
   );
 }
 

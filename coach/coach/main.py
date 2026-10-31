@@ -57,7 +57,15 @@ class CoachService:
                 for c in list(self.coaches.values()):
                     await c.apply_cfg(self.cfg)
             if ev.get("type") == "_reconnect":
-                # stream dropped — events may have been missed; resync all
+                # stream dropped (or first connect) — events may have been
+                # missed; attach to any live session we don't know yet
+                # (an idle session emits nothing, so without this sweep it
+                # would stay un-coached forever after a service restart)
+                try:
+                    for s in await self.client.active_sessions():
+                        await self._ensure_coach(int(s["id"]))
+                except Exception as e:
+                    await log.awarning("active-session sweep failed", error=str(e))
                 for c in list(self.coaches.values()):
                     await c.resync()
                 continue
@@ -88,6 +96,10 @@ class CoachService:
 
 
 async def amain() -> None:
+    import faulthandler
+    # dump all task stacks every 5 min — if the loop ever wedges, the logs
+    # show exactly which await it's sitting on
+    faulthandler.dump_traceback_later(300, repeat=True)
     svc = CoachService()
     await svc._config(force=True)
     await svc.run()

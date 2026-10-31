@@ -3,7 +3,7 @@ import { BookOpen, Bot, Lightbulb, MessageSquare, Sparkles, Zap } from "lucide-r
 import type { Assistance } from "@/lib/api";
 import { Badge } from "@/components/ui";
 
-const CHIPS = [
+export const AID_CHIPS = [
   { key: "takeovers", icon: Zap, label: "takeover", title: "Coach executed commands in Kali" },
   { key: "hints", icon: Lightbulb, label: "hint", title: "Paid hints revealed" },
   { key: "coach_msgs", icon: MessageSquare, label: "coach", title: "Messages sent to the coach" },
@@ -29,7 +29,7 @@ export function AssistBadges({ attempt: a }: {
   }
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {CHIPS.map(({ key, icon: Icon, label, title }) =>
+      {AID_CHIPS.map(({ key, icon: Icon, label, title }) =>
         vals[key] ? (
           <Badge key={key} variant="outline" title={title}
             className="gap-1 font-normal text-muted">

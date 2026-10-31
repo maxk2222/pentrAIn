@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "Two networks on air: a WPA2 'secure-net' that leaks its PMKID, and something that shouldn't be there at all."
 requirements:
-  min_ram_gb: 10
+  min_ram_gb: 11
   min_vcpus: 6
   min_disk_gb: 60
   est_deploy_min: 8
@@ -63,6 +63,10 @@ hints:
 coach:
   briefing_ref: coach_context.md
   checkpoints:
+    - id: cp-ssh
+      name: "Entered the lab"
+      detect: { command_match: "ssh .*wifi" }
+      hint_after_s: 600
     - id: cp-survey
       name: "Surveyed the airspace"
       detect: { command_match: "(airodump|iw dev|iwlist)" }

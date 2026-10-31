@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
 from ..db import get_db
-from ..models.domain import CoachMessage, LlmUsage, UserProfile
+from ..models.domain import CoachMessage, LlmUsage, Session, SessionState, UserProfile
 from ..schemas import (
     CheckpointIn,
     CoachExecIn,
+    CoachFlagCheckIn,
+    CoachFlagIn,
     CoachMessageIn,
     CoachStreamIn,
     CoachSuggestIn,
@@ -382,6 +384,17 @@ async def coach_context(session_id: int, db: AsyncSession = Depends(get_db)):
     return await coach_bridge.session_context(db, session_id)
 
 
+@coach_router.get("/active-sessions")
+async def coach_active_sessions(db: AsyncSession = Depends(get_db)):
+    """Sessions the coach should attach to (post-restart sweep): anything
+    ready/active — idle sessions emit no events and would stay orphaned."""
+    rows = (await db.execute(
+        select(Session.id, Session.state).where(
+            Session.state.in_([SessionState.READY.value,
+                               SessionState.ACTIVE.value])))).all()
+    return [{"id": r[0], "state": r[1]} for r in rows]
+
+
 @coach_router.post("/message")
 async def coach_message(body: CoachMessageIn, db: AsyncSession = Depends(get_db)):
     msg = await coach_bridge.post_message(
@@ -409,6 +422,16 @@ async def coach_suggest(body: CoachSuggestIn, db: AsyncSession = Depends(get_db)
 @coach_router.post("/exec")
 async def coach_exec(body: CoachExecIn, db: AsyncSession = Depends(get_db)):
     return await coach_bridge.exec_in_kali(db, body.session_id, body.command)
+
+
+@coach_router.post("/flag")
+async def coach_flag(body: CoachFlagIn, db: AsyncSession = Depends(get_db)):
+    return await coach_bridge.submit_flag(db, body.session_id, body.value)
+
+
+@coach_router.post("/flag-check")
+async def coach_flag_check(body: CoachFlagCheckIn, db: AsyncSession = Depends(get_db)):
+    return await coach_bridge.check_flag(db, body.session_id, body.flag_key)
 
 
 @coach_router.post("/checkpoint")
@@ -447,6 +470,7 @@ async def coach_config(db: AsyncSession = Depends(get_db)):
             "daily_token_budget": await settings_svc.get_setting(db, "llm.daily_token_budget", 0),
             "reasoning": await settings_svc.get_setting(db, "llm.reasoning", True),
             "reasoning_effort": await settings_svc.get_setting(db, "llm.reasoning_effort", "medium"),
+            "use_tools": await settings_svc.get_setting(db, "llm.use_tools", True),
         },
         "coach": {
             "enabled": await settings_svc.get_setting(db, "coach.enabled", True),

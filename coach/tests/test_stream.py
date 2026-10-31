@@ -87,6 +87,69 @@ async def test_chat_stream_parses_sse_and_emits_deltas():
     assert llm.tokens_used == 42
 
 
+def _tc(index, *, cid=None, name=None, args=None):
+    """One streamed tool_call delta fragment."""
+    d: dict = {"index": index, "function": {}}
+    if cid:
+        d["id"] = cid
+        d["type"] = "function"
+    if name is not None:
+        d["function"]["name"] = name
+    if args is not None:
+        d["function"]["arguments"] = args
+    return {"choices": [{"delta": {"tool_calls": [d]}}]}
+
+
+async def test_chat_stream_accumulates_tool_calls_across_chunks():
+    """Tool-call arguments arrive as JSON fragments; ids/names appear once."""
+    body = _sse(
+        _tc(0, cid="call_1", name="exec_in_kali", args='{"comma'),
+        _tc(0, args='nd":"id"}'),
+        _tc(1, cid="call_2", name="submit_flag",
+            args='{"value":"pentrAIn{x}"}'),
+        {"choices": [], "usage": {"total_tokens": 9}},
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    llm = LlmClient("http://x", "k", "m")
+    llm._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x")
+    resp = await llm.chat([{"role": "user", "content": "hi"}],
+                          on_delta=lambda c: _noop())
+    assert [a["type"] for a in resp["actions"]] == ["exec_in_kali", "submit_flag"]
+    assert resp["actions"][0]["command"] == "id"
+    assert resp["actions"][1]["value"] == "pentrAIn{x}"
+    assert resp["actions"][0]["_call_id"] == "call_1"
+    assert resp["content"] == "" and resp["usage"]["total_tokens"] == 9
+
+
+async def test_chat_stream_tool_call_drafts_send_chat_args():
+    """While a send_chat call streams, its `arguments.content` feeds the draft."""
+    body = _sse(
+        _tc(0, cid="c1", name="send_chat", args='{"content":"run nm'),
+        _tc(0, args='ap -sV first"}'),
+        {"choices": [], "usage": {}},
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    llm = LlmClient("http://x", "k", "m")
+    llm._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x")
+    deltas: list[str] = []
+    resp = await llm.chat([{"role": "user", "content": "hi"}],
+                          on_delta=lambda c: _noop_delta(deltas, c))
+    assert deltas and deltas[-1] == "run nmap -sV first"
+    assert resp["actions"][0]["type"] == "send_chat"
+
+
+async def _noop(cum): ...
+async def _noop_delta(lst, cum): lst.append(cum)
+
+
 async def test_chat_stream_falls_back_when_refused():
     def handler(req: httpx.Request) -> httpx.Response:
         import json as j

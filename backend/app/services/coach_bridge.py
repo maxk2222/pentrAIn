@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import secrets
 import shlex
 import time
@@ -89,6 +90,11 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             "coach_context": quest.coach_context_md,
             "checkpoints": quest.coach_cfg.get("checkpoints", []) if quest.coach_cfg else [],
             "escalation": quest.coach_cfg.get("escalation", {}) if quest.coach_cfg else {},
+            # real hostnames the trainee can reach — resolve on kali via
+            # range DNS; keeps the model from inventing RFC-5737 IPs
+            "targets": [v.get("name") for v in
+                        ((quest.topology or {}).get("vms") or [])
+                        if v.get("name")],
         },
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
                    "solved": f.key in solved} for f in flags],
@@ -178,6 +184,45 @@ async def exec_in_kali(db: AsyncSession, session_id: int, command: str) -> dict:
         return {"error": str(e), "status": "error"}
 
 
+async def submit_flag(db: AsyncSession, session_id: int, value: str) -> dict:
+    """Coach submits a flag value — TAKEOVER only. Same scoring path as the
+    user endpoint (wrong values count as submissions)."""
+    session = await db.get(Session, session_id)
+    if not session:
+        return {"error": "session not found", "status": "error"}
+    if session.autonomy_level < AutonomyLevel.TAKEOVER.value:
+        await record_action(db, session_id, "submit_flag", {"value": value[:80]},
+                            {"reason": "autonomy too low"}, status="denied")
+        return {"error": "autonomy level too low", "status": "denied"}
+    from . import sessions as sessions_svc  # lazy — sessions imports this module
+    try:
+        res = await sessions_svc.submit_flag(db, session_id, value)
+    except sessions_svc.SessionError as e:
+        return {"error": str(e), "status": "error"}
+    await record_action(db, session_id, "submit_flag", {"value": value[:80]}, res,
+                        status="ok" if res.get("correct") else "error")
+    return {**res, "status": "ok" if res.get("correct") else "error"}
+
+
+async def check_flag(db: AsyncSession, session_id: int, flag_key: str) -> dict:
+    """Coach triggers a server-side command-flag check — TAKEOVER only."""
+    session = await db.get(Session, session_id)
+    if not session:
+        return {"error": "session not found", "status": "error"}
+    if session.autonomy_level < AutonomyLevel.TAKEOVER.value:
+        await record_action(db, session_id, "check_flag", {"flag_key": flag_key},
+                            {"reason": "autonomy too low"}, status="denied")
+        return {"error": "autonomy level too low", "status": "denied"}
+    from . import sessions as sessions_svc
+    try:
+        res = await sessions_svc.check_flag(db, session_id, flag_key)
+    except sessions_svc.SessionError as e:
+        return {"error": str(e), "status": "error"}
+    await record_action(db, session_id, "check_flag", {"flag_key": flag_key}, res,
+                        status="ok" if res.get("correct") else "error")
+    return {**res, "status": "ok" if res.get("correct") else "error"}
+
+
 COACH_TMUX = "pentrain-coach"
 
 
@@ -193,6 +238,13 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     probe = await engine.pve.agent_exec_sh(
         kali_vmid, f"tmux has-session -t {COACH_TMUX}", timeout_s=10)
     if probe.get("exitcode", 1) != 0:
+        # no desktop session (autologin pending / headless boot) — create the
+        # channel detached; a later xfce login attaches to the same session
+        await engine.pve.agent_exec_sh(
+            kali_vmid, f"tmux new-session -d -s {COACH_TMUX}", timeout_s=10)
+        probe = await engine.pve.agent_exec_sh(
+            kali_vmid, f"tmux has-session -t {COACH_TMUX}", timeout_s=10)
+    if probe.get("exitcode", 1) != 0:
         return await engine.pve.agent_exec_sh(kali_vmid, command, timeout_s=timeout_s)
 
     marker = f"PTN{secrets.token_hex(5)}"
@@ -201,18 +253,25 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     await engine.pve.agent_exec_sh(kali_vmid, send, timeout_s=10)
 
     pane_cmd = f"tmux capture-pane -pt {COACH_TMUX} -S -400 2>/dev/null | tail -200"
+    # the typed command itself echoes `; echo PTNxxx:$?` — so plain substring
+    # matching finds the marker BEFORE the command even ran. Only the real
+    # marker *output* line carries a digit after the colon.
+    mline = re.compile(rf"{re.escape(marker)}:(\d+)\s*$")
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         pane = await engine.pve.agent_exec_sh(kali_vmid, pane_cmd, timeout_s=15)
-        text = pane.get("out") or ""
-        if marker in text:
-            lines = text.splitlines()
-            mi = next(i for i in range(len(lines) - 1, -1, -1) if marker in lines[i])
-            tail = lines[mi].rsplit(":", 1)[-1].strip()
-            exitcode = int(tail) if tail.isdigit() else 0
-            # output = pane lines between the echoed command and the marker line
-            anchor = command[:50]
-            start = next((i for i in range(mi - 1, -1, -1) if anchor in lines[i]), mi - 1)
+        lines = (pane.get("out") or "").splitlines()
+        mi = -1
+        for i in range(len(lines) - 1, -1, -1):
+            m = mline.search(lines[i])
+            if m:
+                mi, exitcode = i, int(m.group(1))
+                break
+        if mi >= 0:
+            # slice after the echoed `; echo PTN…` line (last wrapped line of
+            # the typed command); fall back to the line before the marker
+            start = next((i for i in range(mi - 1, -1, -1)
+                          if f"echo {marker}" in lines[i]), mi - 1)
             out = "\n".join(ln for ln in lines[start + 1:mi] if ln.strip())[-4000:]
             return {"out": out, "err": "", "exitcode": exitcode, "visible": True}
         await asyncio.sleep(1.0)

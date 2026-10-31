@@ -44,3 +44,10 @@
 - name: persist firewall rules
   ansible.builtin.command: netfilter-persistent save
   ignore_errors: true
+
+- name: flag dir for vaultadm proof files
+  ansible.builtin.file:
+    path: /home/vaultadm
+    state: directory
+    owner: vaultadm
+    mode: "0755"
