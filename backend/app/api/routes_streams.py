@@ -18,7 +18,7 @@ from ..config import get_config
 from ..db import get_db
 from ..models.domain import CoachMessage
 from ..services import coach_bridge
-from ..services.console import proxy_console
+from ..services.console import proxy_console, proxy_vm_console
 from ..services.events import bus, ephemeral_replay
 from .deps import get_current_user, ws_auth
 
@@ -95,6 +95,15 @@ async def console_ws(websocket: WebSocket, session_id: int,
     if not await ws_auth(websocket, db):
         return
     await proxy_console(db, websocket, session_id)
+
+
+@router.websocket("/api/console/vm/{vmid}")
+async def console_vm_ws(websocket: WebSocket, vmid: int,
+                        db: AsyncSession = Depends(get_db)):
+    """Admin console for a standalone VM (template builder)."""
+    if not await ws_auth(websocket, db):
+        return
+    await proxy_vm_console(db, websocket, vmid)
 
 
 # ---------- user-facing chat REST ----------

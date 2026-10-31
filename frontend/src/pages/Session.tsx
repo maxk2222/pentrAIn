@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen, Bot, CheckSquare, FileText, NotebookPen, Play, RotateCcw,
-  RotateCw, Square,
+  RotateCw, Square, Wifi,
 } from "lucide-react";
 import { api, wsUrl, type Session, type WsEvent } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
@@ -202,6 +202,25 @@ export function SessionPage() {
     nav("/");
   }
 
+  const [netBusy, setNetBusy] = useState(false);
+  const [netMsg, setNetMsg] = useState<string | null>(null);
+  async function toggleInternet() {
+    const want = !session?.kali_internet;
+    setNetBusy(true);
+    setNetMsg(null);
+    try {
+      const r = await api.post<{ enabled: boolean; ip?: string }>(
+        `/api/sessions/${sessionId}/internet`, { enabled: want });
+      setNetMsg(r.enabled && r.ip ? `LAN ${r.ip}` : null);
+      qc.invalidateQueries({ queryKey: ["session", sessionId] });
+      if (r.enabled && r.ip) setTimeout(() => setNetMsg(null), 8000);
+    } catch (e) {
+      setNetMsg(e instanceof Error ? e.message.slice(0, 80) : "toggle failed");
+    } finally {
+      setNetBusy(false);
+    }
+  }
+
   const state = session?.state;
   const consoleReady = state === "ready" || state === "active";
 
@@ -219,6 +238,7 @@ export function SessionPage() {
             </Badge>
           )}
           {session?.error && <span className="max-w-48 truncate text-xs text-danger">{session.error}</span>}
+          {netMsg && <span className="max-w-56 truncate text-xs text-muted">{netMsg}</span>}
           {(state === "deploying" || state === "queued") && session?.created_at && (
             <DeployElapsed since={session.created_at} />
           )}
@@ -259,6 +279,12 @@ export function SessionPage() {
               active={panels.notes} onClick={() => togglePanel("notes")} />
             <IconButton icon={Bot} label="Coach panel"
               active={panels.chat} badgeDot={unread > 0} onClick={() => togglePanel("chat")} />
+            {consoleReady && (
+              <IconButton icon={Wifi} label={netBusy ? "Kali internet: switching…"
+                : `Kali internet: ${session?.kali_internet ? "ON" : "OFF"} — click to ${session?.kali_internet ? "disconnect" : "connect"} (net1 → LAN)`}
+                active={!!session?.kali_internet} disabled={netBusy}
+                onClick={toggleInternet} />
+            )}
           </div>
         </div>
       </div>

@@ -218,8 +218,7 @@ async def test_session_live_mock_engine(db):
 
 async def test_ephemeral_replay_sticky_and_clear():
     """Sticky events replay to late subscribers; done/inactive clears the slot."""
-    from app.services.events import (ephemeral_clear, ephemeral_replay,
-                                     publish_session)
+    from app.services.events import ephemeral_clear, ephemeral_replay, publish_session
     await publish_session(42, "coach_stream",
                           {"draft_id": "d1", "content": "half"}, sticky=True)
     await publish_session(42, "coach_activity",

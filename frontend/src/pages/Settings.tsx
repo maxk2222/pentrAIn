@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BrainCircuit, Gauge, Package, PlugZap, RefreshCw, Save, Server, Shield } from "lucide-react";
+import { BrainCircuit, Gauge, Hammer, MonitorPlay, Package, PlugZap, RefreshCw, Save, Server, Shield } from "lucide-react";
+import { ConsoleView } from "@/components/console";
 import { api, type EngineResources, type EngineStatus, type LlmEffortsOut, type LlmModelsOut, type LlmTestOut, type Settings } from "@/lib/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Select, Slider, Switch } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,24 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
         label: "Host-stats agent URL (optional)", type: "text",
         placeholder: "http://engine:9100",
         help: "pentrain-hoststats on the engine host — CPU temps, GPU, fans for /stats. Empty → derived from the PVE URL.",
+      }],
+    ],
+  },
+  {
+    title: "Kali workspace", icon: Hammer,
+    keys: [
+      ["engine.kali_template", {
+        label: "Custom Kali template", type: "text",
+        placeholder: "empty = per-quest default",
+        help: "Overrides every quest's kali template globally — set automatically by the builder below.",
+      }],
+      ["engine.kali_wan_bridge", {
+        label: "WAN bridge", type: "text", placeholder: "vmbr0",
+        help: "Bridge with real LAN/internet — used for the kali net1 uplink and the builder VM.",
+      }],
+      ["kali.internet_default", {
+        label: "Kali internet on new sessions", type: "bool",
+        help: "Attach a second NIC to the WAN bridge on every new range — toggleable live per session.",
       }],
     ],
   },
@@ -190,6 +209,7 @@ export function SettingsPage() {
               <SettingField key={key} spec={spec} value={get(key)} get={get}
                 onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))} />
             ))}
+            {g.title === "Kali workspace" && <KaliBuilder />}
             {g.title.startsWith("Resource budget") && (
               <div className="flex flex-wrap items-center gap-3 md:col-span-2">
                 <Button variant="secondary" size="sm" onClick={() => detect.mutate()}
@@ -453,6 +473,99 @@ function EffortField({ spec, value, onChange, get }: {
         {!reasoningOn ? "enable reasoning above to pick an effort" :
          source ? `· ${source}` : spec.help}
       </span>
+    </div>
+  );
+}
+
+/** Guided kali template builder: clone → customize in the embedded console →
+ *  finalize converts the VM to a template and wires engine.kali_template. */
+function KaliBuilder() {
+  const qc = useQueryClient();
+  const { data: st, refetch } = useQuery<{ state: string; vmid?: number; name?: string; template?: string }>({
+    queryKey: ["kali-builder"],
+    queryFn: () => api.get("/api/admin/kali-template/status"),
+    refetchInterval: (q) => (q.state.data?.state === "running" || q.state.data?.state === "stopped" ? 5000 : false),
+  });
+  const { data: tpl } = useQuery<{ templates: string[] }>({
+    queryKey: ["kali-templates"],
+    queryFn: () => api.get("/api/admin/kali-template/templates"),
+  });
+  const [base, setBase] = useState("");
+  const [msg, setMsg] = useState("");
+  const [showConsole, setShowConsole] = useState(false);
+
+  const act = useMutation({
+    mutationFn: (body: { path: string; data?: object }) => api.post(body.path, body.data ?? {}),
+    onSuccess: async (_r, body) => {
+      setMsg(body.path.includes("finalize")
+        ? "template ready — engine.kali_template now points at it"
+        : "");
+      qc.invalidateQueries({ queryKey: ["kali-builder"] });
+      qc.invalidateQueries({ queryKey: ["kali-templates"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      await refetch();
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : "action failed"),
+  });
+
+  const bases = tpl?.templates?.length ? tpl.templates : ["kali-x64-desktop-template"];
+  const busy = act.isPending;
+  const vmid = st?.vmid;
+
+  return (
+    <div className="space-y-3 md:col-span-2">
+      <div className="rounded-lg border border-border bg-surface-2/40 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <MonitorPlay className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium">Template builder</span>
+          <Badge variant={st?.state === "running" ? "success" : st?.state === "stopped" ? "warning" : "default"}>
+            {st?.state === "none" || !st?.state ? "idle" : `vm ${vmid} · ${st.state}`}
+          </Badge>
+          {msg && <span className="truncate text-xs text-muted">{msg}</span>}
+        </div>
+
+        {(!st || st.state === "none") && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Select className="max-w-xs" value={base || bases[0]}
+              onChange={(e) => setBase(e.target.value)}>
+              {bases.map((t) => <option key={t} value={t}>{t}</option>)}
+            </Select>
+            <Button size="sm" disabled={busy}
+              onClick={() => { setMsg(""); act.mutate({ path: "/api/admin/kali-template/build", data: { base_template: base || bases[0] } }); }}>
+              <Hammer className="h-4 w-4" /> {busy ? "Cloning…" : "Build custom template"}
+            </Button>
+            <span className="text-xs text-muted">
+              clones the base → gets LAN+internet on the WAN bridge → customize → finalize
+            </span>
+          </div>
+        )}
+
+        {vmid && st?.state !== "none" && (
+          <div className="mt-3 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setShowConsole((s) => !s)}>
+                <MonitorPlay className="h-4 w-4" /> {showConsole ? "Hide console" : "Open console"}
+              </Button>
+              <Button size="sm" variant="success" disabled={busy}
+                onClick={() => { setMsg(""); act.mutate({ path: "/api/admin/kali-template/finalize" }); }}>
+                {busy ? "Converting…" : "Finalize → template"}
+              </Button>
+              <Button size="sm" variant="danger" disabled={busy}
+                onClick={() => { if (confirm("Delete the builder VM without making a template?")) { setMsg(""); act.mutate({ path: "/api/admin/kali-template/abandon" }); } }}>
+                Abandon
+              </Button>
+              <span className="text-xs text-muted">
+                builder <b>{st.name}</b> has internet — install tools, tweak dotfiles, then finalize
+              </span>
+            </div>
+            {showConsole && (
+              <div className="h-[440px] overflow-hidden rounded-lg border border-border">
+                <ConsoleView vmid={vmid} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

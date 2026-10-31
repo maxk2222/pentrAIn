@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models.domain import AssistUse, Flag, FlagSubmission, Session, TelemetryEvent
+from ..models.domain import AssistUse, Flag, FlagSubmission, Quest, Session, TelemetryEvent
 from ..schemas import (
     AssistIn,
     ConfirmActionIn,
@@ -13,6 +13,7 @@ from ..schemas import (
     FlagSubmitIn,
     FlagSubmitOut,
     HintUseIn,
+    InternetIn,
     LeaderboardOut,
     ResetIn,
     SessionFlagsOut,
@@ -21,8 +22,10 @@ from ..schemas import (
 )
 from ..services import console as console_svc
 from ..services import hoststats as hoststats_svc
+from ..services import kali_net as kali_net_svc
 from ..services import scoring as scoring_svc
 from ..services import sessions as sessions_svc
+from ..services import settings as settings_svc
 from ..services.engine import get_engine
 from .deps import get_current_user
 
@@ -33,6 +36,7 @@ def _out(s: Session) -> SessionOut:
     return SessionOut(
         id=s.id, quest_id=s.quest_id, state=s.state, kali_vmid=s.kali_vmid,
         autonomy_level=s.autonomy_level, coach_enabled=s.coach_enabled,
+        kali_internet=bool(s.kali_internet),
         created_at=s.created_at.isoformat() if s.created_at else None,
         ready_at=s.ready_at.isoformat() if s.ready_at else None,
         error=s.error)
@@ -278,6 +282,36 @@ async def abort(session_id: int, db: AsyncSession = Depends(get_db)):
         return _out(await sessions_svc.abort(db, session_id))
     except sessions_svc.SessionError as e:
         raise HTTPException(409, str(e)) from e
+
+
+@router.post("/sessions/{session_id}/internet")
+async def toggle_internet(session_id: int, body: InternetIn,
+                          db: AsyncSession = Depends(get_db)):
+    """Live hot-plug/remove of the kali WAN nic (net1 → wan bridge)."""
+    from ..models.domain import SessionState as _S
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    if not s.kali_vmid or s.state not in (_S.READY.value, _S.ACTIVE.value):
+        raise HTTPException(422, f"kali not ready (state {s.state})")
+    engine = await get_engine(db)
+    bridge = await settings_svc.get_setting(db, "engine.kali_wan_bridge", "vmbr0")
+    try:
+        if body.enabled:
+            quest = await db.get(Quest, s.quest_id)
+            res = await kali_net_svc.apply_kali_internet(
+                engine, s.kali_vmid, bridge,
+                kali_net_svc.target_names_for(quest) if quest else [])
+            s.kali_internet = True
+            await db.commit()
+            return {"enabled": True, "ip": res.get("ip"), "iface": res.get("iface"),
+                    "mock": bool(res.get("mock"))}
+        await kali_net_svc.remove_kali_internet(engine, s.kali_vmid)
+        s.kali_internet = False
+        await db.commit()
+        return {"enabled": False}
+    except Exception as e:
+        raise HTTPException(422, str(e)[:300]) from e
 
 
 @router.post("/sessions/{session_id}/actions/{action_id}/confirm")

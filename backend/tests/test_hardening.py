@@ -211,7 +211,9 @@ async def test_visible_exec_streams_live_output_tail():
                 return {"out": "", "exitcode": 0}
             if "has-session" in cmd:
                 return {"out": "", "exitcode": 0}
-            if "capture-pane" in cmd:
+            # the busy-check capture (`-pt`, no -S window) must NOT consume a
+            # scripted pane — only the real poll loop uses -S -400
+            if "capture-pane" in cmd and "-S -400" in cmd:
                 m = self.marker
                 self.polls += 1
                 if self.polls == 1:

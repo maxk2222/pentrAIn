@@ -76,6 +76,9 @@ class PveClient:
     async def put(self, path: str, **kw) -> Any:
         return await self._req("PUT", path, **kw)
 
+    async def delete(self, path: str, **kw) -> Any:
+        return await self._req("DELETE", path, **kw)
+
     # ---------- status ----------
     async def version(self) -> dict:
         return await self.get("/version")
@@ -150,6 +153,23 @@ class PveClient:
         return ctx
 
     # ---------- guest agent ----------
+    async def agent_ping(self, vmid: int) -> bool:
+        try:
+            await self.post(f"/nodes/{self.creds.node}/qemu/{vmid}/agent/ping")
+            return True
+        except Exception:
+            return False
+
+    async def wait_agent(self, vmid: int, timeout_s: int = 90) -> bool:
+        """Poll guest-ping until the agent answers — snapshot rollbacks leave
+        the VM rebooting and agent calls race ahead of it."""
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        while asyncio.get_event_loop().time() < deadline:
+            if await self.agent_ping(vmid):
+                return True
+            await asyncio.sleep(2.0)
+        return False
+
     async def agent_exec(self, vmid: int, argv: list[str], *, timeout_s: int = 120) -> dict:
         """Run argv in guest via qemu-guest-agent. Returns {'out':..., 'err':..., 'exitcode':...}."""
         data = await self.post(
@@ -189,6 +209,19 @@ class PveClient:
         raw = data.get("content", "") if isinstance(data, dict) else ""
         return base64.b64decode(raw)
 
+    async def agent_file_write(self, vmid: int, path: str, content: str | bytes) -> None:
+        """guest-file-write — the only safe way to ship multi-line scripts into
+        the guest. Passing the same script as a guest-exec arg makes the
+        virtio channel wedge on this host (long args stall exec-status and
+        the channel stays broken until a VM reset)."""
+        payload = content if isinstance(content, str) else content.decode("utf-8", "replace")
+        await self.post(
+            f"/nodes/{self.creds.node}/qemu/{vmid}/agent/file-write",
+            # encode=1: PVE base64-encodes the raw payload for QGA itself —
+            # passing already-encoded content double-encodes it into the file
+            data={"file": path, "content": payload, "encode": "1"},
+        )
+
     # ---------- snapshots / power ----------
     async def snapshot_create(self, vmid: int, name: str, description: str = "pentrain") -> str:
         return await self.post(
@@ -206,6 +239,49 @@ class PveClient:
 
     async def vm_stop(self, vmid: int) -> str:
         return await self.post(f"/nodes/{self.creds.node}/qemu/{vmid}/status/stop")
+
+    async def vm_shutdown(self, vmid: int) -> str:
+        return await self.post(f"/nodes/{self.creds.node}/qemu/{vmid}/status/shutdown")
+
+    async def vm_delete(self, vmid: int) -> str:
+        return await self.delete(f"/nodes/{self.creds.node}/qemu/{vmid}")
+
+    async def vm_config(self, vmid: int) -> dict:
+        return await self.get(f"/nodes/{self.creds.node}/qemu/{vmid}/config")
+
+    async def vm_config_set(self, vmid: int, **params) -> str:
+        """POST /qemu/{vmid}/config — set keys (net1=...) or pass delete="net1"."""
+        return await self.post(
+            f"/nodes/{self.creds.node}/qemu/{vmid}/config", data=params)
+
+    async def vm_clone(self, vmid: int, new_vmid: int, name: str,
+                       *, full: bool = True, timeout_s: int = 900) -> dict:
+        upid = await self.post(
+            f"/nodes/{self.creds.node}/qemu/{vmid}/clone",
+            data={"newid": new_vmid, "name": name, "full": int(full)})
+        return await self.wait_task(upid, timeout_s)
+
+    async def vm_template(self, vmid: int, timeout_s: int = 300) -> dict:
+        upid = await self.post(f"/nodes/{self.creds.node}/qemu/{vmid}/template")
+        return await self.wait_task(upid, timeout_s)
+
+    async def vm_wait_status(self, vmid: int, target: str = "stopped",
+                             timeout_s: int = 180) -> dict:
+        for _ in range(timeout_s * 2):
+            st = await self.vm_status(vmid)
+            if st.get("status") == target:
+                return st
+            await asyncio.sleep(0.5)
+        raise PveError(f"vm {vmid} did not reach status {target}")
+
+    async def next_vmid(self) -> int:
+        return int(await self.get("/cluster/nextid"))
+
+    async def vm_by_name(self, name: str) -> dict | None:
+        for v in await self.cluster_vms():
+            if v.get("name") == name:
+                return v
+        return None
 
     # ---------- tasks ----------
     async def task_status(self, upid: str) -> dict:

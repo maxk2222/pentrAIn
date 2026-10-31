@@ -69,9 +69,14 @@ class SessionOut(BaseModel):
     kali_vmid: int | None
     autonomy_level: int
     coach_enabled: bool
+    kali_internet: bool = False
     created_at: str | None
     ready_at: str | None
     error: str | None = None
+
+
+class InternetIn(BaseModel):
+    enabled: bool
 
 
 class SessionStartIn(BaseModel):

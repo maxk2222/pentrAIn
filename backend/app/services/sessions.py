@@ -30,6 +30,7 @@ from ..ranges.base import RangeState
 from ..ranges.ludus import SNAP_POST_DEPLOY
 from . import coach_bridge
 from . import flags as flags_svc
+from . import kali_net as kali_net_svc
 from . import scoring as scoring_svc
 from . import settings as settings_svc
 from .engine import get_engine
@@ -72,8 +73,11 @@ async def _append_log(db: AsyncSession, session: Session, line: str) -> None:
     await _broadcast(session.id, "deploy_log", {"line": line})
 
 
-def compile_topology(quest: Quest) -> dict:
+def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
     """quest.topology → Ludus range config (subset of Ludus schema we need).
+
+    `kali_template` (engine.kali_template setting) overrides the per-quest
+    template globally — a user's custom build is meant to apply everywhere.
 
     Every VM carries ram_min_gb alongside ram_gb — Ludus maps it to Proxmox
     memory ballooning, so a range squeezed onto a small host still boots and
@@ -85,7 +89,7 @@ def compile_topology(quest: Quest) -> dict:
     vms.append({
         "vm_name": "{{ range_id }}-kali",
         "hostname": "{{ range_id }}-KALI",
-        "template": kali.get("template", "kali-x64-desktop-template"),
+        "template": kali_template or kali.get("template", "kali-x64-desktop-template"),
         "vlan": 10,
         "ip_last_octet": 5,
         "ram_gb": kali.get("ram_gb", 6),
@@ -215,7 +219,10 @@ async def _deploy(session_id: int) -> None:
                 engine = await get_engine(db)
                 await _set_state(db, session, SessionState.DEPLOYING)
                 await _append_log(db, session, "[pentrain] compiling topology → ludus config")
-                config = compile_topology(quest)
+                config = compile_topology(
+                    quest,
+                    kali_template=await settings_svc.get_setting(
+                        db, "engine.kali_template", "") or None)
                 await _append_log(db, session, yaml.safe_dump(config, sort_keys=False).rstrip())
                 session.range_id = await engine.provider.deploy_range(f"quest-{quest.id}", config)
                 await db.commit()
@@ -286,6 +293,23 @@ async def _finalize(db: AsyncSession, engine, session: Session,
     await flags_svc.create_expected_flags(db, session, quest_flags)
     for line in await flags_svc.inject_flags(db, engine, session, quest_flags):
         await _append_log(db, session, f"[pentrain] {line}")
+
+    # kali wan uplink — BEFORE the snapshot so soft reset keeps the net1
+    # config. Non-fatal: a missing DHCP lease must not sink the deploy.
+    want_net = bool(session.kali_internet) or bool(
+        await settings_svc.get_setting(db, "kali.internet_default", False))
+    if want_net and session.kali_vmid:
+        try:
+            res = await kali_net_svc.apply_kali_internet(
+                engine, session.kali_vmid,
+                await settings_svc.get_setting(db, "engine.kali_wan_bridge", "vmbr0"),
+                kali_net_svc.target_names_for(quest))
+            session.kali_internet = True
+            await db.commit()
+            detail = f"{res.get('ip','?')} via {res.get('iface','?')}" if res.get("ip") else "mock"
+            await _append_log(db, session, f"[pentrain] kali internet on ({detail})")
+        except Exception as e:
+            await _append_log(db, session, f"[pentrain] kali internet failed: {e}")
 
     # internet isolation + restore point (allow the app/telemetry endpoint)
     if bool(await settings_svc.get_setting(db, "engine.testing_mode", True)):
@@ -441,6 +465,21 @@ async def _reset(session_id: int, hard: bool) -> None:
                 return
             await _append_log(db, session, "[pentrain] soft reset: snapshot rollback")
             await engine.provider.rollback_all(session.range_id, SNAP_POST_DEPLOY)
+            # rollback restores the snapshot's VM config — re-align net1 with
+            # the session flag (toggle may have changed after the snapshot)
+            if session.kali_vmid:
+                try:
+                    if session.kali_internet:
+                        await kali_net_svc.apply_kali_internet(
+                            engine, session.kali_vmid,
+                            await settings_svc.get_setting(
+                                db, "engine.kali_wan_bridge", "vmbr0"),
+                            kali_net_svc.target_names_for(quest) if quest else [])
+                    else:
+                        await kali_net_svc.remove_kali_internet(
+                            engine, session.kali_vmid)
+                except Exception as e:
+                    await log.awarning("kali internet re-apply failed", error=str(e)[:150])
             # re-randomize flags (old secrets are gone after rollback)
             session.flag_seed = new_seed()
             session.telemetry_token = new_telemetry_token()

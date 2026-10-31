@@ -118,6 +118,10 @@ class MockPveClient:
     def __init__(self):
         self.exec_log: list[tuple[int, list[str]]] = []
         self.files: dict[tuple[int, str], bytes] = {}
+        # fake VM inventory for config/internet/builder calls — mock mode
+        # still exercises the whole feature surface
+        self.configs: dict[int, dict] = {}
+        self.vms: dict[int, dict] = {}
 
     async def close(self) -> None: ...
 
@@ -144,6 +148,8 @@ class MockPveClient:
             return {"out": "", "err": "", "exitcode": 0}
         if "has-session" in cmd:  # no desktop tmux in mock mode → direct exec path
             return {"out": "", "err": "no server running", "exitcode": 1}
+        if "IP=" in cmd or "dhclient" in cmd or "pentrain-netup.sh" in cmd:  # kali_net guest bring-up
+            return {"out": "IP=10.99.0.42/24\nIF=eth1\n", "err": "", "exitcode": 0}
         return {"out": f"[mock] executed: {' '.join(argv)}\n", "err": "", "exitcode": 0}
 
     async def agent_exec_sh(self, vmid: int, shell_cmd: str, *, timeout_s: int = 120) -> dict:
@@ -151,6 +157,11 @@ class MockPveClient:
 
     async def agent_write_file(self, vmid: int, path: str, content: str | bytes) -> None:
         self.files[(vmid, path)] = content.encode() if isinstance(content, str) else content
+
+    async def agent_file_write(self, vmid: int, path: str, content: str | bytes) -> None:
+        # real pve.py ships scripts via guest-file-write (long exec args wedge
+        # the virtio QGA channel) — mirror it so tests observe the same calls
+        await self.agent_write_file(vmid, path, content)
 
     async def agent_file_read(self, vmid: int, path: str) -> bytes:
         return self.files.get((vmid, path), b"[mock] empty\n")
@@ -172,3 +183,66 @@ class MockPveClient:
 
     async def wait_task(self, upid: str, timeout_s: int = 300) -> dict:
         return {"status": "stopped", "exitstatus": "OK"}
+
+    # ---------- vm config / lifecycle (kali internet + template builder) ----------
+    async def vm_config(self, vmid: int) -> dict:
+        return dict(self.configs.setdefault(
+            vmid, {"net0": "virtio=BC:24:11:00:00:01,bridge=vmbr1001,tag=10",
+                   "name": f"mock-vm-{vmid}"}))
+
+    async def vm_config_set(self, vmid: int, **params) -> str:
+        cfg = self.configs.setdefault(vmid, {})
+        for k, v in params.items():
+            if k == "delete":
+                cfg.pop(v, None)
+            else:
+                if "=" not in str(v).split(",")[0]:  # pve fills in the MAC
+                    v = f"virtio=BC:24:11:99:AA:BB,{str(v).split(',', 1)[-1]}"
+                cfg[k] = v
+        return "UPID:mock:config"
+
+    async def vm_status(self, vmid: int) -> dict:
+        return {"status": self.vms.get(vmid, {}).get("status", "stopped")}
+
+    async def agent_ping(self, vmid: int) -> bool:
+        return True
+
+    async def wait_agent(self, vmid: int, timeout_s: int = 90) -> bool:
+        return True
+
+    async def vm_wait_status(self, vmid: int, target: str = "stopped",
+                             timeout_s: int = 180) -> dict:
+        return {"status": target}
+
+    async def vm_shutdown(self, vmid: int) -> str:
+        self.vms.setdefault(vmid, {})["status"] = "stopped"
+        return "UPID:mock:shutdown"
+
+    async def vm_delete(self, vmid: int) -> str:
+        self.vms.pop(vmid, None)
+        self.configs.pop(vmid, None)
+        return "UPID:mock:delete"
+
+    async def vm_clone(self, vmid: int, new_vmid: int, name: str,
+                       *, full: bool = True, timeout_s: int = 900) -> dict:
+        self.vms[new_vmid] = {"name": name, "template": 0, "status": "stopped"}
+        self.configs[new_vmid] = {"name": name,
+                                  "net0": "virtio=BC:24:11:00:00:02,bridge=vmbr1001"}
+        return {"status": "stopped"}
+
+    async def vm_template(self, vmid: int, timeout_s: int = 300) -> dict:
+        self.vms.setdefault(vmid, {})["template"] = 1
+        self.configs.setdefault(vmid, {})["template"] = 1
+        return {"status": "stopped"}
+
+    async def next_vmid(self) -> int:
+        return max(self.vms, default=99) + 1
+
+    async def vm_by_name(self, name: str) -> dict | None:
+        for vmid, v in self.vms.items():
+            if v.get("name") == name:
+                return {"vmid": vmid, **v}
+        return None
+
+    async def cluster_vms(self) -> list[dict]:
+        return [{"vmid": i, **v} for i, v in self.vms.items()]

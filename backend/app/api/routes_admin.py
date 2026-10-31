@@ -27,6 +27,7 @@ from ..schemas import (
     TokenOut,
 )
 from ..services import coach_bridge
+from ..services import console as console_svc
 from ..services import hoststats as hoststats_svc
 from ..services import packs as packs_svc
 from ..services import settings as settings_svc
@@ -713,3 +714,70 @@ async def coach_llm_usage(body: dict, db: AsyncSession = Depends(get_db)):
         latency_ms=int(body.get("latency_ms") or 0),
     ))
     await db.commit()
+
+
+# ---------- kali template builder ----------
+
+@router.get("/admin/console/vm/{vmid}/ticket")
+async def admin_vm_console_ticket(vmid: int, db: AsyncSession = Depends(get_db),
+                                  _=Depends(get_current_user)):
+    """VNC ticket for a standalone VM — pairs with WS /api/console/vm/{vmid}."""
+    result = await console_svc.issue_vm_ticket(db, vmid)
+    if "error" in result:
+        raise HTTPException(409, result["error"])
+    return result
+
+
+
+@router.get("/admin/kali-template/status")
+async def kali_template_status(db: AsyncSession = Depends(get_db),
+                               _=Depends(get_current_user)):
+    from ..services import kalibuild
+    engine = await get_engine(db)
+    return await kalibuild.status(db, engine)
+
+
+@router.get("/admin/kali-template/templates")
+async def kali_template_list(db: AsyncSession = Depends(get_db),
+                             _=Depends(get_current_user)):
+    from ..services import kalibuild
+    engine = await get_engine(db)
+    return {"templates": await kalibuild.list_templates(db, engine)}
+
+
+@router.post("/admin/kali-template/build", status_code=201)
+async def kali_template_build(body: dict, db: AsyncSession = Depends(get_db),
+                              _=Depends(get_current_user)):
+    from ..services import kalibuild
+    engine = await get_engine(db)
+    base = str(body.get("base_template") or
+               await settings_svc.get_setting(db, "engine.kali_template", "")
+               or "kali-x64-desktop-template")
+    try:
+        return await kalibuild.start_build(db, engine, base,
+                                           name=body.get("name") or None)
+    except kalibuild.BuildError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@router.post("/admin/kali-template/finalize")
+async def kali_template_finalize(body: dict, db: AsyncSession = Depends(get_db),
+                                 _=Depends(get_current_user)):
+    from ..services import kalibuild
+    engine = await get_engine(db)
+    try:
+        return await kalibuild.finalize(db, engine,
+                                        template_name=body.get("template_name") or None)
+    except kalibuild.BuildError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@router.post("/admin/kali-template/abandon")
+async def kali_template_abandon(db: AsyncSession = Depends(get_db),
+                                _=Depends(get_current_user)):
+    from ..services import kalibuild
+    engine = await get_engine(db)
+    try:
+        return await kalibuild.abandon(db, engine)
+    except kalibuild.BuildError as e:
+        raise HTTPException(422, str(e)) from e

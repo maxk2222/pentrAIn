@@ -19,10 +19,21 @@ from .engine import get_engine
 
 log = structlog.get_logger(__name__)
 
-# session_id -> {"port": ..., "ticket": ...} stashed by issue_console_ticket,
-# consumed by proxy_console. The browser needs the same ticket as the RFB
-# password that pveproxy expects on the upstream websocket URL.
-_pending: dict[int, dict] = {}
+# session_id (int) or "vm:{vmid}" (str) -> {"port": ..., "ticket": ...} stashed
+# by issue_console_ticket/issue_vm_ticket, consumed by the WS proxy. The browser
+# needs the same ticket as the RFB password pveproxy expects on the upstream URL.
+_pending: dict[int | str, dict] = {}
+
+
+async def _issue(engine, vmid: int, key: int | str) -> dict:
+    try:
+        vnc = await engine.pve.vncproxy(vmid)
+    except Exception as e:
+        return {"error": f"vncproxy failed: {e}"}
+    _pending[key] = {"port": str(vnc["port"]), "ticket": vnc["ticket"]}
+    while len(_pending) > 64:  # stale tickets from abandoned connects — evict oldest
+        _pending.pop(next(iter(_pending)))
+    return {"ticket": vnc["ticket"]}
 
 
 async def issue_console_ticket(db: AsyncSession, session_id: int) -> dict:
@@ -37,14 +48,15 @@ async def issue_console_ticket(db: AsyncSession, session_id: int) -> dict:
         return {"error": "kali vm not ready"}
     if session.state not in (SessionState.READY.value, SessionState.ACTIVE.value):
         return {"error": f"session state {session.state}"}
-    try:
-        vnc = await engine.pve.vncproxy(session.kali_vmid)
-    except Exception as e:
-        return {"error": f"vncproxy failed: {e}"}
-    _pending[session_id] = {"port": str(vnc["port"]), "ticket": vnc["ticket"]}
-    while len(_pending) > 64:  # stale tickets from abandoned connects — evict oldest
-        _pending.pop(next(iter(_pending)))
-    return {"ticket": vnc["ticket"]}
+    return await _issue(engine, session.kali_vmid, session_id)
+
+
+async def issue_vm_ticket(db: AsyncSession, vmid: int) -> dict:
+    """Admin console ticket for an arbitrary VM (template builder)."""
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"mock": True}
+    return await _issue(engine, vmid, f"vm:{vmid}")
 
 
 async def read_guest_clipboard(db: AsyncSession, session_id: int) -> dict:
@@ -74,8 +86,15 @@ async def proxy_console(db: AsyncSession, ws: WebSocket, session_id: int) -> Non
     if not session or not session.kali_vmid:
         await ws.close(code=4404)
         return
-    engine = await get_engine(db)
+    await _proxy_vm(await get_engine(db), ws, session.kali_vmid, session_id)
 
+
+async def proxy_vm_console(db: AsyncSession, ws: WebSocket, vmid: int) -> None:
+    """Admin-scoped console for a standalone VM (template builder)."""
+    await _proxy_vm(await get_engine(db), ws, vmid, f"vm:{vmid}")
+
+
+async def _proxy_vm(engine, ws: WebSocket, vmid: int, key: int | str) -> None:
     if engine.mode == "mock":
         await ws.accept()
         # Mock console: keep the socket alive; UI shows a placeholder.
@@ -88,20 +107,20 @@ async def proxy_console(db: AsyncSession, ws: WebSocket, session_id: int) -> Non
             pass
         return
 
-    creds = _pending.pop(session_id, None)
+    creds = _pending.pop(key, None)
     if not creds:
         # allow direct connect (reconnect without a fresh ticket) — mint one now;
         # the browser's RFB auth will fail if its password differs, so prefer the
         # ticket flow via issue_console_ticket.
         try:
-            vnc = await engine.pve.vncproxy(session.kali_vmid)
+            vnc = await engine.pve.vncproxy(vmid)
             creds = {"port": str(vnc["port"]), "ticket": vnc["ticket"]}
         except Exception as e:
             await log.aerror("vncproxy failed", error=str(e))
             await ws.close(code=4500)
             return
     upstream_url = engine.pve.vnc_websocket_url(
-        session.kali_vmid, creds["port"], creds["ticket"])
+        vmid, creds["port"], creds["ticket"])
 
     await ws.accept()
     try:

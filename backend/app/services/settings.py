@@ -20,6 +20,10 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "engine.hoststats_url": ("", False),            # optional pentrain-hoststats agent; empty → derive from pve_url :9100
     "engine.testing_mode": (True, False),           # cut range internet after deploy
     "engine.testing_allow": ([], False),            # CIDRs allowed while testing (app VM)
+    "engine.kali_template": ("", False),            # custom kali template name — empty = per-quest default
+    "engine.kali_wan_bridge": ("vmbr0", False),     # bridge with real internet for kali net1 + builder VM
+    "kali.internet_default": (False, False),        # attach kali WAN nic on new sessions
+    "kali.builder_vmid": (0, False),                # internal: in-flight template-builder VM
     "platform.api_url": ("http://pentrain-app:8000", False),  # backend URL reachable from ranges
     "resources.max_ram_gb": (48, False),
     "resources.max_vcpus": (16, False),

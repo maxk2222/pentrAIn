@@ -116,6 +116,7 @@ class Session(Base):
     deploy_log: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     coach_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    kali_internet: Mapped[bool] = mapped_column(Boolean, default=False)  # net1→wan bridge attached
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

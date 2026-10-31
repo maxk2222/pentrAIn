@@ -38,7 +38,13 @@ async function typeText(rfb: RFB, text: string, signal: { stop: boolean },
  * Flow: GET /sessions/{id}/console → {ticket} → RFB to /api/console/{id}
  * with the ticket as the VNC password (same mechanism as the PVE web UI).
  */
-export function ConsoleView({ sessionId }: { sessionId: number }) {
+export function ConsoleView({ sessionId, vmid }: { sessionId?: number; vmid?: number }) {
+  // vmid mode = admin console for a standalone VM (template builder); the
+  // session-scoped guest clipboard route doesn't apply there.
+  const ticketPath = vmid ? `/api/admin/console/vm/${vmid}/ticket`
+    : `/api/sessions/${sessionId}/console`;
+  const wsPath = vmid ? `/api/console/vm/${vmid}` : `/api/console/${sessionId}`;
+  const clipPath = vmid ? null : `/api/sessions/${sessionId}/console/clipboard`;
   const hostRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFB | null>(null);
   const typeCtl = useRef<{ stop: boolean }>({ stop: false });
@@ -65,17 +71,17 @@ export function ConsoleView({ sessionId }: { sessionId: number }) {
   }, []);
 
   const fetchClip = useCallback(async () => {
+    if (!clipPath) return;
     setClipLoading(true); setClip(null); setPop("clip");
     try {
-      const r = await api.get<{ text?: string; mock?: boolean }>(
-        `/api/sessions/${sessionId}/console/clipboard`);
+      const r = await api.get<{ text?: string; mock?: boolean }>(clipPath);
       setClip(r.mock ? "(mock engine — no guest clipboard)" : (r.text ?? ""));
     } catch (e) {
       setClip(`(failed: ${e instanceof Error ? e.message : "unavailable"})`);
     } finally {
       setClipLoading(false);
     }
-  }, [sessionId]);
+  }, [clipPath]);
 
   useEffect(() => {
     let rfb: RFB | null = null;
@@ -84,13 +90,12 @@ export function ConsoleView({ sessionId }: { sessionId: number }) {
     async function connect() {
       setStatus("connecting"); setDetail("");
       try {
-        const t = await api.get<{ ticket?: string; mock?: boolean; error?: string }>(
-          `/api/sessions/${sessionId}/console`);
+        const t = await api.get<{ ticket?: string; mock?: boolean; error?: string }>(ticketPath);
         if (cancelled || !hostRef.current) return;
         if (t.mock) { setStatus("mock"); return; }
         if (!t.ticket) { setStatus("error"); setDetail(t.error ?? "no console ticket"); return; }
 
-        rfb = new RFB(hostRef.current!, wsUrl(`/api/console/${sessionId}`), {
+        rfb = new RFB(hostRef.current!, wsUrl(wsPath), {
           credentials: { password: t.ticket },
         });
         rfbRef.current = rfb;
@@ -136,7 +141,7 @@ export function ConsoleView({ sessionId }: { sessionId: number }) {
       try { rfb?.disconnect(); } catch { /* noop */ }
       rfbRef.current = null;
     };
-  }, [sessionId, nonce, inject]);
+  }, [sessionId, vmid, nonce, inject, ticketPath, wsPath]);
 
   return (
     <div className="relative flex h-full flex-col bg-black">
@@ -154,8 +159,10 @@ export function ConsoleView({ sessionId }: { sessionId: number }) {
         <div className="relative flex items-center gap-1">
           <IconButton size="sm" icon={ClipboardPaste} label="Paste as keystrokes"
             onClick={() => setPop(pop === "paste" ? null : "paste")} />
-          <IconButton size="sm" icon={ClipboardCopy} label="Read guest clipboard"
-            onClick={fetchClip} />
+          {clipPath && (
+            <IconButton size="sm" icon={ClipboardCopy} label="Read guest clipboard"
+              onClick={fetchClip} />
+          )}
           <IconButton size="sm" icon={Info} label="Kali login"
             onClick={() => setPop(pop === "creds" ? null : "creds")} />
           <IconButton size="sm" icon={RefreshCw} label="Reconnect"
