@@ -34,6 +34,7 @@
   gather_facts: true
   roles:
     - role: ludus_setup
+    - role: hoststats
 
 # ---------- stage 4: app VM inside the engine ----------
 - name: "create the pentrain-app VM"

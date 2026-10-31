@@ -38,6 +38,13 @@ async def lifespan(app: FastAPI):
             await log.ainfo("packs synced", **res)
         except Exception as e:
             await log.awarning("pack sync failed", error=str(e))
+    # reattach deploy/reset watchers orphaned by the previous process —
+    # ludus deploys server-side, so the range usually just kept going
+    from .services import sessions as sessions_svc
+    try:
+        await sessions_svc.resume_inflight()
+    except Exception as e:
+        await log.awarning("inflight session resume failed", error=str(e))
     yield
     # shutdown: close engine http clients so no connections leak
     from .services import engine as engine_svc

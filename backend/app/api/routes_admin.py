@@ -1,7 +1,9 @@
 """Auth, setup wizard, settings, engine status, profile, telemetry ingest, pack mgmt."""
+import contextlib
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
 from ..db import get_db
-from ..models.domain import CoachMessage, LlmUsage, Session, SessionState, UserProfile
+from ..models.domain import Attempt, CoachMessage, LlmUsage, Session, SessionState, UserProfile
 from ..schemas import (
     CheckpointIn,
     CoachExecIn,
@@ -104,11 +106,18 @@ async def engine_status(db: AsyncSession = Depends(get_db),
     engine = await get_engine(db)
     health = await engine.provider.health()
     node = None
+    vms = None
     if engine.mode != "mock":
         try:
             node = await engine.pve.node_status()
         except Exception:
             node = None
+        try:
+            res = await engine.pve.cluster_vms()
+            vms = {"running": sum(1 for v in res if v.get("status") == "running"),
+                   "total": len(res)}
+        except Exception:
+            vms = None
     return {
         "mode": engine.mode,
         "health": health,
@@ -118,6 +127,7 @@ async def engine_status(db: AsyncSession = Depends(get_db),
             "max_disk_gb": await settings_svc.get_setting(db, "resources.max_disk_gb", 500),
         },
         "node": node,
+        "vms": vms,
     }
 
 
@@ -299,10 +309,29 @@ async def llm_usage(days: int = 7, db: AsyncSession = Depends(get_db),
                func.coalesce(func.avg(LlmUsage.latency_ms), 0).label("avg_latency_ms"))
         .where(day_col >= since.isoformat())
         .group_by(day_col))).all()
+    grouped = (await db.execute(
+        select(LlmUsage.model.label("k"), LlmUsage.kind.label("kind"),
+               func.count(LlmUsage.id).label("requests"),
+               func.coalesce(func.sum(LlmUsage.total_tokens), 0).label("tokens"),
+               func.coalesce(func.avg(LlmUsage.latency_ms), 0).label("lat"))
+        .where(day_col >= since.isoformat())
+        .group_by(LlmUsage.model, LlmUsage.kind))).all()
+    by_model: dict[str, dict] = {}
+    by_kind: list[dict] = []
+    for r in grouped:
+        m = by_model.setdefault(r.k or "(unknown)",
+                                {"model": r.k or "(unknown)", "requests": 0, "tokens": 0})
+        m["requests"] += r.requests
+        m["tokens"] += r.tokens
+        by_kind.append({"kind": r.kind, "model": r.k or "(unknown)",
+                        "requests": r.requests, "tokens": r.tokens,
+                        "avg_latency_ms": round(r.lat)})
     return {
         "days": [{"day": str(r.day), "requests": r.requests, "tokens": r.tokens,
                   "prompt": r.prompt, "completion": r.completion,
                   "avg_latency_ms": round(r.avg_latency_ms)} for r in rows],
+        "by_model": sorted(by_model.values(), key=lambda m: -m["tokens"]),
+        "by_kind": sorted(by_kind, key=lambda k: -k["tokens"]),
         "budget": await settings_svc.get_setting(db, "llm.daily_token_budget", 0),
     }
 
@@ -326,6 +355,182 @@ async def engine_metrics(timeframe: str = "hour",
             "roottotal", "rootused")
     return {"ok": True, "timeframe": timeframe,
             "rows": [{k: r[k] for k in keep if k in r} for r in rows]}
+
+
+@router.get("/engine/storage")
+async def engine_storage(timeframe: str | None = None,
+                         db: AsyncSession = Depends(get_db),
+                         _=Depends(get_current_user)):
+    """Storage pools with usage; ?timeframe=hour|day|week adds a per-pool
+    usage trend (storage rrddata) — errors stay isolated per pool."""
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine", "pools": []}
+    try:
+        pools = await engine.pve.storage_pools()
+    except Exception as e:
+        return {"ok": False, "reason": str(e)[:200], "pools": []}
+    out = []
+    for p in pools:
+        item = {k: p.get(k) for k in
+                ("storage", "type", "content", "total", "used", "avail", "active", "shared")}
+        if timeframe in ("hour", "day", "week") and p.get("active"):
+            try:
+                rows = await engine.pve.storage_rrddata(p["storage"], timeframe)
+                item["trend"] = [{k: r[k] for k in ("time", "used", "total") if k in r}
+                                 for r in rows]
+            except Exception as e:
+                item["trend_error"] = str(e)[:120]
+        out.append(item)
+    return {"ok": True, "pools": out}
+
+
+def _parse_smart(smart: dict) -> dict:
+    """Normalize PVE SMART output — NVMe flat fields vs. ATA attribute table."""
+    out: dict = {}
+    # NVMe/SCSI flat shape
+    if isinstance(smart.get("temperature"), (int, float)):
+        out["temp_c"] = smart["temperature"]
+    if isinstance(smart.get("power_on_hours"), (int, float)):
+        out["power_on_hours"] = smart["power_on_hours"]
+    if isinstance(smart.get("percentage_used"), (int, float)):
+        out["wearout_pct"] = smart["percentage_used"]
+    # ATA attribute table
+    for a in smart.get("attributes") or []:
+        name = str(a.get("name") or "").lower()
+        raw = a.get("raw")
+        if isinstance(raw, dict):
+            raw = raw.get("value")
+        if name in ("temperature_celsius", "airflow_temperature_cel", "temperature") \
+                and "temp_c" not in out:
+            out["temp_c"] = raw
+        elif name == "power_on_hours" and "power_on_hours" not in out:
+            out["power_on_hours"] = raw
+        elif name == "wear_leveling_count" and "wearout_pct" not in out:
+            # raw is remaining-life % on most SSDs
+            with contextlib.suppress(TypeError, ValueError):
+                out["wearout_pct"] = 100 - int(raw)
+        elif name == "reallocated_sector_ct":
+            out["reallocated"] = raw
+    if smart.get("health"):
+        out["smart_health"] = smart["health"]
+    return out
+
+
+@router.get("/engine/disks")
+async def engine_disks(db: AsyncSession = Depends(get_db),
+                       _=Depends(get_current_user)):
+    """Physical disk inventory + SMART health/temperature/wearout per disk."""
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine", "disks": []}
+    try:
+        disks = await engine.pve.disks_list()
+    except Exception as e:
+        return {"ok": False, "reason": str(e)[:200], "disks": []}
+    out = []
+    for d in disks:
+        dev = d.get("devpath") or d.get("dev")
+        item = {"dev": dev, "model": d.get("model"), "serial": d.get("serial"),
+                "size_gb": round((d.get("size") or 0) / 2**30, 1),
+                "type": d.get("type"), "health": d.get("health"),
+                "wearout_pct": d.get("wearout")}
+        if dev:
+            try:
+                smart = await engine.pve.disk_smart(dev)
+                for k, v in _parse_smart(smart).items():
+                    # disks/list wearout wins over the smart-derived guess
+                    if k == "wearout_pct" and item.get("wearout_pct") is not None:
+                        continue
+                    item[k] = v
+            except Exception as e:
+                item["smart_error"] = str(e)[:120]
+        out.append(item)
+    return {"ok": True, "disks": out}
+
+
+_hoststats_cache: dict = {"ts": 0.0, "data": None}
+
+
+@router.get("/engine/hoststats")
+async def engine_hoststats(db: AsyncSession = Depends(get_db),
+                           _=Depends(get_current_user)):
+    """CPU temps / GPU / fans from the optional pentrain-hoststats agent on the
+    engine host — cached 30s so chart refreshes don't hammer it."""
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine"}
+    url = (await settings_svc.get_setting(db, "engine.hoststats_url", "") or "").strip()
+    if not url:
+        host = urlparse(engine.pve.creds.base_url).hostname
+        url = f"http://{host}:9100"
+    now = time.monotonic()
+    if _hoststats_cache["data"] is not None and now - _hoststats_cache["ts"] < 30:
+        return _hoststats_cache["data"]
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(url.rstrip("/") + "/stats")
+        if r.status_code >= 400:
+            raise httpx.HTTPError(f"hoststats {r.status_code}")
+        data = {"ok": True, **r.json()}
+    except Exception as e:
+        data = {"ok": False, "reason": f"agent unreachable: {e}", "url": url}
+    _hoststats_cache.update(ts=now, data=data)
+    return data
+
+
+@router.get("/stats/activity")
+async def stats_activity(days: int = 30, db: AsyncSession = Depends(get_db),
+                         _=Depends(get_current_user)):
+    """Training-side stats from our own tables — deploy durations, daily
+    attempts, score history and the assistance mix."""
+    days = max(1, min(days, 90))
+    since = date.today() - timedelta(days=days - 1)
+    since_dt = datetime(since.year, since.month, since.day)
+
+    deploy_rows = (await db.execute(
+        select(Session.created_at, Session.ready_at, Session.state)
+        .where(Session.created_at >= since_dt))).all()
+    durations = [int((r.ready_at - r.created_at).total_seconds())
+                 for r in deploy_rows if r.ready_at]
+    deploys = {"sessions": len(deploy_rows), "ready": len(durations),
+               "failed": sum(1 for r in deploy_rows
+                             if r.state == SessionState.FAILED.value),
+               "avg_s": round(sum(durations) / len(durations)) if durations else 0,
+               "last_s": durations[-1] if durations else 0}
+
+    att_rows = (await db.execute(
+        select(Attempt).where(func.date(Attempt.created_at) >= since.isoformat())
+        .order_by(Attempt.created_at))).scalars().all()
+    per_day: dict[str, dict] = {}
+    for a in att_rows:
+        d = a.created_at.date().isoformat()
+        v = per_day.setdefault(d, {"day": d, "count": 0, "score_sum": 0})
+        v["count"] += 1
+        v["score_sum"] += a.score or 0
+    attempts = [{"day": v["day"], "count": v["count"],
+                 "avg_score": round(v["score_sum"] / v["count"])}
+                for v in sorted(per_day.values(), key=lambda v: v["day"])]
+    scores = [{"quest_id": a.quest_id, "score": a.score,
+               "ts": a.created_at.isoformat()} for a in att_rows[-30:]]
+
+    aids = {k: 0 for k in ("hints", "coach_msgs", "coach_nudges",
+                           "sheet", "chat", "takeovers", "solo", "total")}
+    for a in (await db.execute(select(Attempt))).scalars().all():
+        as_ = a.assistance or {}
+        # legacy fallback — rows predate the assistance snapshot field
+        vals = {"hints": as_.get("hints") or a.hints_used or 0,
+                "takeovers": as_.get("takeovers") or a.coach_interventions or 0,
+                "coach_msgs": as_.get("coach_msgs") or 0,
+                "coach_nudges": as_.get("coach_nudges") or 0,
+                "sheet": as_.get("sheet") or 0,
+                "chat": as_.get("chat") or 0}
+        used = any(vals.values())
+        for k, v in vals.items():
+            aids[k] += int(v)
+        aids["solo" if not used else "total"] += 1
+    return {"ok": True, "deploys": deploys, "attempts": attempts,
+            "scores": scores, "aids": aids}
 
 
 @router.post("/packs/sync")

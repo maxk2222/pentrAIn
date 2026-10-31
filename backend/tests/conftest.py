@@ -19,7 +19,7 @@ os.environ.setdefault("PENTRAIN_ENGINE_MODE", "mock")
 os.environ.setdefault("PENTRAIN_APP_SECRET", "test-secret")
 os.environ.setdefault("PENTRAIN_CONTENT_DIR", str(REPO / "content" / "packs"))
 
-from app.db import create_all, init_engine, session_factory
+from app.db import create_all, get_engine, init_engine, session_factory
 from app.services import engine as engine_svc
 from app.services import packs as packs_svc
 from app.services import sessions as sessions_svc
@@ -40,6 +40,7 @@ async def db(tmp_path):
     await create_all()
     async with session_factory()() as s:
         yield s
+    await get_engine().dispose()
 
 
 @pytest_asyncio.fixture

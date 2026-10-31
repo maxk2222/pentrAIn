@@ -136,6 +136,7 @@ export interface TelemetryEvent {
 export interface EngineStatus {
   mode: string; health: Record<string, unknown>; resources: Record<string, number>;
   node: Record<string, unknown> | null;
+  vms?: { running: number; total: number } | null;
 }
 
 export interface EngineResources {
@@ -182,7 +183,42 @@ export interface LlmUsageDay {
   day: string; requests: number; tokens: number;
   prompt: number; completion: number; avg_latency_ms: number;
 }
-export interface LlmUsageOut { days: LlmUsageDay[]; budget: number }
+export interface LlmUsageOut {
+  days: LlmUsageDay[]; budget: number;
+  by_model?: { model: string; requests: number; tokens: number }[];
+  by_kind?: { kind: string; model: string; requests: number; tokens: number; avg_latency_ms: number }[];
+}
+
+export interface StoragePool {
+  storage: string; type?: string; content?: string;
+  total?: number; used?: number; avail?: number; active?: number; shared?: number;
+  trend?: { time: number; used?: number; total?: number }[]; trend_error?: string;
+}
+export interface StorageOut { ok: boolean; reason?: string; pools: StoragePool[] }
+
+export interface DiskInfo {
+  dev?: string; model?: string; serial?: string; size_gb?: number; type?: string;
+  health?: string; smart_health?: string; temp_c?: number; wearout_pct?: number;
+  power_on_hours?: number; reallocated?: number; smart_error?: string;
+}
+export interface DisksOut { ok: boolean; reason?: string; disks: DiskInfo[] }
+
+export interface HostStats {
+  ok: boolean; reason?: string; url?: string; ts?: number;
+  cpu?: { package_c?: number | null; temps: { label: string; c: number }[] };
+  gpu?: { name: string; vendor: string; util_pct?: number | null;
+          temp_c?: number | null; mem_used_mb?: number | null;
+          mem_total_mb?: number | null } | null;
+  fans?: { label: string; rpm: number }[];
+}
+
+export interface ActivityStats {
+  ok: boolean;
+  deploys: { sessions: number; ready: number; failed: number; avg_s: number; last_s: number };
+  attempts: { day: string; count: number; avg_score: number }[];
+  scores: { quest_id: string; score: number; ts: string }[];
+  aids: Record<string, number>;
+}
 
 export interface VmHistoryRow {
   time: number; cpu?: number; maxcpu?: number;

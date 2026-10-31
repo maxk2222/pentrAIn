@@ -1,0 +1,32 @@
+---
+# pentrain-hoststats: tiny stdlib HTTP agent on the engine host exposing
+# /stats (cpu temps, gpu util/temp, fans) on :9100 for the backend's
+# /api/engine/hoststats proxy. Read-only sensor data, LAN-scoped.
+
+- name: lm-sensors for cpu/gpu temps
+  ansible.builtin.apt:
+    name: lm-sensors
+    state: present
+    update_cache: true
+  ignore_errors: true
+
+- name: hoststats agent script
+  ansible.builtin.copy:
+    src: hoststatsd.py
+    dest: /opt/pentrain/hoststatsd.py
+    mode: "0755"
+  notify: restart hoststats
+
+- name: hoststats systemd unit
+  ansible.builtin.copy:
+    src: pentrain-hoststats.service
+    dest: /etc/systemd/system/pentrain-hoststats.service
+    mode: "0644"
+  notify: restart hoststats
+
+- name: hoststats enabled + started
+  ansible.builtin.systemd:
+    name: pentrain-hoststats
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -96,6 +96,34 @@ class PveClient:
                               params={"timeframe": timeframe})
         return data if isinstance(data, list) else []
 
+    # ---------- inventory / storage / disks (stats page) ----------
+    async def cluster_vms(self) -> list[dict]:
+        data = await self.get("/cluster/resources", params={"type": "vm"})
+        return data if isinstance(data, list) else []
+
+    async def storage_pools(self) -> list[dict]:
+        data = await self.get(f"/nodes/{self.creds.node}/storage")
+        return data if isinstance(data, list) else []
+
+    async def storage_rrddata(self, pool: str, timeframe: str = "hour") -> list[dict]:
+        data = await self.get(
+            f"/nodes/{self.creds.node}/storage/{pool}/rrddata",
+            params={"timeframe": timeframe})
+        return data if isinstance(data, list) else []
+
+    async def disks_list(self) -> list[dict]:
+        data = await self.get(f"/nodes/{self.creds.node}/disks/list")
+        return data if isinstance(data, list) else []
+
+    async def disk_smart(self, dev: str) -> dict:
+        data = await self.get(f"/nodes/{self.creds.node}/disks/smart",
+                              params={"disk": dev})
+        return data if isinstance(data, dict) else {}
+
+    async def pci_devices(self) -> list[dict]:
+        data = await self.get(f"/nodes/{self.creds.node}/hardware/pci")
+        return data if isinstance(data, list) else []
+
     # ---------- console ----------
     async def vncproxy(self, vmid: int) -> dict:
         """Returns {'ticket': vnc_ticket, 'port': port}. Connect via vncwebsocket."""

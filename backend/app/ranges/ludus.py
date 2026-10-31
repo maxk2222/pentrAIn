@@ -7,6 +7,7 @@ the engine-PVE client — the engine is ours anyway.
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import suppress
 from typing import Any
 
@@ -142,8 +143,17 @@ class LudusProvider:
         if range_id:
             params["userID"] = range_id
         # Ludus 2 refuses DELETE /range while VMs exist (409 "use --force") —
-        # force=true destroys the range together with its VMs.
-        await self._try("DELETE", "/range", params=params)
+        # and even force 500s on a VM that's still running or mid-task:
+        # destroy the VMs explicitly first, then the range, one retry for
+        # stragglers whose delete raced a still-closing task.
+        with suppress(LudusError):
+            await self._req("DELETE", "/range/vms", params=params)
+            await asyncio.sleep(5)
+        try:
+            await self._req("DELETE", "/range", params=params)
+        except LudusError:
+            await asyncio.sleep(10)
+            await self._try("DELETE", "/range", params=params)
 
     async def snapshot_all(self, range_id: str | None, snap_name: str = SNAP_POST_DEPLOY) -> None:
         # Ludus exposes VM snapshots; implementation varies → do it via engine PVE.

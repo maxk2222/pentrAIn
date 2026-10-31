@@ -1,0 +1,11 @@
+[Unit]
+Description=pentrAIn host stats agent (sensors/GPU for the webui stats page)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/pentrain/hoststatsd.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -202,71 +202,159 @@ async def create_session(db: AsyncSession, quest_id: str) -> Session:
 
 
 async def _deploy(session_id: int) -> None:
-    async with session_factory()() as db:
-        session = await db.get(Session, session_id)
-        if not session:
-            return
-        quest = await db.get(Quest, session.quest_id)
+    try:
+        async with session_factory()() as db:
+            session = await db.get(Session, session_id)
+            if not session:
+                return
+            quest = await db.get(Quest, session.quest_id)
+            try:
+                engine = await get_engine(db)
+                await _set_state(db, session, SessionState.DEPLOYING)
+                await _append_log(db, session, "[pentrain] compiling topology → ludus config")
+                config = compile_topology(quest)
+                await _append_log(db, session, yaml.safe_dump(config, sort_keys=False).rstrip())
+                session.range_id = await engine.provider.deploy_range(f"quest-{quest.id}", config)
+                await db.commit()
+
+                st = await _watch_range(db, engine, session)
+                await _finalize(db, engine, session, quest, st)
+            except Exception as e:
+                await log.aexception("deploy failed", session_id=session_id)
+                await _set_state(db, session, SessionState.FAILED, error=str(e))
+    finally:
+        _tasks.pop(session_id, None)
+
+
+async def _watch_range(db: AsyncSession, engine, session: Session,
+                       seen_log_seed: str = ""):
+    """Poll ludus until the range is RUNNING (max ~45 min for big AD labs).
+
+    `seen_log_seed` lets the resume path skip lines already persisted before a
+    backend restart, so the deploy log continues instead of repeating. Status
+    failures are tolerated — a flaky API must not kill a 30-minute deploy."""
+    seen_log = seen_log_seed
+    consec_errors = 0
+    for _ in range(45 * 6):
         try:
-            engine = await get_engine(db)
-            await _set_state(db, session, SessionState.DEPLOYING)
-            await _append_log(db, session, "[pentrain] compiling topology → ludus config")
-            config = compile_topology(quest)
-            await _append_log(db, session, yaml.safe_dump(config, sort_keys=False).rstrip())
-            range_id = await engine.provider.deploy_range(f"quest-{quest.id}", config)
-            session.range_id = range_id
-            await db.commit()
-
-            # poll until RUNNING (max ~45 min for big AD labs)
-            seen_log = ""
-            for _ in range(45 * 6):
-                st = await engine.provider.status(range_id)
-                tail = st.log_tail or ""
-                if tail != seen_log:
-                    new = tail[len(seen_log):] if tail.startswith(seen_log) else "\n" + tail
-                    seen_log = tail
-                    for line in new.strip("\n").splitlines():
-                        if line.strip():
-                            await _append_log(db, session, line)
-                if st.state == RangeState.RUNNING:
-                    break
-                if st.state == RangeState.FAILED:
-                    raise SessionError("range deploy failed — see deploy log")
-                await asyncio.sleep(POLL_S)
-            else:
-                raise SessionError("deploy timed out")
-            await db.commit()
-
-            kali = next((v for v in st.vms if v.role == "kali" or "kali" in v.name.lower()), None)
-            session.kali_vmid = kali.vmid if kali else None
-            # map short names → vmid (ludus names are "<rid>-<name>")
-            session.target_vmids = {
-                (v.name.split("-", 1)[-1] if "-" in v.name else v.name): v.vmid
-                for v in st.vms if v is not kali and v.vmid}
-            await _append_log(db, session, f"[pentrain] range RUNNING — kali vmid={session.kali_vmid}")
-
-            # telemetry config on kali
-            if session.kali_vmid:
-                await _configure_kali_telemetry(db, engine, session)
-
-            # dynamic flags
-            quest_flags = (await db.execute(
-                select(Flag).where(Flag.quest_id == quest.id))).scalars().all()
-            await flags_svc.create_expected_flags(db, session, quest_flags)
-            for line in await flags_svc.inject_flags(db, engine, session, quest_flags):
-                await _append_log(db, session, f"[pentrain] {line}")
-
-            # internet isolation + restore point (allow the app/telemetry endpoint)
-            if bool(await settings_svc.get_setting(db, "engine.testing_mode", True)):
-                allow = await settings_svc.get_setting(db, "engine.testing_allow", [])
-                await engine.provider.testing_mode(True, allow_ips=allow or None)
-            await _append_log(db, session, "[pentrain] snapshotting range (soft-reset point)")
-            await engine.provider.snapshot_all(range_id, SNAP_POST_DEPLOY)
-
-            await _set_state(db, session, SessionState.READY, ready_at=datetime.now(UTC).replace(tzinfo=None))
+            st = await engine.provider.status(session.range_id or None)
         except Exception as e:
-            await log.aexception("deploy failed", session_id=session_id)
-            await _set_state(db, session, SessionState.FAILED, error=str(e))
+            consec_errors += 1
+            if consec_errors >= 6:
+                raise SessionError(f"range status unreachable: {e}") from e
+            await asyncio.sleep(POLL_S)
+            continue
+        consec_errors = 0
+        tail = st.log_tail or ""
+        if tail != seen_log:
+            new = tail[len(seen_log):] if tail.startswith(seen_log) else "\n" + tail
+            seen_log = tail
+            for line in new.strip("\n").splitlines():
+                if line.strip():
+                    await _append_log(db, session, line)
+        if st.state == RangeState.RUNNING:
+            return st
+        if st.state == RangeState.FAILED:
+            raise SessionError("range deploy failed — see deploy log")
+        await asyncio.sleep(POLL_S)
+    raise SessionError("deploy timed out")
+
+
+async def _finalize(db: AsyncSession, engine, session: Session,
+                    quest: Quest, st) -> None:
+    """RUNNING range → ready session. Idempotent — the resume path may re-run
+    telemetry/flags/snapshot on a range that already passed through here."""
+    await db.commit()
+    kali = next((v for v in st.vms if v.role == "kali" or "kali" in v.name.lower()), None)
+    session.kali_vmid = kali.vmid if kali else None
+    # map short names → vmid (ludus names are "<rid>-<name>")
+    session.target_vmids = {
+        (v.name.split("-", 1)[-1] if "-" in v.name else v.name): v.vmid
+        for v in st.vms if v is not kali and v.vmid}
+    await _append_log(db, session, f"[pentrain] range RUNNING — kali vmid={session.kali_vmid}")
+
+    # telemetry config on kali
+    if session.kali_vmid:
+        await _configure_kali_telemetry(db, engine, session)
+
+    # dynamic flags
+    quest_flags = (await db.execute(
+        select(Flag).where(Flag.quest_id == quest.id))).scalars().all()
+    await flags_svc.create_expected_flags(db, session, quest_flags)
+    for line in await flags_svc.inject_flags(db, engine, session, quest_flags):
+        await _append_log(db, session, f"[pentrain] {line}")
+
+    # internet isolation + restore point (allow the app/telemetry endpoint)
+    if bool(await settings_svc.get_setting(db, "engine.testing_mode", True)):
+        allow = await settings_svc.get_setting(db, "engine.testing_allow", [])
+        await engine.provider.testing_mode(True, allow_ips=allow or None)
+    await _append_log(db, session, "[pentrain] snapshotting range (soft-reset point)")
+    await engine.provider.snapshot_all(session.range_id or None, SNAP_POST_DEPLOY)
+
+    await _set_state(db, session, SessionState.READY,
+                     ready_at=datetime.now(UTC).replace(tzinfo=None))
+
+
+async def resume_inflight() -> int:
+    """Reattach to sessions whose deploy/reset task died with the process.
+
+    Ludus deploys server-side — a backend restart orphans the watcher, not the
+    range. Called once from the app lifespan after packs are synced."""
+    async with session_factory()() as db:
+        rows = (await db.execute(
+            select(Session).where(Session.state.in_([
+                SessionState.QUEUED.value, SessionState.DEPLOYING.value,
+                SessionState.RESETTING.value])))).scalars().all()
+        ids = [s.id for s in rows]
+    for sid in ids:
+        _tasks[sid] = asyncio.create_task(_resume(sid))
+    if ids:
+        await log.ainfo("inflight sessions resumed", sessions=ids)
+    return len(ids)
+
+
+async def _resume(session_id: int) -> None:
+    """Decide per persisted state + live range status how to continue a
+    session whose in-process task was lost (restart, crash)."""
+    try:
+        async with session_factory()() as db:
+            session = await db.get(Session, session_id)
+            if not session:
+                return
+            quest = await db.get(Quest, session.quest_id)
+            try:
+                engine = await get_engine(db)
+                try:
+                    st = await engine.provider.status(session.range_id or None)
+                except Exception as e:
+                    # engine unreachable at boot — leave the state alone so the
+                    # next restart can try again instead of failing a live range
+                    await log.awarning("resume status probe failed — leaving state",
+                                       session_id=session_id, error=str(e))
+                    return
+                await _append_log(
+                    db, session,
+                    f"[pentrain] backend restarted — resuming (range {st.state.value})")
+                if session.state == SessionState.QUEUED.value or st.state == RangeState.ABSENT:
+                    await _deploy(session_id)
+                    return
+                if st.state == RangeState.FAILED:
+                    await _set_state(db, session, SessionState.FAILED,
+                                     error="deploy failed while backend was down")
+                    return
+                if session.state == SessionState.RESETTING.value and st.state == RangeState.RUNNING:
+                    await _reset(session_id, hard=True)
+                    return
+                if st.state == RangeState.DEPLOYING:
+                    st = await _watch_range(db, engine, session,
+                                            seen_log_seed=st.log_tail or "")
+                if st.state == RangeState.RUNNING:
+                    await _finalize(db, engine, session, quest, st)
+            except Exception as e:
+                await log.aexception("resume failed", session_id=session_id)
+                await _set_state(db, session, SessionState.FAILED, error=str(e))
+    finally:
+        _tasks.pop(session_id, None)
 
 
 async def activate(db: AsyncSession, session_id: int) -> Session:

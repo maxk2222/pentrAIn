@@ -1,19 +1,25 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, BarChart3, BrainCircuit, Cpu, Flag, HardDrive, MemoryStick, Server } from "lucide-react";
+import {
+  Activity, BarChart3, BrainCircuit, Cpu, Flag, Gauge, HardDrive,
+  MemoryStick, Rocket, Server, Thermometer, Trophy, Wind,
+} from "lucide-react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  api, type EngineMetrics, type LlmUsageOut, type QuestDetail, type RrdRow,
+  api, type ActivityStats, type DisksOut, type EngineMetrics, type EngineStatus,
+  type HostStats, type LlmUsageOut, type QuestDetail, type RrdRow,
   type SessionFlags, type SessionMetrics, type SessionMetricsHistory,
+  type StorageOut,
 } from "@/lib/api";
 import { chartColors as C } from "@/lib/theme";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Progress, Tabs } from "@/components/ui";
 import { SessionNetMap } from "@/components/sessionnetmap";
+import { AID_CHIPS } from "@/components/assist";
 
 const TIMEFRAMES = ["hour", "day", "week"] as const;
 const GB = 2 ** 30;
@@ -26,6 +32,11 @@ function fmtTime(epochS: number, tf: string) {
 }
 const pct = (v: number) => `${v.toFixed(1)}%`;
 const gb = (v: number) => `${(v / GB).toFixed(1)}G`;
+const fmtUptime = (s: number) => {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const fmtDur = (s: number) => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : `${Math.round(s / 60)}min`;
 
 const ttStyle = {
   contentStyle: { background: C.surface2, border: `1px solid ${C.grid}`,
@@ -68,6 +79,31 @@ export function StatsPage() {
     queryKey: ["llm-usage"],
     queryFn: () => api.get<LlmUsageOut>("/api/llm/usage?days=7"),
     refetchInterval: 60000,
+  });
+  const { data: engine } = useQuery({
+    queryKey: ["engine-status"],
+    queryFn: () => api.get<EngineStatus>("/api/engine/status"),
+    refetchInterval: 60000,
+  });
+  const { data: storage } = useQuery({
+    queryKey: ["engine-storage", tf],
+    queryFn: () => api.get<StorageOut>(`/api/engine/storage?timeframe=${tf}`),
+    refetchInterval: 60000,
+  });
+  const { data: disks } = useQuery({
+    queryKey: ["engine-disks"],
+    queryFn: () => api.get<DisksOut>("/api/engine/disks"),
+    refetchInterval: 120000,
+  });
+  const { data: hoststats } = useQuery({
+    queryKey: ["engine-hoststats"],
+    queryFn: () => api.get<HostStats>("/api/engine/hoststats"),
+    refetchInterval: 30000,
+  });
+  const { data: activity } = useQuery({
+    queryKey: ["stats-activity"],
+    queryFn: () => api.get<ActivityStats>("/api/stats/activity?days=30"),
+    refetchInterval: 120000,
   });
 
   const rows = (metrics?.rows ?? []).map((r) => ({
@@ -172,25 +208,44 @@ export function StatsPage() {
                 {v.error ? (
                   <div className="text-xs text-muted">{v.error}</div>
                 ) : (
-                  <ResponsiveContainer width="100%" height={140}>
-                    <LineChart data={(v.rows ?? []).map((r) => ({
-                      ...r,
-                      cpuPct: ((r.cpu ?? 0) / (r.maxcpu || 1)) * 100,
-                      memPct: ((r.memused ?? 0) / (r.maxmem || 1)) * 100,
-                    }))}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
-                      <XAxis dataKey="time" tick={{ fontSize: 11 }}
-                        tickFormatter={(t) => fmtTime(Number(t), tf)} />
-                      <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} width={36} />
-                      <Tooltip {...ttStyle}
-                        labelFormatter={(t) => fmtTime(Number(t), tf)}
-                        formatter={(v: unknown) => pct(Number(v))} />
-                      <Line type="monotone" dataKey="cpuPct" name="cpu %"
-                        stroke={C.primary} dot={false} />
-                      <Line type="monotone" dataKey="memPct" name="mem %"
-                        stroke={C.success} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <>
+                    <ResponsiveContainer width="100%" height={140}>
+                      <LineChart data={(v.rows ?? []).map((r) => ({
+                        ...r,
+                        cpuPct: ((r.cpu ?? 0) / (r.maxcpu || 1)) * 100,
+                        memPct: ((r.memused ?? 0) / (r.maxmem || 1)) * 100,
+                        netinM: (r.netin ?? 0) / 1e6, netoutM: (r.netout ?? 0) / 1e6,
+                      }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
+                        <XAxis dataKey="time" tick={{ fontSize: 11 }}
+                          tickFormatter={(t) => fmtTime(Number(t), tf)} />
+                        <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} width={36} />
+                        <Tooltip {...ttStyle}
+                          labelFormatter={(t) => fmtTime(Number(t), tf)}
+                          formatter={(v: unknown) => pct(Number(v))} />
+                        <Line type="monotone" dataKey="cpuPct" name="cpu %"
+                          stroke={C.primary} dot={false} />
+                        <Line type="monotone" dataKey="memPct" name="mem %"
+                          stroke={C.success} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                    <ResponsiveContainer width="100%" height={60}>
+                      <LineChart data={(v.rows ?? []).map((r) => ({
+                        ...r,
+                        netinM: (r.netin ?? 0) / 1e6, netoutM: (r.netout ?? 0) / 1e6,
+                      }))}>
+                        <XAxis dataKey="time" hide />
+                        <YAxis tick={{ fontSize: 9 }} width={36} />
+                        <Tooltip {...ttStyle}
+                          labelFormatter={(t) => fmtTime(Number(t), tf)}
+                          formatter={(v: unknown) => `${Number(v).toFixed(2)}MB/s`} />
+                        <Line type="monotone" dataKey="netinM" name="net in"
+                          stroke={C.accent} dot={false} strokeWidth={1.5} />
+                        <Line type="monotone" dataKey="netoutM" name="net out"
+                          stroke={C.danger} dot={false} strokeWidth={1.5} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </>
                 )}
               </div>
             ))}
@@ -204,6 +259,18 @@ export function StatsPage() {
           <Server className="h-4 w-4 text-primary" />
           <CardTitle className="text-base">Engine host</CardTitle>
           {metrics && !metrics.ok && <Badge variant="warning">{metrics.reason}</Badge>}
+          <span className="ml-auto flex items-center gap-1.5">
+            {typeof engine?.node?.uptime === "number" && (
+              <Badge variant="outline" title="node uptime">
+                up {fmtUptime(engine.node.uptime)}
+              </Badge>
+            )}
+            {engine?.vms && (
+              <Badge variant="outline" title="VMs running / total on the node">
+                {engine.vms.running}/{engine.vms.total} VMs
+              </Badge>
+            )}
+          </span>
         </CardHeader>
         {metrics?.ok ? (
           <CardContent className="grid gap-4 lg:grid-cols-2">
@@ -234,6 +301,215 @@ export function StatsPage() {
             Engine metrics unavailable{metrics ? ` — ${metrics.reason}` : " (loading…)"}.
           </CardContent>
         )}
+      </Card>
+
+      {/* ---- storage & disks ---- */}
+      <Card>
+        <CardHeader className="flex-row items-center gap-2">
+          <HardDrive className="h-4 w-4 text-primary" />
+          <CardTitle className="text-base">Storage &amp; disks</CardTitle>
+          {storage && !storage.ok && <Badge variant="warning">{storage.reason}</Badge>}
+        </CardHeader>
+        <CardContent className="grid gap-6 lg:grid-cols-2">
+          <div>
+            <div className="mb-2 text-xs text-muted">storage pools</div>
+            <div className="space-y-3">
+              {(storage?.pools ?? []).map((p) => (
+                <div key={p.storage}>
+                  <div className="mb-1 flex justify-between text-xs">
+                    <span className="font-medium">
+                      {p.storage}
+                      <span className="ml-1.5 text-muted">{p.type}{p.shared ? " · shared" : ""}</span>
+                    </span>
+                    <span className="text-muted">{gb(p.used ?? 0)} / {gb(p.total ?? 0)}</span>
+                  </div>
+                  <Progress value={p.total ? ((p.used ?? 0) / p.total) * 100 : 0} />
+                  {p.trend && p.trend.length > 2 && (
+                    <ResponsiveContainer width="100%" height={36}>
+                      <AreaChart data={p.trend.map((r) => ({
+                        ...r, pct: r.total ? ((r.used ?? 0) / r.total) * 100 : 0,
+                      }))}>
+                        <Area type="monotone" dataKey="pct" stroke={C.primary}
+                          fill={C.primary} fillOpacity={0.2} dot={false} isAnimationActive={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              ))}
+              {storage && !storage.pools.length && (
+                <div className="text-sm text-muted">No pools reported{storage.ok ? "" : ` — ${storage.reason}`}.</div>
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-xs text-muted">physical disks (SMART)</div>
+            <div className="space-y-2">
+              {(disks?.disks ?? []).map((d) => (
+                <div key={d.dev} className="rounded-lg border border-border p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate text-sm font-medium" title={d.serial}>
+                      {d.model ?? d.dev}
+                    </span>
+                    <Badge variant={(d.smart_health ?? d.health) === "PASSED" ? "success" : "warning"}>
+                      {d.smart_health ?? d.health ?? "?"}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted">
+                    <span>{d.size_gb ?? "?"}G</span>
+                    {d.temp_c != null && (
+                      <span className={d.temp_c >= 70 ? "text-danger" : d.temp_c >= 55 ? "text-warning" : ""}>
+                        {d.temp_c}°C
+                      </span>
+                    )}
+                    {d.wearout_pct != null && <span>wear {d.wearout_pct}%</span>}
+                    {d.power_on_hours != null && <span>{Math.round(d.power_on_hours / 8766 * 10) / 10}y uptime</span>}
+                    {d.reallocated ? <span className="text-warning">{d.reallocated} realloc</span> : null}
+                    {d.smart_error && <span className="text-danger/70">smart n/a</span>}
+                  </div>
+                </div>
+              ))}
+              {disks && !disks.disks.length && (
+                <div className="text-sm text-muted">No disks reported{disks.ok ? "" : ` — ${disks.reason}`}.</div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ---- thermals & gpu (host agent) ---- */}
+      <Card>
+        <CardHeader className="flex-row items-center gap-2">
+          <Thermometer className="h-4 w-4 text-primary" />
+          <CardTitle className="text-base">Thermals &amp; GPU</CardTitle>
+          {hoststats?.ok && (
+            <span className="ml-auto text-xs text-muted">host agent{hoststats.url ? ` · ${hoststats.url}` : ""}</span>
+          )}
+        </CardHeader>
+        <CardContent>
+          {hoststats?.ok ? (
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div>
+                <div className="mb-2 text-xs text-muted">
+                  cpu temps{hoststats.cpu?.package_c != null ? ` — package ${hoststats.cpu.package_c}°C` : ""}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(hoststats.cpu?.temps ?? []).map((t) => (
+                    <Badge key={t.label} variant="outline"
+                      className={t.c >= 80 ? "border-danger/50 text-danger" : t.c >= 65 ? "border-warning/50 text-warning" : ""}>
+                      {t.label} {t.c}°C
+                    </Badge>
+                  ))}
+                  {!hoststats.cpu?.temps?.length && <span className="text-xs text-muted">no sensors</span>}
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 text-xs text-muted">gpu</div>
+                {hoststats.gpu ? (
+                  <div className="rounded-lg border border-border p-2.5">
+                    <div className="mb-1 flex items-center justify-between text-sm">
+                      <span className="font-medium">{hoststats.gpu.name}</span>
+                      <span className="text-xs text-muted">{hoststats.gpu.vendor}</span>
+                    </div>
+                    {hoststats.gpu.util_pct != null && (
+                      <>
+                        <div className="mb-1 flex justify-between text-xs text-muted">
+                          <span>util</span><span>{hoststats.gpu.util_pct.toFixed(0)}%</span>
+                        </div>
+                        <Progress value={hoststats.gpu.util_pct} />
+                      </>
+                    )}
+                    <div className="mt-1.5 flex gap-3 text-xs text-muted">
+                      {hoststats.gpu.temp_c != null && <span>{hoststats.gpu.temp_c}°C</span>}
+                      {hoststats.gpu.mem_used_mb != null && (
+                        <span>{hoststats.gpu.mem_used_mb.toFixed(0)}/{hoststats.gpu.mem_total_mb?.toFixed(0)}MB</span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted">no GPU detected</div>
+                )}
+              </div>
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-xs text-muted">
+                  <Wind className="h-3 w-3" /> fans
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(hoststats.fans ?? []).map((f) => (
+                    <Badge key={f.label} variant="outline">{f.label} {f.rpm}rpm</Badge>
+                  ))}
+                  {!hoststats.fans?.length && <span className="text-xs text-muted">no fans reported</span>}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-muted">
+              <Gauge className="h-4 w-4 shrink-0" />
+              {hoststats
+                ? <>Host agent not reachable — {hoststats.reason}. Install <code className="text-foreground">pentrain-hoststats</code> on the engine host (see installer/roles/hoststats) or set <code className="text-foreground">engine.hoststats_url</code>.</>
+                : "Checking for host-stats agent…"}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ---- your activity ---- */}
+      <Card>
+        <CardHeader className="flex-row items-center gap-2">
+          <Trophy className="h-4 w-4 text-primary" />
+          <CardTitle className="text-base">Your activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {activity?.ok ? (
+            <div className="grid gap-5 lg:grid-cols-3">
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-xs text-muted">
+                  <Rocket className="h-3 w-3" /> range deploys (30d)
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge variant="outline">avg {fmtDur(activity.deploys.avg_s)}</Badge>
+                  <Badge variant="outline">last {fmtDur(activity.deploys.last_s)}</Badge>
+                  <Badge variant="outline">{activity.deploys.ready} ready</Badge>
+                  {activity.deploys.failed > 0 && (
+                    <Badge variant="danger">{activity.deploys.failed} failed</Badge>
+                  )}
+                </div>
+                <div className="mb-1 mt-4 text-xs text-muted">attempts / day</div>
+                {activity.attempts.length ? (
+                  <ResponsiveContainer width="100%" height={110}>
+                    <BarChart data={activity.attempts}>
+                      <XAxis dataKey="day" tick={{ fontSize: 10 }} tickFormatter={(d) => String(d).slice(5)} />
+                      <YAxis tick={{ fontSize: 10 }} width={24} allowDecimals={false} />
+                      <Tooltip {...ttStyle} />
+                      <Bar dataKey="count" fill={C.accent} radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : <div className="text-xs text-muted">no attempts yet</div>}
+              </div>
+              <div>
+                <div className="mb-2 text-xs text-muted">score history</div>
+                {activity.scores.length > 1 ? (
+                  <ResponsiveContainer width="100%" height={150}>
+                    <LineChart data={activity.scores.map((s, i) => ({ ...s, i }))}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
+                      <XAxis dataKey="i" hide />
+                      <YAxis tick={{ fontSize: 10 }} width={36} domain={[0, "dataMax"]} />
+                      <Tooltip {...ttStyle}
+                        labelFormatter={(_, p) => p?.[0]?.payload?.quest_id ?? ""}
+                        formatter={(v: unknown) => [`${v} pts`, "score"]} />
+                      <Line type="monotone" dataKey="score" stroke={C.warning} dot={{ r: 2 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : <div className="text-xs text-muted">finish attempts to build a score history</div>}
+              </div>
+              <div>
+                <div className="mb-2 text-xs text-muted">assistance mix (all attempts)</div>
+                <AidMix aids={activity.aids} />
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted">No activity data yet.</div>
+          )}
+        </CardContent>
       </Card>
 
       {/* ---- llm usage ---- */}
@@ -292,8 +568,74 @@ export function StatsPage() {
           ) : (
             <div className="text-sm text-muted">No LLM usage recorded yet.</div>
           )}
+          {(usage?.by_model?.length || usage?.by_kind?.length) ? (
+            <div className="mt-4 grid gap-4 border-t border-border pt-4 lg:grid-cols-2">
+              {!!usage.by_model?.length && (
+                <div>
+                  <div className="mb-2 text-xs text-muted">by model (7d)</div>
+                  <div className="space-y-1.5">
+                    {usage.by_model.map((m) => (
+                      <div key={m.model} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 truncate font-mono">{m.model}</span>
+                        <span className="shrink-0 text-muted">
+                          {m.tokens.toLocaleString()} tok · {m.requests} req
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!!usage.by_kind?.length && (
+                <div>
+                  <div className="mb-2 text-xs text-muted">by kind (7d)</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {usage.by_kind.map((k) => (
+                      <Badge key={`${k.kind}-${k.model}`} variant="outline"
+                        title={`${k.requests} requests · Ø ${k.avg_latency_ms}ms`}>
+                        {k.kind} <span className="text-muted">{k.model.split("/").pop()}</span>{" "}
+                        {k.tokens.toLocaleString()}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** Stacked horizontal bar of the assistance mix across all attempts —
+ *  solo runs share the bar as the muted tail segment. */
+function AidMix({ aids }: { aids: Record<string, number> }) {
+  const segs = [
+    ...AID_CHIPS.map((c) => ({ key: c.key, label: c.label, n: aids[c.key] ?? 0 })),
+    { key: "solo", label: "solo", n: aids.solo ?? 0 },
+  ].filter((s) => s.n > 0);
+  const total = segs.reduce((a, s) => a + s.n, 0);
+  const colors: Record<string, string> = {
+    hints: C.warning, coach_msgs: C.primary, coach_nudges: C.accent,
+    sheet: C.success, chat: "#a78bfa", takeovers: C.danger, solo: C.muted,
+  };
+  if (!total) return <div className="text-xs text-muted">no attempts yet</div>;
+  return (
+    <div>
+      <div className="flex h-3 w-full overflow-hidden rounded-full bg-surface-2">
+        {segs.map((s) => (
+          <div key={s.key} title={`${s.label}: ${s.n}`}
+            style={{ width: `${(s.n / total) * 100}%`, background: colors[s.key] }} />
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {segs.map((s) => (
+          <Badge key={s.key} variant="outline" className="gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ background: colors[s.key] }} />
+            {s.label} {s.n}
+          </Badge>
+        ))}
+      </div>
     </div>
   );
 }

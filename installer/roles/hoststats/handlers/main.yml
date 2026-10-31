@@ -1,0 +1,6 @@
+---
+- name: restart hoststats
+  ansible.builtin.systemd:
+    name: pentrain-hoststats
+    state: restarted
+    daemon_reload: true

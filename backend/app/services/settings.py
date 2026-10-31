@@ -17,6 +17,7 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "engine.pve_token_secret": ("", True),
     "engine.ludus_url": ("", False),
     "engine.ludus_api_key": ("", True),
+    "engine.hoststats_url": ("", False),            # optional pentrain-hoststats agent; empty → derive from pve_url :9100
     "engine.testing_mode": (True, False),           # cut range internet after deploy
     "engine.testing_allow": ([], False),            # CIDRs allowed while testing (app VM)
     "platform.api_url": ("http://pentrain-app:8000", False),  # backend URL reachable from ranges

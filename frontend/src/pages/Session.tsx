@@ -218,6 +218,9 @@ export function SessionPage() {
             </Badge>
           )}
           {session?.error && <span className="max-w-48 truncate text-xs text-danger">{session.error}</span>}
+          {(state === "deploying" || state === "queued") && session?.created_at && (
+            <DeployElapsed since={session.created_at} />
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {state === "ready" && (
@@ -344,6 +347,20 @@ export function SessionPage() {
       )}
     </div>
   );
+}
+
+/** Elapsed-time badge while a range deploys — big labs can take 30+ min, so
+ *  make the wait visible instead of looking frozen. */
+function DeployElapsed({ since }: { since: string }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+  // backend timestamps are UTC without a suffix — make that explicit for Date
+  const started = new Date(since.endsWith("Z") || since.includes("+") ? since : since + "Z");
+  const mins = Math.max(0, Math.round((Date.now() - started.getTime()) / 60000));
+  return <Badge variant="warning">deploying {mins}min</Badge>;
 }
 
 function CollapsedStrip({ icon: Icon, label, unread, edge = "right", onClick }: {

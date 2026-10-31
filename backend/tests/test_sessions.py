@@ -346,3 +346,126 @@ async def test_metrics_history_missing_session(db_with_packs):
     with pytest.raises(HTTPException) as ei:
         await session_metrics_history(999, "hour", db_with_packs)
     assert ei.value.status_code == 404
+
+
+# ---------- deploy resilience: resume after backend restart ----------
+
+
+async def _engine_and_range(db, state: str):
+    """Fabricate a mock range in `state` and return (engine, provider)."""
+    from app.ranges.base import RangeState
+    from app.services import engine as engine_svc
+    engine = await engine_svc.get_engine(db)
+    p = engine.provider
+    await p.deploy_range("x", {"ludus": [{"vm_name": "MO-kali", "role": "kali"}]})
+    rng = next(iter(p._ranges.values()))
+    rng.state = RangeState(state)
+    return engine, p
+
+
+async def test_resume_deploying_running_finalizes(db_with_packs):
+    """Restart mid-deploy, range already RUNNING → resume finalizes to ready."""
+    db = db_with_packs
+    await _engine_and_range(db, "running")
+    s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
+    db.add(s)
+    await db.commit()
+    await sessions_svc._resume(s.id)
+    await db.refresh(s)
+    assert s.state == "ready" and s.kali_vmid is not None
+
+
+async def test_resume_deploying_absent_redeploys(db_with_packs):
+    """Config upload died with the process → resume starts the deploy fresh."""
+    db = db_with_packs
+    s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
+    db.add(s)
+    await db.commit()
+    await sessions_svc._resume(s.id)
+    s = await _wait_state(s.id, "ready")
+    assert s.kali_vmid is not None
+
+
+async def test_resume_deploying_failed_marks_failed(db_with_packs):
+    db = db_with_packs
+    await _engine_and_range(db, "failed")
+    s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
+    db.add(s)
+    await db.commit()
+    await sessions_svc._resume(s.id)
+    await db.refresh(s)
+    assert s.state == "failed" and "while backend was down" in (s.error or "")
+
+
+async def test_resume_queued_deploys(db_with_packs):
+    db = db_with_packs
+    s = Session(quest_id="linux-t1-first-foothold", state="queued")
+    db.add(s)
+    await db.commit()
+    await sessions_svc._resume(s.id)
+    s = await _wait_state(s.id, "ready")
+    assert s.kali_vmid is not None
+
+
+async def test_resume_resetting_running_hard_resets(db_with_packs):
+    """Interrupted reset over a dirty range → redeploy superset → ready."""
+    db = db_with_packs
+    _, p = await _engine_and_range(db, "running")
+    s = Session(quest_id="linux-t1-first-foothold", state="resetting", range_id="MO")
+    db.add(s)
+    await db.commit()
+    await sessions_svc._resume(s.id)
+    s = await _wait_state(s.id, "ready")
+    assert s.kali_vmid is not None
+    assert any("destroy" in line or "deploying" in line
+               for line in next(iter(p._ranges.values())).logs)
+
+
+async def test_watch_range_tolerates_transient_errors(db_with_packs, monkeypatch):
+    """A flaky status() must not kill a deploy — fail only on a real streak."""
+    db = db_with_packs
+    engine, p = await _engine_and_range(db, "running")
+    s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
+    db.add(s)
+    await db.commit()
+
+    calls = {"n": 0}
+    real_status = p.status
+
+    async def flaky(range_id=None):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise RuntimeError("ludus 502")
+        return await real_status(range_id)
+
+    monkeypatch.setattr(p, "status", flaky)
+    st = await sessions_svc._watch_range(db, engine, s)
+    assert st.state.value == "running" and calls["n"] == 4
+
+    calls["n"] = 0
+
+    async def dead(range_id=None):
+        raise RuntimeError("ludus down")
+
+    monkeypatch.setattr(p, "status", dead)
+    with pytest.raises(sessions_svc.SessionError, match="unreachable"):
+        await sessions_svc._watch_range(db, engine, s)
+
+
+async def test_resume_inflight_sweeps_states(db_with_packs):
+    db = db_with_packs
+    for state in ("queued", "deploying"):
+        db.add(Session(quest_id="linux-t1-first-foothold", state=state))
+    db.add(Session(quest_id="linux-t1-first-foothold", state="active"))  # not inflight
+    await db.commit()
+    n = await sessions_svc.resume_inflight()
+    assert n == 2
+    # spawned tasks finish on their own — wait for both to reach a terminal/ready state
+    for _ in range(200):
+        states = (await db.execute(
+            select(Session.state).where(Session.state.in_(["queued", "deploying"])))).all()
+        if not states:
+            break
+        await asyncio.sleep(0.05)
+    done = (await db.execute(select(Session.state))).scalars().all()
+    assert done.count("ready") == 2 and "active" in done

@@ -22,6 +22,11 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
       ["engine.pve_token_secret", { label: "API token secret", type: "password" }],
       ["engine.ludus_url", { label: "Ludus API URL", type: "text", placeholder: "https://engine:8080" }],
       ["engine.ludus_api_key", { label: "Ludus API key", type: "password" }],
+      ["engine.hoststats_url", {
+        label: "Host-stats agent URL (optional)", type: "text",
+        placeholder: "http://engine:9100",
+        help: "pentrain-hoststats on the engine host — CPU temps, GPU, fans for /stats. Empty → derived from the PVE URL.",
+      }],
     ],
   },
   {
