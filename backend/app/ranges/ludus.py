@@ -113,10 +113,11 @@ class LudusProvider:
             # 409 "already in use" → the range exists; just repoint the default.
             if "409" not in str(e):
                 raise
-        # POST /user/default-range accepts `rangeID` as the QUERY param (the
-        # `defaultRangeID` name only works in a JSON body — query 400s).
+        # POST /user/default-range takes `defaultRangeID` in a JSON BODY —
+        # query params are ignored entirely (rangeID= ? 400 "defaultRangeID
+        # is required"; verified live against Ludus 2).
         await self._req("POST", "/user/default-range",
-                        params={"rangeID": name})
+                        json={"defaultRangeID": name})
 
     async def status(self, range_id: str | None = None) -> RangeStatus:
         params = {"rangeID": range_id} if range_id else {}

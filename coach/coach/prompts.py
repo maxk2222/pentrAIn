@@ -179,7 +179,11 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "You are the OPERATOR — there is no trainee watching. Pick the "
             "NEXT un-taken step toward solving FLAGS and execute it now. "
             "Facts in ALREADY_DONE or earlier tool output are settled — "
-            "never re-verify them; every repeat burns your action budget.")
+            "never re-verify them; every repeat burns your action budget. "
+            "When a pentrAIn{...} value appears in tool output, call "
+            "submit_flag with it in the SAME turn — flag values are "
+            "per-session so a guess can never match; a rejected submit "
+            "costs nothing, a delayed one stalls the solve.")
         if st.proactive_streak:
             parts.append(
                 f"STALL_ALERT: your last {st.proactive_streak} turn(s) "
