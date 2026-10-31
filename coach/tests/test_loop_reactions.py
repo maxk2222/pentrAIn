@@ -70,7 +70,7 @@ class FakeClient:
         self.activities.append((active, text))
 
     async def exec_in_kali(self, sid, command):
-        return {"out": "ok", "visible": True}
+        return {"out": "ok", "exitcode": 0, "visible": True}
 
     async def submit_flag(self, sid, value):
         self.flags.append(value)
@@ -560,3 +560,90 @@ async def test_hint_level_clamped():
     coach, c = _coach()
     await coach._dispatch({"type": "offer_hint", "content": "h", "level": 99})
     assert c.chats[0]["meta"]["level"] == 3
+
+
+# ---------- anti-repeat context ----------
+
+async def test_context_lists_done_commands_at_l4():
+    """At takeover autonomy the model needs the OPERATOR framing plus a
+    visible list of already-succeeded commands (stops re-verify loops)."""
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    coach.ctx["session"]["autonomy_level"] = 4
+    st = coach.state
+    st.add_command(1.0, "getent hosts api01", from_coach=True)
+    st.commands[-1].exit_code = 0
+    st.add_command(2.0, "getent hosts api01", from_coach=True)   # repeat, still running
+    st.add_command(3.0, "nmap bad-target", from_coach=True)
+    st.commands[-1].exit_code = 1                              # failed — not "done"
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "OPERATOR" in msg and "no trainee" in msg
+    assert "ALREADY_DONE" in msg
+    assert "getent hosts api01" in msg.split("ALREADY_DONE")[1]
+    assert "nmap bad-target" not in msg.split("ALREADY_DONE")[1]
+
+
+async def test_context_trainee_framing_below_l4():
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    coach.ctx["session"]["autonomy_level"] = 2
+    msg = build_context_msg(coach.ctx, coach.state, "stuck", stage=0)
+    assert "trainee progressing" in msg and "OPERATOR" not in msg
+
+
+def test_done_commands_dedup_and_order():
+    from coach.state import SessionState
+    st = SessionState(1)
+    st.add_command(1.0, "id", from_coach=True); st.commands[-1].exit_code = 0
+    st.add_command(2.0, "ls", from_coach=False); st.commands[-1].exit_code = 0
+    st.add_command(3.0, "id", from_coach=True); st.commands[-1].exit_code = 0
+    st.add_command(4.0, "id", from_coach=True)                 # no exit yet
+    assert st.done_commands() == ["id"]          # dedup + only coach + exit 0
+
+
+def test_written_files_detects_heredoc_and_filters():
+    from coach.state import SessionState
+    st = SessionState(1)
+    st.add_command(1.0, "cat > /root/solve.py << 'PYEOF'\nimport x\nPYEOF",
+                   from_coach=True); st.commands[-1].exit_code = 0
+    st.add_command(2.0, "curl -s http://x 2>&1 | tee /tmp/out.txt",
+                   from_coach=True); st.commands[-1].exit_code = 0
+    st.add_command(3.0, "cat > /dev/null", from_coach=True)
+    st.commands[-1].exit_code = 0
+    st.add_command(4.0, "cat > /root/fail.sh", from_coach=True)
+    st.commands[-1].exit_code = 1                          # failed write — no file
+    st.add_command(5.0, "cat > /root/solve.py << 'V2'", from_coach=True)
+    st.commands[-1].exit_code = 0                          # rewrite — still dedup
+    assert st.written_files() == ["/root/solve.py", "/tmp/out.txt"]
+
+
+async def test_rewrite_same_path_appends_directive():
+    """Second write to the same path → tool result carries a RUN directive."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    cmd = "cat > /root/solve.py << 'EOF'\nimport x\nEOF"
+    _v1, r1 = await coach._dispatch({"type": "exec_in_kali", "command": cmd})
+    assert "RUN it" not in r1
+    _v2, r2 = await coach._dispatch({"type": "exec_in_kali", "command": cmd})
+    assert "RUN it" in r2 and "/root/solve.py" in r2
+
+
+async def test_rewrite_guard_denies_third_write_without_failed_run():
+    """A script written ≥2× that never ran (or ran clean) is DENIED — the
+    model must run it; a failed run unlocks the rewrite again."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    w = "cat > /root/solve.py << 'EOF'\nimport x\nEOF"
+    for _ in range(2):
+        await coach._dispatch({"type": "exec_in_kali", "command": w})
+    n_execs = len([a for a in c.chats if a.get("kind") == "action_report"])
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert r.startswith("denied:") and "never executed" in r
+    # nothing was typed → no new action_report
+    assert len([a for a in c.chats if a.get("kind") == "action_report"]) == n_execs
+    # run it, fail → rewrite allowed again
+    c.exec_results = [{"out": "boom", "exitcode": 1}]
+    await coach._dispatch({"type": "exec_in_kali", "command": "python3 -u /root/solve.py"})
+    coach._run_exits["/root/solve.py"] = 1        # dispatch recorded the failure
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert not r.startswith("denied:")

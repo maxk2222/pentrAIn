@@ -157,9 +157,24 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         parts.append(f"DEPLOY_LOG_TAIL: {tail[-400:]}")
     if st.notes:
         parts.append("YOUR_NOTES: " + " | ".join(st.notes[-4:]))
-    parts.append(
-        "Decide: is the trainee progressing? If yes → none. If stuck/lost → "
-        "one short action fitting their autonomy level and the escalation stage.")
+    done = st.done_commands()
+    if done:
+        parts.append("ALREADY_DONE (succeeded — do NOT re-run these):")
+        parts.append("  " + "  ||  ".join(d[:80] for d in done))
+    written = st.written_files()
+    if written:
+        parts.append("FILES_WRITTEN (these exist already — run them, "
+                     "don't rewrite): " + ", ".join(written))
+    if int(s.get("autonomy_level") or 0) >= 4:
+        parts.append(
+            "You are the OPERATOR — there is no trainee watching. Pick the "
+            "NEXT un-taken step toward solving FLAGS and execute it now. "
+            "Facts in ALREADY_DONE or earlier tool output are settled — "
+            "never re-verify them; every repeat burns your action budget.")
+    else:
+        parts.append(
+            "Decide: is the trainee progressing? If yes → none. If stuck/lost → "
+            "one short action fitting their autonomy level and the escalation stage.")
     return "\n".join(parts)
 
 

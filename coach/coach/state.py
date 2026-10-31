@@ -92,6 +92,34 @@ class SessionState:
     def tool_diversity(self) -> set[str]:
         return {c.command.split()[0] for c in self.commands if c.command.split()}
 
+    def done_commands(self, n: int = 10) -> list[str]:
+        """Coach commands that already succeeded — shown in context so the
+        model stops re-verifying established facts (a real failure mode)."""
+        out: list[str] = []
+        for c in self.commands:
+            if c.from_coach and c.exit_code == 0 and c.command not in out:
+                out.append(c.command)
+        return out[-n:]
+
+    _WRITE_RE = re.compile(r">\s*(/\S+)|\btee\s+(-a\s+)?(\S+)")
+
+    def written_files(self) -> list[str]:
+        """Files created via redirects or tee (cat > f, tee f, printf > f).
+        The heredoc CONTENT differs every write, so exact-command dedup
+        never fires — the model rewrites the same solver forever. Listed
+        in context so 'written' is a settled fact."""
+        out: list[str] = []
+        for c in self.commands:
+            if c.exit_code != 0:
+                continue
+            m = self._WRITE_RE.search(c.command)
+            if not m:
+                continue
+            path = m.group(1) or m.group(3)
+            if path and path != "/dev/null" and path not in out:
+                out.append(path)
+        return out
+
 
 class CheckpointMatcher:
     """Matches quest checkpoint regexes against the live command stream."""

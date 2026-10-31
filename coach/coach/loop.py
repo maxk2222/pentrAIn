@@ -12,6 +12,7 @@ Event model — three distinct paths:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 import httpx
@@ -74,6 +75,8 @@ class SessionCoach:
         self._active_draft: str | None = None   # draft_id for send_chat meta
         self._draft_used = False                 # meta attaches only once
         self._turn_reasoning = ""                # reasoning of the in-flight turn
+        self._write_counts: dict[str, int] = {}  # path → writes via exec_in_kali
+        self._run_exits: dict[str, int] = {}     # script path → last exit code
 
     # ---------- lifecycle ----------
 
@@ -690,6 +693,23 @@ class SessionCoach:
                     cmd = (a.get("command") or a.get("content", "")).strip()
                     if not cmd:
                         return spoke, "error: empty command"
+                    # rewrite guard: a solver that was written ≥2× and never
+                    # ran (or ran clean) does NOT need another version — the
+                    # model 'perfects' scripts forever otherwise. Deny before
+                    # typing anything; a failed run unlocks the next rewrite.
+                    wm = SessionState._WRITE_RE.search(cmd)
+                    if wm:
+                        path = wm.group(1) or wm.group(3)
+                        n = self._write_counts.get(path, 0)
+                        last = self._run_exits.get(path)
+                        if n >= 2 and (last is None or last == 0):
+                            why = ("ran without error" if last == 0
+                                   else "was never executed")
+                            return spoke, (
+                                f"denied: {path} was already written {n}x and "
+                                f"{why} — RUN it now (python3 -u {path}). "
+                                f"Another rewrite is only useful after a "
+                                f"failed run.")
                     # mark BEFORE the call so telemetry echo is recognized as ours
                     self._coach_cmds.append((cmd, time.time()))
                     await self.client.send_activity(
@@ -707,6 +727,20 @@ class SessionCoach:
                         result = out[:1900] or "still running"
                     else:
                         result = f"{out[:1900]}\n(exit {code})" if out else f"exit {code}"
+                    # write/run bookkeeping for the rewrite guard above
+                    if wm and code == 0:
+                        n = self._write_counts.get(path, 0) + 1
+                        self._write_counts[path] = n
+                        if n >= 2:
+                            result += (f"\nNOTE: {path} has now been written "
+                                       f"{n} times — the file exists, more "
+                                       f"rewrites do not advance the quest. "
+                                       f"RUN it (e.g. python3 -u {path}).")
+                    if code is not None:
+                        rm = re.search(
+                            r"\b(?:python3?|bash|sh|perl|ruby|node)\s+(/?\S+)", cmd)
+                        if rm:
+                            self._run_exits[rm.group(1)] = code
                     if res.get("busy"):
                         text = f"Could not run `{cmd}` — {res.get('err') or 'pane busy'}"
                     else:
