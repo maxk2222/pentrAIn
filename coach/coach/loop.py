@@ -680,22 +680,26 @@ class SessionCoach:
                     await self.client.send_activity(
                         self.sid, f"typing `{cmd[:110]}` in Kali")
                     res = await self.client.exec_in_kali(self.sid, cmd)
-                    if res.get("status") == "denied" or res.get("error"):
+                    if res.get("status") == "denied" or res.get("error") or res.get("busy"):
                         # never actually typed → a stale entry could mislabel a
                         # user-typed identical command
                         self._coach_cmds.pop()
                     else:
                         self.state.exec_count += 1
-                    out = (res.get("out") or res.get("error") or "")
-                    result = (f"{out[:1900]}\n(exit {res.get('exitcode', 0)})"
-                              if out else f"exit {res.get('exitcode', 0)}")
-                    if res.get("timed_out"):
-                        note = "\n\n*(still running — watch the `pentrain-coach` tmux)*"
-                    elif res.get("visible"):
-                        note = "\n\n*(typed live in the `pentrain-coach` tmux)*"
+                    out = (res.get("out") or res.get("err") or res.get("error") or "")
+                    code = res.get("exitcode")
+                    if code is None:
+                        result = out[:1900] or "still running"
                     else:
-                        note = ""
-                    text = f"Executed: `{cmd}`\n```\n{out[-1500:]}\n```{note}"
+                        result = f"{out[:1900]}\n(exit {code})" if out else f"exit {code}"
+                    if res.get("busy"):
+                        text = f"Could not run `{cmd}` — {res.get('err') or 'pane busy'}"
+                    else:
+                        note = ("\n\n*(still running — watch the `pentrain-coach` tmux)*"
+                                if res.get("timed_out")
+                                else "\n\n*(typed live in the `pentrain-coach` tmux)*"
+                                if res.get("visible") else "")
+                        text = f"Executed: `{cmd}`\n```\n{out[-1500:]}\n```{note}"
                     await self.client.send_chat(self.sid, text, kind="action_report",
                                                 meta=self._draft_meta())
                     self._record_reply(text)

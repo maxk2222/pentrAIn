@@ -73,6 +73,39 @@ async def test_takeover_executes_and_reports():
     assert report and "whoami" in report[0]["content"]
 
 
+async def test_busy_pane_bounces_without_marking_exec():
+    """pane busy → nothing was typed: no exec_count, no stale _coach_cmds
+    entry, the report says 'could not run' (never 'Executed'), and the
+    tool result tells the model to interrupt or wait."""
+    coach, c = _coach(autonomy=4)
+
+    async def busy(sid, cmd):
+        return {"out": "", "busy": True, "exitcode": None, "visible": True,
+                "err": "pane busy: 'top' is still running — send 'C-c'"}
+    c.exec_in_kali = busy
+    _spoke, res = await coach._dispatch({"type": "exec_in_kali", "command": "nmap x"})
+    assert "pane busy" in res
+    assert coach.state.exec_count == 0 and not coach._coach_cmds
+    assert any("Could not run `nmap x`" in m["content"] for m in c.chats)
+    assert not any("Executed:" in m["content"] for m in c.chats)
+
+
+async def test_timed_out_exec_reports_partial_output():
+    coach, c = _coach(autonomy=4)
+
+    async def slow(sid, cmd):
+        return {"out": "partial output", "timed_out": True,
+                "exitcode": None, "visible": True,
+                "err": "still running — pane is now busy"}
+    c.exec_in_kali = slow
+    spoke, res = await coach._dispatch({"type": "exec_in_kali", "command": "nmap x"})
+    assert spoke and "partial output" in res
+    assert coach.state.exec_count == 1  # it WAS typed and is still running
+    report = [m for m in c.chats if m["kind"] == "action_report"]
+    assert "partial output" in report[0]["content"]
+    assert "still running" in report[0]["content"]
+
+
 async def test_takeover_budget_cap():
     coach, c = _coach(autonomy=4, action_budget=2)
     await coach._dispatch({"type": "exec_in_kali", "command": "a"})

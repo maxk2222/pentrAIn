@@ -251,6 +251,28 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     if probe.get("exitcode", 1) != 0:
         return await engine.pve.agent_exec_sh(kali_vmid, command, timeout_s=timeout_s)
 
+    # ctrl-key passthrough — "C-c"/"C-d"/"C-z" must reach the pane as real
+    # keys, not typed text, so a wedged foreground process can be freed
+    if re.fullmatch(r"C-[a-z]", command.strip()):
+        await engine.pve.agent_exec_sh(
+            kali_vmid,
+            f"tmux send-keys -t {COACH_TMUX} {command.strip()}", timeout_s=10)
+        return {"out": f"(sent {command.strip()} to the pane)", "err": "",
+                "exitcode": 0, "visible": True}
+
+    # pane busy? typed lines would buffer into the foreground process's stdin
+    # and never reach the shell — tell the caller to free the pane first
+    fg = await engine.pve.agent_exec_sh(
+        kali_vmid,
+        f"tmux display-message -p -t {COACH_TMUX} '#{{pane_current_command}}'",
+        timeout_s=10)
+    fg_cmd = (fg.get("out") or "").strip()
+    if fg_cmd and fg_cmd not in ("bash", "zsh", "sh", "dash", "ksh", "fish"):
+        return {"out": "", "visible": True, "busy": True, "exitcode": None,
+                "err": (f"pane busy: '{fg_cmd}' is still running — send "
+                        "'C-c' via exec_in_kali to interrupt it, or wait "
+                        "for it to finish")}
+
     marker = f"PTN{secrets.token_hex(5)}"
     # three SEPARATE key sends — appending `; echo …` to the command line broke
     # heredocs (a `EOF ; echo` line isn't a valid delimiter) and swallowed the
@@ -313,7 +335,9 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     # timed out but still typed — the partial pane tail beats a dead end
     return {"out": last_tail
             or "(still running — visible in the pentrain-coach tmux window)",
-            "err": "", "exitcode": 0, "visible": True, "timed_out": True}
+            "err": ("still running — pane is now busy; further commands "
+                    "bounce until it finishes or you send 'C-c'"),
+            "exitcode": None, "visible": True, "timed_out": True}
 
 
 async def capture_screen(db: AsyncSession, session_id: int) -> dict:

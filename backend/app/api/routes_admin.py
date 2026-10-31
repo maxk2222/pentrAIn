@@ -3,7 +3,6 @@ import contextlib
 import re
 import time
 from datetime import date, datetime, timedelta
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +27,7 @@ from ..schemas import (
     TokenOut,
 )
 from ..services import coach_bridge
+from ..services import hoststats as hoststats_svc
 from ..services import packs as packs_svc
 from ..services import settings as settings_svc
 from ..services import telemetry as telemetry_svc
@@ -450,34 +450,15 @@ async def engine_disks(db: AsyncSession = Depends(get_db),
     return {"ok": True, "disks": out}
 
 
-_hoststats_cache: dict = {"ts": 0.0, "data": None}
-
-
 @router.get("/engine/hoststats")
 async def engine_hoststats(db: AsyncSession = Depends(get_db),
                            _=Depends(get_current_user)):
     """CPU temps / GPU / fans from the optional pentrain-hoststats agent on the
-    engine host — cached 30s so chart refreshes don't hammer it."""
+    engine host — shared service cache so refreshes don't hammer it."""
     engine = await get_engine(db)
     if engine.mode == "mock":
         return {"ok": False, "reason": "mock engine"}
-    url = (await settings_svc.get_setting(db, "engine.hoststats_url", "") or "").strip()
-    if not url:
-        host = urlparse(engine.pve.creds.base_url).hostname
-        url = f"http://{host}:9100"
-    now = time.monotonic()
-    if _hoststats_cache["data"] is not None and now - _hoststats_cache["ts"] < 30:
-        return _hoststats_cache["data"]
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as c:
-            r = await c.get(url.rstrip("/") + "/stats")
-        if r.status_code >= 400:
-            raise httpx.HTTPError(f"hoststats {r.status_code}")
-        data = {"ok": True, **r.json()}
-    except Exception as e:
-        data = {"ok": False, "reason": f"agent unreachable: {e}", "url": url}
-    _hoststats_cache.update(ts=now, data=data)
-    return data
+    return await hoststats_svc.fetch(db, engine, ttl_s=30)
 
 
 @router.get("/stats/activity")

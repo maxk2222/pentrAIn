@@ -15,6 +15,7 @@ import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
 import { NotesPanel } from "@/components/notes";
 import { LazyModal } from "@/components/lazymodal";
+import { LiveStatsOverlay } from "@/components/livestats";
 import { DeployLog } from "@/components/deploylog";
 import { cn } from "@/lib/utils";
 
@@ -286,7 +287,8 @@ export function SessionPage() {
         )}
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1">
+          <div className="relative min-h-0 flex-1">
+            {consoleReady && <LiveStatsOverlay sessionId={sessionId} />}
             {consoleReady ? (
               // remount on ready_at → after a reset the stale VNC session reconnects
               <ConsoleView key={`${sessionId}-${session?.ready_at ?? ""}`}

@@ -107,8 +107,8 @@ async def test_llm_usage_breakdown_by_model_and_kind(db):
 
 async def test_hoststats_cache_short_circuits(db):
     """Second call inside the TTL must not hit the network."""
-    import app.api.routes_admin as ra
-    ra._hoststats_cache.update(ts=0.0, data=None)
+    import app.services.hoststats as hs
+    hs._cache.update(ts=0.0, data=None)
 
     calls = {"n": 0}
 
@@ -141,20 +141,76 @@ async def test_hoststats_cache_short_circuits(db):
         pve = _Pve()
 
     import app.api.routes_admin as ra2
+    import app.services.hoststats as hs2
 
     async def _fake_engine(db):
         return _E()
 
     old_get_engine = ra2.get_engine
-    old_client = ra2.httpx.AsyncClient
+    old_client = hs2.httpx.AsyncClient
     ra2.get_engine = _fake_engine
-    ra2.httpx.AsyncClient = lambda *a, **k: _C()
+    hs2.httpx.AsyncClient = lambda *a, **k: _C()
     try:
         r1 = await engine_hoststats(db=db)
         r2 = await engine_hoststats(db=db)
     finally:
         ra2.get_engine = old_get_engine
-        ra2.httpx.AsyncClient = old_client
+        hs2.httpx.AsyncClient = old_client
     assert r1["ok"] and r1["cpu"]["package_c"] == 45.0
     assert r2["ok"] and calls["n"] == 1
-    ra._hoststats_cache.update(ts=0.0, data=None)
+    hs._cache.update(ts=0.0, data=None)
+
+
+async def test_session_live_overlay(db):
+    """Console-overlay feed: kali VM vitals + host load + agent temps in one
+    response; each section fails soft."""
+    import time
+
+    import app.api.routes_sessions as rs
+    import app.services.hoststats as hs
+
+    s = Session(quest_id="q", state="active", kali_vmid=103)
+    db.add(s)
+    await db.commit()
+
+    class _Pve:
+        class creds:
+            base_url = "https://pve.local:8006"
+
+        async def vm_status(self, vmid):
+            assert vmid == 103
+            return {"status": "running", "cpu": 0.42, "mem": 2e9, "maxmem": 6e9,
+                    "netin": 1000, "netout": 500, "uptime": 60}
+
+        async def node_status(self):
+            return {"cpu": 0.3, "memory": {"used": 8e9, "total": 32e9},
+                    "loadavg": [1.5, 1.0, 0.5], "uptime": 3600}
+
+    class _E:
+        mode = "direct"
+        pve = _Pve()
+
+    async def _fake_engine(db):
+        return _E()
+
+    old = rs.get_engine
+    rs.get_engine = _fake_engine
+    hs._cache.update(ts=time.monotonic(), data={"ok": True, "cpu": {"package_c": 41.0},
+                                                "gpu": {"temp_c": 33.0, "util_pct": 2.0}})
+    try:
+        r = await rs.session_live(s.id, db=db)
+    finally:
+        rs.get_engine = old
+        hs._cache.update(ts=0.0, data=None)
+    assert r["ok"] and r["kali"]["cpu"] == 0.42 and r["kali"]["netin"] == 1000
+    assert r["host"]["mem_total"] == 32e9 and r["host"]["load1"] == 1.5
+    assert r["temps"] == {"cpu_c": 41.0, "gpu_c": 33.0, "gpu_util": 2.0}
+
+
+async def test_session_live_mock_engine(db):
+    import app.api.routes_sessions as rs
+    s = Session(quest_id="q", state="active", kali_vmid=103)
+    db.add(s)
+    await db.commit()
+    r = await rs.session_live(s.id, db=db)
+    assert r["ok"] is False and r["reason"] == "mock engine"

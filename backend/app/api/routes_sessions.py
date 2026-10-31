@@ -20,6 +20,7 @@ from ..schemas import (
     SessionStartIn,
 )
 from ..services import console as console_svc
+from ..services import hoststats as hoststats_svc
 from ..services import scoring as scoring_svc
 from ..services import sessions as sessions_svc
 from ..services.engine import get_engine
@@ -152,6 +153,52 @@ async def session_metrics_history(session_id: int, timeframe: str = "hour",
         except Exception as e:
             out.append({**v, "error": str(e)[:120]})
     return {"ok": True, "timeframe": timeframe, "vms": out}
+
+
+@router.get("/sessions/{session_id}/live")
+async def session_live(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Realtime gauges for the console overlay strip — Kali VM vitals, engine
+    host load and agent temps in one call, polled every few seconds. Each
+    section fails soft so the strip degrades instead of flashing errors."""
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"ok": False, "reason": "mock engine"}
+    out: dict = {"ok": True, "kali": None, "host": None, "temps": None}
+    if s.kali_vmid:
+        try:
+            st = await engine.pve.vm_status(s.kali_vmid)
+            out["kali"] = {"status": st.get("status"),
+                           "cpu": st.get("cpu") or 0.0,
+                           "mem": st.get("mem") or 0,
+                           "maxmem": st.get("maxmem") or 0,
+                           "netin": st.get("netin") or 0,
+                           "netout": st.get("netout") or 0,
+                           "diskread": st.get("diskread") or 0,
+                           "diskwrite": st.get("diskwrite") or 0,
+                           "uptime": st.get("uptime") or 0}
+        except Exception as e:
+            out["kali"] = {"status": "error", "error": str(e)[:120]}
+    try:
+        ns = await engine.pve.node_status()
+        mem = ns.get("memory") or {}
+        load = ns.get("loadavg") or []
+        out["host"] = {"cpu": ns.get("cpu") or 0.0,
+                       "mem_used": mem.get("used") or 0,
+                       "mem_total": mem.get("total") or 0,
+                       "load1": float(load[0]) if load else None,
+                       "uptime": ns.get("uptime") or 0}
+    except Exception:
+        pass
+    hs = await hoststats_svc.fetch(db, engine)
+    if hs.get("ok"):
+        gpu = hs.get("gpu") or {}
+        out["temps"] = {"cpu_c": (hs.get("cpu") or {}).get("package_c"),
+                        "gpu_c": gpu.get("temp_c"),
+                        "gpu_util": gpu.get("util_pct")}
+    return out
 
 
 @router.get("/sessions/{session_id}/console")
