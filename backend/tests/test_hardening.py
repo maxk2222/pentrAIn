@@ -191,6 +191,60 @@ async def test_visible_exec_falls_back_when_no_tmux():
     assert res["exitcode"] == 0 and "whoami" in res.get("out", "")
 
 
+async def test_visible_exec_streams_live_output_tail():
+    """Each poll relays the pane tail as a coach_activity event so the chat
+    shows command progress in real time — sentinel markers must be filtered."""
+    import re as _re
+
+    from app.services.coach_bridge import exec_visible_in_kali
+    from app.services.events import bus
+
+    class _Pve:
+        def __init__(self):
+            self.marker = "PTN0000000000"
+            self.polls = 0
+
+        async def agent_exec_sh(self, vmid, cmd, timeout_s=30):
+            if "send-keys" in cmd:
+                if m := _re.search(r"PTN[0-9a-f]{10}", cmd):
+                    self.marker = m.group(0)
+                return {"out": "", "exitcode": 0}
+            if "has-session" in cmd:
+                return {"out": "", "exitcode": 0}
+            if "capture-pane" in cmd:
+                m = self.marker
+                self.polls += 1
+                if self.polls == 1:
+                    pane = (f"$ echo {m}A\n{m}A\n$ nmap -sV 10.0.0.5\n"
+                            "Starting Nmap 7.94\nscanning…\n")
+                else:
+                    pane = (f"$ echo {m}A\n{m}A\n$ nmap -sV 10.0.0.5\n"
+                            "Starting Nmap 7.94\nscanning…\nPORT STATE\n"
+                            f"22/tcp open\n$ echo {m}B:$?\n{m}B:0\n")
+                return {"out": pane, "exitcode": 0}
+            return {"out": "", "exitcode": 0}
+
+    class _Eng:
+        def __init__(self, pve):
+            self.pve = pve
+
+    q = await bus.subscribe("session.7")
+    try:
+        res = await exec_visible_in_kali(_Eng(_Pve()), 100,
+                                         "nmap -sV 10.0.0.5",
+                                         session_id=7, timeout_s=5)
+    finally:
+        await bus.unsubscribe("session.7", q)
+    assert res["exitcode"] == 0 and "22/tcp open" in res["out"]
+    evts = []
+    while not q.empty():
+        evts.append(q.get_nowait())
+    outs = [e["data"].get("output", "") for e in evts
+            if e.get("type") == "coach_activity" and e["data"].get("active")]
+    assert any("Starting Nmap" in o for o in outs)
+    assert all("PTN" not in o for o in outs)  # sentinels never reach the UI
+
+
 # ---------- suggestion resolved-meta persistence ----------
 
 async def test_suggest_confirm_marks_message_resolved(db):

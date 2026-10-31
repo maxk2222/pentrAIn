@@ -689,9 +689,13 @@ class SessionCoach:
                     out = (res.get("out") or res.get("error") or "")
                     result = (f"{out[:1900]}\n(exit {res.get('exitcode', 0)})"
                               if out else f"exit {res.get('exitcode', 0)}")
-                    note = ("\n\n*(typed live in the `pentrain-coach` tmux)*"
-                            if res.get("visible") else "")
-                    text = f"Executed: `{cmd}`\n```\n{out[:500]}\n```{note}"
+                    if res.get("timed_out"):
+                        note = "\n\n*(still running — watch the `pentrain-coach` tmux)*"
+                    elif res.get("visible"):
+                        note = "\n\n*(typed live in the `pentrain-coach` tmux)*"
+                    else:
+                        note = ""
+                    text = f"Executed: `{cmd}`\n```\n{out[-1500:]}\n```{note}"
                     await self.client.send_chat(self.sid, text, kind="action_report",
                                                 meta=self._draft_meta())
                     self._record_reply(text)

@@ -42,13 +42,15 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
   const [thinking, setThinking] = useState(false);
   const [sendError, setSendError] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [activity, setActivity] = useState<{ text: string; since: number } | null>(null);
+  const [activity, setActivity] = useState<
+    { text: string; output?: string; since: number } | null>(null);
   const [now, setNow] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const [unseen, setUnseen] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const thinkTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const actOutRef = useRef<HTMLPreElement>(null);
   const draftTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -99,8 +101,15 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
     // 'coach working' status — emitted while slow actions (exec, screen
     // analysis, flag checks) are in flight; cleared by active:false
     if (ev.type === "coach_activity" && ev.data) {
-      const { active, text = "" } = ev.data as { active: boolean; text?: string };
-      setActivity(active ? { text, since: Date.now() } : null);
+      const { active, text, output } = ev.data as
+        { active: boolean; text?: string; output?: string };
+      // events are mergeable — an output-only tick keeps the label, a
+      // label-only tick keeps the accumulated output
+      setActivity((prev) => active
+        ? { text: text || prev?.text || "working…",
+            output: output ?? prev?.output,
+            since: prev?.since ?? Date.now() }
+        : null);
     }
     // suggestion confirm/reject → mark the matching suggestion message resolved
     if (ev.type === "coach_action" && ev.data?.status && ev.data.id) {
@@ -116,6 +125,7 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
   // 5min staleness cap covers a coach dying mid-action
   useEffect(() => {
     if (!activity) return;
+    actOutRef.current?.scrollTo({ top: actOutRef.current.scrollHeight });
     setNow(Date.now());
     const iv = setInterval(() => {
       const n = Date.now();
@@ -227,6 +237,12 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
               {Math.floor((now - activity.since) / 1000)}s
             </span>
           </div>
+        )}
+        {activity?.output && (
+          <pre ref={actOutRef}
+            className="ml-6 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-black/50 p-2 font-mono text-[11px] leading-snug text-muted">
+            {activity.output}
+          </pre>
         )}
         {thinking && (
           <div className="flex gap-2">

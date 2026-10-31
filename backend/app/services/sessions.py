@@ -513,7 +513,8 @@ async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: 
                 "data": {"active": True,
                          "text": f"executing confirmed `{cmd[:110]}`"}})
             # user-approved commands run visibly in the coach tmux as well
-            res = await coach_bridge.exec_visible_in_kali(engine, session.kali_vmid, cmd) \
+            res = await coach_bridge.exec_visible_in_kali(
+                engine, session.kali_vmid, cmd, session_id=session_id) \
                 if session.kali_vmid else {"out": "", "err": "no kali vmid", "exitcode": 1}
             action.result = res
             action.status = "confirmed"

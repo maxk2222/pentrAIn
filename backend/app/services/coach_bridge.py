@@ -173,7 +173,8 @@ async def exec_in_kali(db: AsyncSession, session_id: int, command: str) -> dict:
 
     engine = await get_engine(db)
     try:
-        res = await exec_visible_in_kali(engine, session.kali_vmid, command)
+        res = await exec_visible_in_kali(engine, session.kali_vmid, command,
+                                         session_id=session_id)
         status = "ok" if res.get("exitcode", 0) == 0 else "error"
         await record_action(db, session_id, "exec_in_kali",
                             {"command": command}, res, status=status)
@@ -227,13 +228,16 @@ COACH_TMUX = "pentrain-coach"
 
 
 async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
-                               timeout_s: int = 60) -> dict:
+                               timeout_s: int = 60,
+                               session_id: int | None = None) -> dict:
     """Run a command INSIDE the 'pentrain-coach' tmux on the Kali desktop so the
     trainee literally watches the coach type. Falls back to a detached guest-agent
     shell when no desktop/tmux exists (agent provisioning still pending, mock, etc).
 
     Output is recovered via a unique end-marker + capture-pane, so the result has
     the real stdout/stderr text and exit code instead of scrollback noise.
+    With session_id set, each poll also relays the live output tail as a
+    coach_activity event — the chat shows the command's progress in real time.
     """
     probe = await engine.pve.agent_exec_sh(
         kali_vmid, f"tmux has-session -t {COACH_TMUX}", timeout_s=10)
@@ -248,35 +252,68 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
         return await engine.pve.agent_exec_sh(kali_vmid, command, timeout_s=timeout_s)
 
     marker = f"PTN{secrets.token_hex(5)}"
-    send = (f"tmux send-keys -t {COACH_TMUX} "
-            f"{shlex.quote(command + f' ; echo {marker}:$?')} Enter")
-    await engine.pve.agent_exec_sh(kali_vmid, send, timeout_s=10)
+    # three SEPARATE key sends — appending `; echo …` to the command line broke
+    # heredocs (a `EOF ; echo` line isn't a valid delimiter) and swallowed the
+    # output slice. Start-marker, raw command, end-marker keeps every typed
+    # line intact and brackets the real output between two unique sentinels.
+    n_cmd_lines = command.count("\n") + 1
+    await engine.pve.agent_exec_sh(
+        kali_vmid,
+        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(f'echo {marker}A')} Enter",
+        timeout_s=10)
+    await engine.pve.agent_exec_sh(
+        kali_vmid,
+        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(command)} Enter",
+        timeout_s=10)
+    await engine.pve.agent_exec_sh(
+        kali_vmid,
+        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(f'echo {marker}B:$?')} Enter",
+        timeout_s=10)
 
-    pane_cmd = f"tmux capture-pane -pt {COACH_TMUX} -S -400 2>/dev/null | tail -200"
-    # the typed command itself echoes `; echo PTNxxx:$?` — so plain substring
-    # matching finds the marker BEFORE the command even ran. Only the real
-    # marker *output* line carries a digit after the colon.
-    mline = re.compile(rf"{re.escape(marker)}:(\d+)\s*$")
+    # -J joins wrapped lines so each typed line maps to exactly one pane line
+    pane_cmd = (f"tmux capture-pane -ptJ {COACH_TMUX} -S -400 2>/dev/null "
+                "| tail -200")
+    # only real marker *output* lines count: `PTN…A` alone, `PTN…B:<digits>`
+    begin = re.compile(rf"{re.escape(marker)}A\s*$")
+    end = re.compile(rf"{re.escape(marker)}B:(\d+)\s*$")
     deadline = time.monotonic() + timeout_s
+    last_tail = ""
     while time.monotonic() < deadline:
         pane = await engine.pve.agent_exec_sh(kali_vmid, pane_cmd, timeout_s=15)
         lines = (pane.get("out") or "").splitlines()
-        mi = -1
+        ai = bi = -1
+        exitcode = 0
         for i in range(len(lines) - 1, -1, -1):
-            m = mline.search(lines[i])
-            if m:
-                mi, exitcode = i, int(m.group(1))
+            if bi < 0 and (m := end.search(lines[i])):
+                bi, exitcode = i, int(m.group(1))
+            if ai < 0 and begin.search(lines[i]):
+                ai = i
+            if ai >= 0 and bi >= 0:
                 break
-        if mi >= 0:
-            # slice after the echoed `; echo PTN…` line (last wrapped line of
-            # the typed command); fall back to the line before the marker
-            start = next((i for i in range(mi - 1, -1, -1)
-                          if f"echo {marker}" in lines[i]), mi - 1)
-            out = "\n".join(ln for ln in lines[start + 1:mi] if ln.strip())[-4000:]
+        if ai >= 0 and bi >= 0:
+            # after A's output line: n_cmd_lines typed command lines, then the
+            # real output, then the typed `echo PTN…B` line at bi - 1
+            out = "\n".join(ln for ln in
+                            lines[ai + 1 + n_cmd_lines:bi - 1]
+                            if ln.strip())[-4000:]
             return {"out": out, "err": "", "exitcode": exitcode, "visible": True}
+        if session_id and ai >= 0:
+            # live output-so-far: everything after the typed command lines,
+            # marker text hidden so the sentinels never reach the chat
+            tail = "\n".join(ln for ln in lines[ai + 1 + n_cmd_lines:]
+                             if ln.strip() and marker not in ln)[-3000:]
+            if tail != last_tail:
+                last_tail = tail
+                await bus.publish(f"session.{session_id}", {
+                    "type": "coach_activity", "session_id": session_id,
+                    "data": {"active": True,
+                             "text": f"executing `{command[:90]}`",
+                             "output": tail}})
         await asyncio.sleep(1.0)
-    return {"out": "(still running — visible in the pentrain-coach tmux window)",
-            "err": "", "exitcode": 0, "visible": True}
+    # timed out but still typed — the partial pane tail beats a dead end
+    return {"out": last_tail
+            or "(still running — visible in the pentrain-coach tmux window)",
+            "err": "", "exitcode": 0, "visible": True, "timed_out": True}
 
 
 async def capture_screen(db: AsyncSession, session_id: int) -> dict:
