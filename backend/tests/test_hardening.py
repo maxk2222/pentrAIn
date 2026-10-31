@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import httpx
 import pytest
@@ -289,11 +290,11 @@ async def test_ludus_deploy_recreates_missing_range():
     PUT /range/config 404s. deploy_range must create the range and retry."""
     from app.ranges.ludus import LudusProvider
 
-    calls: list[tuple[str, str, str]] = []
+    calls: list[tuple[str, str, str, bytes]] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
-        calls.append((req.method, path, str(req.url)))
+        calls.append((req.method, path, str(req.url), req.content))
         if path.endswith("/testing/stop"):
             return httpx.Response(200, json={})
         if path.endswith("/ranges/create"):
@@ -322,10 +323,10 @@ async def test_ludus_deploy_recreates_missing_range():
     creates = [c for c in calls if c[1].endswith("/ranges/create")]
     assert len(creates) == 1
     # default repointed to the new range — a dangling default is what 404s;
-    # ludus reads `rangeID` from the query (defaultRangeID only works in-body)
+    # ludus takes `defaultRangeID` in the JSON body (query params are ignored)
     defaults = [c for c in calls if c[1].endswith("/user/default-range")]
     assert len(defaults) == 1
-    assert "rangeID=quest-x" in defaults[0][2]
+    assert json.loads(defaults[0][3])["defaultRangeID"] == "quest-x"
     # config upload retried AFTER the create
     cfg_idx = [i for i, c in enumerate(calls) if c[1].endswith("/range/config")]
     create_idx = calls.index(creates[0])

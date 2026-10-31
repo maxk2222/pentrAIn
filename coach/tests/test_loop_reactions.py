@@ -219,14 +219,15 @@ async def test_exec_turn_resets_streak_instead_of_feeding_it():
     await coach._reflect_tick(60)
     assert coach.state.proactive_streak == 0
 
-    # a chat-only proactive turn still counts toward the streak — and at L4
-    # triggers ONE corrective re-turn (chat again → streak climbs to 2)
+    # a chat-only proactive turn still counts toward the streak — at L4 a
+    # stubborn model gets up to 4 corrective re-turns in the same tick
+    # (each sees STALL_ALERT), then the cap stops the burn
     coach.llm = FakeLlm(actions=[{"type": "send_chat", "content": "nudge"}])
     coach.state.proactive_streak = 0
     coach.state.last_nudge_ts = 0
     await coach._reflect_tick(60)
-    assert len(coach.llm.calls) == 2          # stalled turn + corrective re-turn
-    assert coach.state.proactive_streak == 2
+    assert len(coach.llm.calls) == 5          # stalled turn + 4 capped re-turns
+    assert coach.state.proactive_streak == 5
 
 
 async def test_l4_stall_gets_one_corrective_return():
@@ -274,6 +275,12 @@ async def test_l4_busy_pane_gets_interactive_return():
             return {"out": "student@target01's password: ",
                     "err": "still running — pane is now busy",
                     "exitcode": None, "visible": True, "timed_out": True}
+        async def type_in_pane(self, sid, text):
+            self.typed = getattr(self, "typed", [])
+            self.typed.append(text)
+            # password accepted but the pane stays inside ssh — still busy
+            return {"out": "student@target01:~$ ", "visible": True,
+                    "busy": True}
     coach, c = _coach()
     coach.client = BusyClient()
     coach.state.autonomy_level = 4
@@ -282,10 +289,28 @@ async def test_l4_busy_pane_gets_interactive_return():
     coach.state.last_progress_ts = time.time() - 5000
     coach.state.last_nudge_ts = 0
     await coach._reflect_tick(60)
-    assert len(coach.llm.calls) == 2        # busy pane → immediate re-turn
+    # busy pane → chained follow-ups at LLM cadence until the cap (4
+    # re-turns) — a remote shell session must not crawl at tick speed
+    assert len(coach.llm.calls) == 5
     assert coach._pane_interactive is True
-    assert coach.client.typed == ["student123"]
+    assert coach.client.typed == ["student123"] * 4
     assert "interactive input pending" in coach.llm.calls[1][-1]["content"]
+
+
+async def test_type_in_pane_clears_interactive_when_shell_returns():
+    """The fast-path must end when our input returns the pane to a local
+    shell — otherwise every reflect tick burns follow-up turns forever."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach._pane_interactive = True
+    class ShellClient(FakeClient):
+        async def type_in_pane(self, sid, text):
+            return {"out": "root@kali:~# ", "visible": True, "busy": False}
+    coach.client = ShellClient()
+    did, res = await coach._dispatch(
+        {"type": "type_in_pane", "text": "exit"}, proactive=True)
+    assert did and coach._pane_interactive is False
 
 
 async def test_type_in_pane_dispatch_and_tool_schema():
@@ -307,6 +332,86 @@ async def test_type_in_pane_dispatch_and_tool_schema():
     did, res = await coach._dispatch(
         {"type": "type_in_pane", "text": "x"}, proactive=True)
     assert not did and "denied" in res
+
+
+async def test_repeat_output_gets_settled_note():
+    """Re-greps of the same data come back byte-identical — the model must
+    be told the facts are settled or it re-derives them forever (the
+    nmap-file re-read loop seen live)."""
+    class SameClient(FakeClient):
+        async def exec_in_kali(self, sid, command):
+            return {"out": "21/tcp open  ftp\n22/tcp open  ssh",
+                    "exitcode": 0, "visible": True}
+    coach, c = _coach()
+    coach.client = SameClient()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _, r1 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "grep open /tmp/nmap.txt | head"},
+        proactive=True)
+    assert "identical" not in r1
+    _, r2 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat /tmp/nmap.txt | grep open"},
+        proactive=True)
+    assert "identical" in r2 and "DIFFERENT action" in r2
+    # the soft note is a hint — the 4th read of the SAME path is denied
+    # outright (the model 'perfected' re-greps live instead of acting)
+    _, r3 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "grep -i open /tmp/nmap.txt"},
+        proactive=True)
+    did, r4 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "head /tmp/nmap.txt"},
+        proactive=True)
+    assert not did and "denied" in r4 and "ALREADY_DONE" in r4
+    # a different path still reads fine
+    did, r5 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat /etc/passwd"},
+        proactive=True)
+    assert did
+
+
+async def test_flag_in_output_gets_submit_directive():
+    """A pentrAIn{...} in exec output must trigger an immediate submit
+    directive in the tool result — the model re-read flag files 3-4x to
+    'confirm' them instead of submitting (observed live)."""
+    class FlagClient(FakeClient):
+        async def exec_in_kali(self, sid, command):
+            return {"out": "intern\npentrAIn{abc123def456}", "exitcode": 0,
+                    "visible": True}
+    coach, c = _coach()
+    coach.client = FlagClient()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _, r1 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "ssh intern@t cat user.txt"},
+        proactive=True)
+    assert "FLAG CAPTURED" in r1 and "pentrAIn{abc123def456}" in r1
+    assert "submit_flag" in r1
+    _, r2 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "ssh intern@t cat user.txt"},
+        proactive=True)
+    assert "already captured 2x" in r2
+
+
+async def test_unseen_flag_submit_is_challenged_once():
+    """Invented flags can never match (values are per-session) yet the model
+    submits them anyway (seen live). A pentrAIn{...} value that never
+    appeared in tool output is challenged once — an identical resubmit
+    passes so a real-but-uncaptured read stays possible."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    did, r1 = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{invented}"}, proactive=True)
+    assert not did and "unverified" in r1 and not c.flags
+    did, r2 = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{invented}"}, proactive=True)
+    assert did and c.flags == ["pentrAIn{invented}"]
+    # a flag that WAS seen in output submits without challenge
+    coach._flags_seen["pentrAIn{real}"] = 1
+    did, r3 = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{real}"}, proactive=True)
+    assert did and c.flags[-1] == "pentrAIn{real}"
 
 
 async def test_activity_status_emitted_around_exec():

@@ -12,6 +12,7 @@ Event model — three distinct paths:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import time
 
@@ -78,6 +79,10 @@ class SessionCoach:
         self._turn_reasoning = ""                # reasoning of the in-flight turn
         self._write_counts: dict[str, int] = {}  # path → writes via exec_in_kali
         self._run_exits: dict[str, int] = {}     # script path → last exit code
+        self._out_sigs: dict[str, int] = {}      # exec output signature → count
+        self._read_counts: dict[str, int] = {}   # file path → read-type execs
+        self._flags_seen: dict[str, int] = {}    # flag value → times shown
+        self._submit_challenged: dict[str, int] = {}  # unverified submits
 
     # ---------- lifecycle ----------
 
@@ -181,6 +186,12 @@ class SessionCoach:
                            c.command)
             if rm:
                 self._run_exits[rm.group(1)] = c.exit_code
+        # seed seen-flag evidence from past tool outputs — after a restart a
+        # re-submit of an already-shown flag must not hit the unverified
+        # challenge, and an invented value still gets caught
+        for o in self.ctx.get("flag_outs") or []:
+            for fv in re.findall(r"pentrAIn\{[^}\s]+\}", str(o)):
+                self._flags_seen[fv] = self._flags_seen.get(fv, 0) + 1
         # stuck/idle clocks seed from the most RECENT liveness signal —
         # not blindly from started_at (a session parked in 'ready' for hours
         # then activated must not look stuck-since-forever)
@@ -487,15 +498,20 @@ class SessionCoach:
             # failure. streak>0 post-turn ⟺ this turn did no work (a worked
             # turn resets it). Skipped when the action budget is exhausted —
             # every further exec would be denied anyway.
-            left = LLM_TURN_BUDGET_S - (time.monotonic() - t0)
             # interactive fast-path: the pane holds a program waiting for
-            # input (ssh password, menu). The normal ~90s tick is SLOWER than
-            # LoginGraceTime, so the password arrives after the connection is
-            # already closed — follow up inside this tick's budget instead.
-            if (self.state.autonomy_level >= 4
-                    and (self.state.proactive_streak > 0
-                         or self._pane_interactive)
-                    and self.state.exec_count < budget and left > 30):
+            # input (ssh password, menu, remote shell). The normal ~90s tick
+            # is SLOWER than LoginGraceTime — and a full remote command
+            # sequence (whoami, sudo -l, privesc, flags) at 90s/step takes
+            # forever. Chain bounded follow-up turns while the pane stays
+            # interactive or the model keeps stalling; each is still capped
+            # by this tick's time budget and the exec budget.
+            for _retry in range(4):
+                left = LLM_TURN_BUDGET_S - (time.monotonic() - t0)
+                if not (self.state.autonomy_level >= 4
+                        and (self.state.proactive_streak > 0
+                             or self._pane_interactive)
+                        and self.state.exec_count < budget and left > 30):
+                    break
                 why = ("interactive input pending"
                        if self._pane_interactive else "stall correction")
                 await asyncio.wait_for(
@@ -706,6 +722,29 @@ class SessionCoach:
 
     # ---------- action dispatch ----------
 
+    def _scan_flags(self, out: str) -> str:
+        """flag-on-sight: a pentrAIn{...} in tool output IS the flag —
+        per-session values make guessing impossible, so the only correct
+        move is submit_flag NOW. The model otherwise re-reads the same
+        output 4x to 'confirm' it (seen live: 3 identical ssh re-reads
+        after the flag was already on screen). Returns the directive to
+        append to the tool result and remembers seen values so invented
+        submits can be challenged."""
+        note = ""
+        for fv in set(re.findall(r"pentrAIn\{[^}\s]+\}", out or "")):
+            n = self._flags_seen.get(fv, 0) + 1
+            self._flags_seen[fv] = n
+            if n == 1:
+                note += (f"\nFLAG CAPTURED: {fv} — call submit_flag with "
+                         f"it NOW (flag values are per-session; a wrong "
+                         f"submit is impossible). Do not re-run commands "
+                         f"to re-confirm it.")
+            else:
+                note += (f"\n{fv} again — already captured {n}x. If it is "
+                         f"not submitted yet, call submit_flag NOW; "
+                         f"further re-reads are pure waste.")
+        return note
+
     async def _dispatch(self, a: dict, *, proactive: bool = False) -> tuple[bool, str]:
         """Execute one LLM action under autonomy/budget gates.
         Returns (visible_to_trainee, result_text) — the result text becomes the
@@ -784,6 +823,33 @@ class SessionCoach:
                                 f"{why} — RUN it now (python3 -u {path}). "
                                 f"Another rewrite is only useful after a "
                                 f"failed run.")
+                    # read-loop guard: re-reading the same file produces
+                    # identical output — settled facts the model keeps
+                    # re-deriving (seen live: 6x `cat nmap.txt | grep …`
+                    # variants instead of connecting to the found service).
+                    # The output-sig NOTE below is only a hint — the 4th
+                    # read of the SAME path is denied before typing.
+                    read_tgt = None
+                    if re.match(
+                            r"^\s*(?:sudo\s+)?(?:cat|less|more|head|tail|grep|"
+                            r"egrep|fgrep|awk|sed|cut|sort|uniq|wc|strings|"
+                            r"file|ls|ll|xxd|od|diff)\b", cmd):
+                        paths = re.findall(
+                            r"(?<![\w.-])/(?:[\w.+-]+/)*[\w.+-]+", cmd)
+                        if paths:
+                            read_tgt = max(paths, key=len)
+                            n = self._read_counts.get(read_tgt, 0)
+                            if n >= 3:
+                                await log.ainfo("reread denied",
+                                                session=self.sid, path=read_tgt,
+                                                reads=n, cmd=cmd[:120])
+                                return spoke, (
+                                    f"denied: {read_tgt} was already read "
+                                    f"{n}x with the same result — its contents "
+                                    f"are settled facts (see ALREADY_DONE). "
+                                    f"Take a DIFFERENT action toward the flag: "
+                                    f"connect to a discovered service, use "
+                                    f"credentials you found, or submit a flag.")
                     # mark BEFORE the call so telemetry echo is recognized as ours
                     self._coach_cmds.append((cmd, time.time()))
                     await self.client.send_activity(
@@ -825,6 +891,9 @@ class SessionCoach:
                         self.state.add_command(time.time(), cmd,
                                                from_coach=True)
                         self.state.commands[-1].exit_code = code
+                        if read_tgt:
+                            self._read_counts[read_tgt] = (
+                                self._read_counts.get(read_tgt, 0) + 1)
                     if code is None:
                         err_hint = res.get("err") or ""
                         if err_hint and err_hint not in out:
@@ -847,6 +916,24 @@ class SessionCoach:
                             r"\b(?:python3?|bash|sh|perl|ruby|node)\s+(/?\S+)", cmd)
                         if rm:
                             self._run_exits[rm.group(1)] = code
+                    result += self._scan_flags(out)
+                    if typed and code == 0 and out.strip():
+                        # output-signature dedup: re-reads/re-greps of the same
+                        # data return byte-identical output — the command-text
+                        # dedup in ALREADY_DONE misses `cat f | grep` vs
+                        # `grep x f` variants, so flag repeated OUTPUTS: the
+                        # facts are settled, the model must move on
+                        sig = hashlib.sha1(
+                            "\n".join(l.strip() for l in out.splitlines()
+                                      if l.strip())[:1500].encode()
+                        ).hexdigest()[:12]
+                        n = self._out_sigs.get(sig, 0) + 1
+                        self._out_sigs[sig] = n
+                        if n >= 2:
+                            result += ("\nNOTE: this output is identical to a "
+                                       "command you already ran — these facts "
+                                       "are settled (see ALREADY_DONE). Take a "
+                                       "DIFFERENT action toward the flag.")
                     if res.get("busy"):
                         text = f"Could not run `{cmd}` — {res.get('err') or 'pane busy'}"
                     else:
@@ -873,7 +960,13 @@ class SessionCoach:
                         f"({type(e).__name__}) — the input may still have "
                         f"reached the pane; probe before re-typing")
                 out = res.get("out") or res.get("error") or res.get("err") or ""
-                result = out[:1900] or "input sent"
+                result = (out[:1900] or "input sent") + self._scan_flags(out)
+                # keep the interactive fast-path alive while the pane is
+                # still held (inside an ssh/ftp/vim session remote commands
+                # must ALL go through type_in_pane — at LLM cadence, not
+                # the ~90s tick). Missing field (old backend) → assume busy,
+                # the bounded re-turn cap keeps that harmless.
+                self._pane_interactive = bool(res.get("busy", True))
                 # interactive input is coach activity too — keep it visible in
                 # command memory (marked so it can't pollute recon/write regexes)
                 self.state.add_command(time.time(), f"<type> {text_in[:80]}",
@@ -891,6 +984,23 @@ class SessionCoach:
                 val = (a.get("value") or a.get("content") or "").strip()[:256]
                 if not val:
                     return spoke, "error: empty flag value"
+                # anti-hallucination: flag values are per-session — a value
+                # that never appeared in ANY tool output is almost certainly
+                # invented (seen live: model submitted `pentrAIn{f00th0ld…}`
+                # while the real flag sat in the scrollback). Challenge once;
+                # an identical resubmit goes through so a real-but-uncaptured
+                # read stays possible — invented values just get corrected.
+                if (re.fullmatch(r"pentrAIn\{[^}\s]+\}", val)
+                        and val not in self._flags_seen
+                        and not self._submit_challenged.get(val)):
+                    self._submit_challenged[val] = 1
+                    return spoke, (
+                        f"unverified: `{val[:80]}` never appeared in any "
+                        f"exec/type output this session — invented flags can "
+                        f"never match (values are per-session) and wrong "
+                        f"submits count. Re-read the file/output where the "
+                        f"flag actually appeared and paste the EXACT string. "
+                        f"(Submitting the same value again confirms it.)")
                 await self.client.send_activity(self.sid, "submitting flag…")
                 res = await self.client.submit_flag(self.sid, val)
                 verdict = ("correct — flag solved" if res.get("correct")

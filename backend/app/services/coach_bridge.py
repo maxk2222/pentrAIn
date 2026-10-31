@@ -85,6 +85,16 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                 CoachAction.tool == "exec_in_kali",
                 CoachAction.status.in_(["ok", "confirmed"]))
             .order_by(CoachAction.id.desc()).limit(60))).all() if r[0]]
+    # every tool output that ever showed a flag — replayed into the coach's
+    # seen-flag evidence so a restart doesn't lose it (unverified submits
+    # get challenged; already-seen values must not)
+    flag_outs = [
+        r[0] for r in (await db.execute(
+            select(func.json_extract(CoachAction.result, "$.out")).where(
+                CoachAction.session_id == session_id,
+                CoachAction.tool.in_(["exec_in_kali", "type_in_pane"]),
+                func.json_extract(CoachAction.result, "$.out")
+                    .like("%pentrAIn{%")))).all() if r[0]]
     profile = await db.get(UserProfile, 1)
     # resolve concrete target IPs for the coach — hostnames alone invite the
     # model to invent RFC-5737 addresses. The range's /24 prefix comes from
@@ -136,6 +146,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                       "ts": m.created_at.isoformat() if m.created_at else None} for m in msgs],
         "exec_count": int(action_count),
         "coach_commands": coach_cmds,
+        "flag_outs": flag_outs,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},
     }
@@ -275,13 +286,24 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
             out = "\n".join(lines[h0 + cy0:])[-3000:]
         else:
             out = "\n".join(lines[-50:])[-3000:]
+        # is the pane STILL held by a foreground program (ssh session, vim,
+        # ftp) or did our input return it to the shell? The coach's
+        # interactive fast-path keys off this: still-busy means the next
+        # input should follow at LLM cadence, not the ~90s reflect tick.
+        cc_r = await engine.pve.agent_exec_sh(
+            session.kali_vmid,
+            f"tmux display-message -p -t {COACH_TMUX} "
+            "'#{pane_current_command}'", timeout_s=10)
+        cur = (cc_r.get("out") or "").strip()
+        busy = bool(cur) and cur not in ("zsh", "bash", "sh", "fish", "tmux")
         await record_action(db, session_id, "type_in_pane", {"text": text[:80]},
                             {"out": out[-600:]}, status="ok")
         if session_id:
             await publish_session(session_id, "coach_activity", {
                 "active": True, "text": f"typing input in the pane",
                 "output": out[-1500:]}, sticky=True)
-        return {"out": out, "visible": True, "exitcode": None}
+        return {"out": out, "visible": True, "exitcode": None,
+                "current_command": cur, "busy": busy}
     except Exception as e:
         await record_action(db, session_id, "type_in_pane", {"text": text[:80]},
                             {"error": str(e)}, status="error")
