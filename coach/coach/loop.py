@@ -705,6 +705,8 @@ class SessionCoach:
                         if n >= 2 and (last is None or last == 0):
                             why = ("ran without error" if last == 0
                                    else "was never executed")
+                            await log.ainfo("rewrite denied", session=self.sid,
+                                            path=path, writes=n, cmd=cmd[:120])
                             return spoke, (
                                 f"denied: {path} was already written {n}x and "
                                 f"{why} — RUN it now (python3 -u {path}). "

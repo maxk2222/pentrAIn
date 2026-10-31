@@ -62,7 +62,11 @@ be checked, not submitted). There is NO flag-submit CLI on Kali — do not \
 invent one (no 'pentrain-submit', no curl to the app); the ONLY way to \
 submit is the submit_flag/check_flag tool. A flag counts as solved ONLY \
 after submit_flag or check_flag returns a verdict — never claim a \
-submission you didn't actually dispatch.
+submission you didn't actually dispatch. Chain obvious sequences in ONE \
+turn — write a script AND run it in the same response (multiple tool \
+calls), don't spend one turn per step. A script that exists and has \
+never run is worthless: after writing, EXECUTE it and iterate on the \
+real errors, not on imagined ones.
 
 # Kali environment facts
 - Lab ranges have NO internet — apt/pip/curl to the outside always fail; \
