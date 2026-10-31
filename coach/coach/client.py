@@ -81,6 +81,17 @@ class BackendClient:
         except Exception as e:
             await log.adebug("stream relay failed", error=str(e))
 
+    async def send_activity(self, session_id: int, text: str = "",
+                            *, active: bool = True) -> None:
+        """Live 'working on X' indicator — ephemeral like stream_draft; a
+        dropped update costs the trainee a status line, never worth a turn."""
+        try:
+            await self._post("/api/coach/activity",
+                             {"session_id": session_id, "active": active,
+                              "text": text[:200]})
+        except Exception as e:
+            await log.adebug("activity relay failed", error=str(e))
+
     async def suggest_command(self, session_id: int, command: str, why: str) -> dict:
         return await self._post("/api/coach/suggest",
                                 {"session_id": session_id, "command": command, "why": why})

@@ -169,6 +169,14 @@ class CoachStreamIn(BaseModel):
     kind: str = "chat"
 
 
+class CoachActivityIn(BaseModel):
+    """Ephemeral 'working' status — the UI shows a live indicator while a
+    slow action (exec, screen analysis, flag check) is in flight."""
+    session_id: int
+    active: bool
+    text: str = Field(default="", max_length=200)
+
+
 class CoachExecIn(BaseModel):
     session_id: int
     command: str

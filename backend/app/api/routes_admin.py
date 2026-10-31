@@ -15,6 +15,7 @@ from ..db import get_db
 from ..models.domain import Attempt, CoachMessage, LlmUsage, Session, SessionState, UserProfile
 from ..schemas import (
     CheckpointIn,
+    CoachActivityIn,
     CoachExecIn,
     CoachFlagCheckIn,
     CoachFlagIn,
@@ -616,6 +617,16 @@ async def coach_stream(body: CoachStreamIn):
         "data": {"draft_id": body.draft_id, "content": body.content,
                  "reasoning": body.reasoning,
                  "done": body.done, "kind": body.kind}})
+    return {"ok": True}
+
+
+@coach_router.post("/activity")
+async def coach_activity(body: CoachActivityIn):
+    """Live 'the coach is doing X' indicator for the session UI — ephemeral
+    bus event like /stream, cleared by a follow-up with active=false."""
+    await bus.publish(f"session.{body.session_id}", {
+        "type": "coach_activity", "session_id": body.session_id,
+        "data": {"active": body.active, "text": body.text}})
     return {"ok": True}
 
 

@@ -33,6 +33,9 @@ class FakeClient:
         self.checkpoints.append(cid)
         return {}
 
+    async def send_activity(self, sid, text="", *, active=True):
+        pass
+
 
 def _coach(autonomy: int, action_budget: int = 50) -> tuple[SessionCoach, FakeClient]:
     c = FakeClient()

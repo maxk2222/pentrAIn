@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Bot, Lightbulb, Play, Radio, Terminal, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Lightbulb, Loader2, Play, Radio, Terminal, User, X } from "lucide-react";
 import { api, type ChatMessage, type WsEvent } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { MarkdownView } from "@/components/markdown";
@@ -42,6 +42,8 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
   const [thinking, setThinking] = useState(false);
   const [sendError, setSendError] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [activity, setActivity] = useState<{ text: string; since: number } | null>(null);
+  const [now, setNow] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const [unseen, setUnseen] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -94,6 +96,12 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
         draftTimers.current.set(draft_id, setTimeout(() => removeDraft(draft_id), 2500));
       }
     }
+    // 'coach working' status — emitted while slow actions (exec, screen
+    // analysis, flag checks) are in flight; cleared by active:false
+    if (ev.type === "coach_activity" && ev.data) {
+      const { active, text = "" } = ev.data as { active: boolean; text?: string };
+      setActivity(active ? { text, since: Date.now() } : null);
+    }
     // suggestion confirm/reject → mark the matching suggestion message resolved
     if (ev.type === "coach_action" && ev.data?.status && ev.data.id) {
       const { id, status } = ev.data as { id: number; status: string };
@@ -103,6 +111,19 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, sessionId, qc, removeDraft]);
+
+  // tick the elapsed counter once a second while the coach is working;
+  // 5min staleness cap covers a coach dying mid-action
+  useEffect(() => {
+    if (!activity) return;
+    setNow(Date.now());
+    const iv = setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n - activity.since > 300_000) setActivity(null);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [activity]);
 
   // smart autoscroll: follow the tail only while the user is already at the bottom
   const draftSize = Object.values(drafts).reduce((a, d) => a + d.text.length, 0);
@@ -196,6 +217,17 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
             </div>
           </div>
         ))}
+        {activity && (
+          <div className="flex items-center gap-2 px-1 text-xs text-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            <span className="min-w-0 flex-1 truncate font-mono">
+              {activity.text || "working…"}
+            </span>
+            <span className="shrink-0 tabular-nums">
+              {Math.floor((now - activity.since) / 1000)}s
+            </span>
+          </div>
+        )}
         {thinking && (
           <div className="flex gap-2">
             <div className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-primary">
@@ -272,6 +304,7 @@ const KIND_STYLE: Record<string, { label: string; cls: string; iconCls: string }
 const Message = memo(function Message({ m, onConfirm }: {
   m: ChatMessage; onConfirm: (actionId: number, accept: boolean) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const isCoach = m.role === "coach";
   const isSystem = m.role === "system";
   const suggestion = m.kind === "suggestion" ? m.meta : null;
@@ -321,10 +354,19 @@ const Message = memo(function Message({ m, onConfirm }: {
         )}
         {suggestion && actionId != null && !resolved && (
           <div className="mt-2 flex gap-2">
-            <Button size="sm" variant="success" onClick={() => onConfirm(actionId, true)}>
-              <Play className="h-3 w-3" /> Run on Kali
+            <Button size="sm" variant="success" disabled={confirming}
+              onClick={() => {
+                setConfirming(true);
+                void Promise.resolve(onConfirm(actionId, true))
+                  .finally(() => setConfirming(false));
+              }}>
+              {confirming
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <Play className="h-3 w-3" />}
+              {confirming ? "Running…" : "Run on Kali"}
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => onConfirm(actionId, false)}>
+            <Button size="sm" variant="secondary" disabled={confirming}
+              onClick={() => onConfirm(actionId, false)}>
               <X className="h-3 w-3" /> Dismiss
             </Button>
           </div>

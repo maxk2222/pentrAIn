@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from coach.loop import CHAT_DEBOUNCE_S, SessionCoach
@@ -38,6 +40,7 @@ class FakeClient:
         self.flag_checks: list[str] = []
         self.screens = 0
         self.profiles: list[dict] = []
+        self.activities: list[tuple] = []
         self.ctx = ctx or {
             "session": {"id": 1, "state": "active", "autonomy_level": 2, "coach_enabled": True},
             "quest": {"title": "Q", "track": "web", "tier": 1, "briefing": "b",
@@ -62,6 +65,9 @@ class FakeClient:
     async def stream_draft(self, sid, draft_id, content, *, reasoning="",
                            done=False, kind="chat"):
         pass
+
+    async def send_activity(self, sid, text="", *, active=True):
+        self.activities.append((active, text))
 
     async def exec_in_kali(self, sid, command):
         return {"out": "ok", "visible": True}
@@ -214,6 +220,31 @@ async def test_exec_turn_resets_streak_instead_of_feeding_it():
     coach.state.last_nudge_ts = 0
     await coach._reflect_tick(60)
     assert coach.state.proactive_streak == 1
+
+
+async def test_activity_status_emitted_around_exec():
+    """While exec_in_kali blocks in tmux the UI must show a live status —
+    emitted before the call, always cleared when the dispatch loop ends."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.llm = FakeLlm(actions=[{"type": "exec_in_kali", "command": "nmap -sV 10.0.0.5"}])
+    await coach._llm_turn("scan it", force_reply=True)
+    starts = [t for a, t in c.activities if a]
+    assert starts and "nmap" in starts[0]
+    assert c.activities[-1] == (False, "")
+
+
+async def test_activity_cleared_when_dispatch_raises():
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.llm = FakeLlm(actions=[{"type": "exec_in_kali", "command": "id"}])
+
+    async def boom(sid, cmd):
+        raise RuntimeError("backend gone")
+    c.exec_in_kali = boom
+    with pytest.raises(RuntimeError):
+        await coach._llm_turn("go", force_reply=True)
+    assert c.activities[-1] == (False, "")
 
 
 async def test_history_seeded_on_attach():

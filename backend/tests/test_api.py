@@ -80,3 +80,20 @@ def test_session_endpoints_missing_session(client):
 def test_chat_requires_session(client):
     r = client.post("/api/sessions/999/chat", json={"content": "hi"})
     assert r.status_code in (200, 404, 409, 500)   # no FK enforcement in v1
+
+
+def test_coach_activity_endpoint(client):
+    """Ephemeral working-status relay — coach-token auth, bus publish only."""
+    from app.config import get_config
+    h = {"Authorization": f"Bearer {get_config().coach_service_token}"}
+    r = client.post("/api/coach/activity", headers=h,
+                    json={"session_id": 1, "active": True, "text": "typing `id`"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    r = client.post("/api/coach/activity", headers=h,
+                    json={"session_id": 1, "active": False})
+    assert r.status_code == 200
+    # service auth rejects wrong tokens
+    r = client.post("/api/coach/activity",
+                    headers={"Authorization": "Bearer wrong"},
+                    json={"session_id": 1, "active": True})
+    assert r.status_code == 401

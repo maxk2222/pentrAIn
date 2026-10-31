@@ -34,6 +34,13 @@ class FakeClient:
     async def report_llm_usage(self, sid, model, kind, usage, latency_ms):
         return {}
 
+    async def send_activity(self, sid, text="", *, active=True):
+        pass
+
+    async def stream_draft(self, sid, draft_id, content, *, reasoning="",
+                           done=False, kind="chat"):
+        pass
+
 
 class RecordingLlm:
     """Fake LlmClient that counts calls."""

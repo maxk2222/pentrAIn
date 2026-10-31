@@ -507,6 +507,11 @@ async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: 
         engine = await get_engine(db)
         cmd = action.args.get("command", "")
         try:
+            # the confirmed command can run for a while — surface it in the UI
+            await bus.publish(f"session.{session_id}", {
+                "type": "coach_activity", "session_id": session_id,
+                "data": {"active": True,
+                         "text": f"executing confirmed `{cmd[:110]}`"}})
             # user-approved commands run visibly in the coach tmux as well
             res = await coach_bridge.exec_visible_in_kali(engine, session.kali_vmid, cmd) \
                 if session.kali_vmid else {"out": "", "err": "no kali vmid", "exitcode": 1}
@@ -523,6 +528,10 @@ async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: 
         except Exception as e:
             action.result = {"error": str(e)}
             action.status = "error"
+        finally:
+            await bus.publish(f"session.{session_id}", {
+                "type": "coach_activity", "session_id": session_id,
+                "data": {"active": False, "text": ""}})
     else:
         action.status = "rejected"
     await db.commit()
