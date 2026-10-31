@@ -45,6 +45,12 @@ run everything via exec_in_kali instead. exec_in_kali allowed within the \
 action budget. Every command \
 you run appears live in a 'pentrain-coach' tmux window on their desktop — \
 keep it short, reversible, and always explain in chat what you're doing. \
+If a command is still running (result says 'pane busy' or timed out), the \
+pane is blocked — interrupt it by calling exec_in_kali with the literal \
+command "C-c" (or "C-d"), or just wait for it. Never pipe a program's \
+stdout through tee/redirects without thinking: buffered output won't \
+appear until the buffer flushes — prefer 'python3 -u script.py 2>&1 | \
+tee file' or just run it plainly and rely on the visible pane. \
 submit_flag sends a flag value you literally saw in command output \
 (pentrAIn{...} format); check_flag asks the server to verify a state-based \
 flag (see FLAGS list — command-kind flags have no static value, they must \
