@@ -68,7 +68,10 @@ export function SessionNetMap({ topology, vms, flagsSolved, flagsTotal }: {
     m?.status === "running" ? `${((m.cpu ?? 0) * 100).toFixed(0)}% cpu` : (m?.status ?? "unknown");
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img"
+    // viewBox scales fonts/dots with width — cap it so the map stays
+    // readable on wide cards instead of blowing up chunky
+    <svg viewBox={`0 0 ${width} ${height}`} role="img"
+      className="mx-auto block w-full max-w-[560px]"
       aria-label="session network map">
       <style>{FLOW_CSS}</style>
       {boxes.flatMap((g) => g.members.map((vm, i) => {

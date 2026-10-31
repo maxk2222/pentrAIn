@@ -25,7 +25,7 @@ const WIDTHS_KEY = "pentrain-panel-widths";
 type Panels = { progress: boolean; sheet: boolean; notes: boolean; chat: boolean };
 type PanelWidths = { progress: number; sheet: number; chat: number };
 
-const PANELS_VERSION = 3; // bump → stored prefs reset to new defaults once
+const PANELS_VERSION = 3; // v>=2 prefs merge — newer keys fall back to defaults
 const WIDTH_DEFAULTS: PanelWidths = { progress: 300, sheet: 340, chat: 380 };
 const WIDTH_MIN = 240, WIDTH_MAX = 720;
 

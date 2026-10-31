@@ -265,7 +265,7 @@ async def test_file_flag_on_kali_injects_to_kali_vmid(db_with_packs):
     await flags_svc.create_expected_flags(db, s, [flag])
     logs = await flags_svc.inject_flags(db, engine, s, [flag])
     assert (s.kali_vmid, "/root/kali-flag.txt") in engine.pve.files
-    assert any("injected" in l for l in logs)
+    assert any("injected" in line for line in logs)
     await sessions_svc.abort(db, s.id)
 
 

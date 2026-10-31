@@ -80,6 +80,7 @@ export function StatsPage() {
   }));
   const today = usage?.days.at(-1);
   const stateVariant = activeSession?.state === "failed" ? "danger"
+    : activeSession?.state === "solved" ? "accent"
     : activeSession && ["ready", "active"].includes(activeSession.state)
       ? "success" : "warning";
 
