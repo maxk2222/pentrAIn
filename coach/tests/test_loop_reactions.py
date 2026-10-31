@@ -647,3 +647,32 @@ async def test_rewrite_guard_denies_third_write_without_failed_run():
     coach._run_exits["/root/solve.py"] = 1        # dispatch recorded the failure
     _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
     assert not r.startswith("denied:")
+
+
+async def test_start_seeds_write_counts_from_replay():
+    """Coach restart mid-session: replayed writes must seed _write_counts so
+    the rewrite guard stays armed — otherwise each restart resets it."""
+    ctx = {**FakeClient().ctx,
+           "session": {"id": 1, "state": "active", "autonomy_level": 4,
+                       "coach_enabled": True},
+           "telemetry_tail": [   # newest-first, like the backend serves it
+               {"kind": "command_result", "payload": {"exit_code": 0}},
+               {"kind": "command", "payload": {
+                   "command": "cat > /root/solve.py << 'EOF'\ny\nEOF", "ts": 101}},
+               {"kind": "command_result", "payload": {"exit_code": 0}},
+               {"kind": "command", "payload": {
+                   "command": "cat > /root/solve.py << 'EOF'\nx\nEOF", "ts": 100}},
+           ]}
+    c = FakeClient(ctx)
+    coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    coach.llm = FakeLlm()
+    await coach.start(); await coach.stop()
+    assert coach._write_counts["/root/solve.py"] == 2
+    # third write denied immediately — no free rewrites after restart
+    coach2 = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    coach2.llm = FakeLlm()
+    await coach2.start()
+    _v, r = await coach2._dispatch({"type": "exec_in_kali",
+                                    "command": "cat > /root/solve.py << 'EOF'\nz\nEOF"})
+    assert r.startswith("denied:")
+    await coach2.stop()

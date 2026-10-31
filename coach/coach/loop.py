@@ -141,6 +141,19 @@ class SessionCoach:
                     self.state.commands[-1].exit_code = int(
                         payload.get("exit_code", 0))
                 expect_result = False
+        # seed the rewrite guard from replayed history — a restart must not
+        # reset the counters and re-enable the solver-rewrite loop
+        for c in self.state.commands:
+            if c.exit_code is None:
+                continue
+            wm = SessionState._WRITE_RE.search(c.command)
+            if wm and c.exit_code == 0:
+                path = wm.group(1) or wm.group(3)
+                self._write_counts[path] = self._write_counts.get(path, 0) + 1
+            rm = re.search(r"\b(?:python3?|bash|sh|perl|ruby|node)\s+(/?\S+)",
+                           c.command)
+            if rm:
+                self._run_exits[rm.group(1)] = c.exit_code
         # stuck/idle clocks seed from the most RECENT liveness signal —
         # not blindly from started_at (a session parked in 'ready' for hours
         # then activated must not look stuck-since-forever)
