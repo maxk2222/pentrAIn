@@ -121,8 +121,16 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
             # top-level for yaml ergonomics
             entry.setdefault("windows", {})["gpos"] = v["gpos"]
             entry["linux"] = False
-        if v.get("roles"):
-            entry["roles"] = v["roles"]
+        roles = list(v.get("roles") or [])
+        if entry["linux"]:
+            # lightweight telemetry on every linux target — commands typed
+            # inside an SSH session on the target must reach the checkpoint
+            # matcher/coach just like kali-side commands do
+            names = [r if isinstance(r, str) else r.get("name") for r in roles]
+            if "pentrain_target_agent" not in names and "pentrain_kali_agent" not in names:
+                roles.insert(0, "pentrain_target_agent")
+        if roles:
+            entry["roles"] = roles
         vms.append(entry)
     # Ludus auto-adds the router VM (default debian-13 template, 2G). We pin
     # debian-12 — the server template every linux quest already requires —
@@ -283,9 +291,10 @@ async def _finalize(db: AsyncSession, engine, session: Session,
         for v in st.vms if v is not kali and v.vmid}
     await _append_log(db, session, f"[pentrain] range RUNNING — kali vmid={session.kali_vmid}")
 
-    # telemetry config on kali
+    # telemetry config + short-name resolution on kali and all linux targets
     if session.kali_vmid:
-        await _configure_kali_telemetry(db, engine, session)
+        await _configure_telemetry(db, engine, session, quest)
+        await _pin_range_hosts(db, engine, session, quest)
 
     # dynamic flags
     quest_flags = (await db.execute(
@@ -485,7 +494,8 @@ async def _reset(session_id: int, hard: bool) -> None:
             session.telemetry_token = new_telemetry_token()
             await db.commit()
             if session.kali_vmid:
-                await _configure_kali_telemetry(db, engine, session)
+                await _configure_telemetry(db, engine, session, quest)
+                await _pin_range_hosts(db, engine, session, quest)
             quest_flags = (await db.execute(
                 select(Flag).where(Flag.quest_id == quest.id))).scalars().all()
             await flags_svc.create_expected_flags(db, session, quest_flags)
@@ -497,16 +507,80 @@ async def _reset(session_id: int, hard: bool) -> None:
             await _set_state(db, session, SessionState.FAILED, error=str(e))
 
 
-async def _configure_kali_telemetry(db: AsyncSession, engine, session: Session) -> None:
-    """(Re)write telemetried.conf on the session's Kali and restart the agent."""
+def _linux_target_vmids(session: Session, quest: Quest | None) -> list[tuple[str, int]]:
+    """(name, vmid) for every linux target VM — targets get the lightweight
+    pentrain_target_agent so remote SSH commands feed telemetry too."""
+    if not quest:
+        return []
+    out: list[tuple[str, int]] = []
+    for v in (quest.topology or {}).get("vms") or []:
+        if v.get("linux", True) and not v.get("windows") and not v.get("gpos"):
+            vmid = (session.target_vmids or {}).get(v["name"])
+            if vmid:
+                out.append((v["name"], vmid))
+    return out
+
+
+def _range_hosts_script(quest: Quest | None) -> str | None:
+    """Pin <name> + pentrain-<name> → 10.x.y.<octet> in /etc/hosts. Range IPs
+    are deterministic; the guest derives its /24 from eth0 so no DNS lookup
+    is needed. Runs on kali AND targets — pivot hops (ssh -J, tools run from
+    a target) resolve short names the same way kali does."""
+    pins: list[str] = ["kali:5", "pentrain-kali:5"]
+    for i, v in enumerate((quest.topology or {}).get("vms") or []):
+        name = v.get("name")
+        if not name:
+            continue
+        octet = v.get("ip_last_octet", 20 + i)
+        pins += [f"{name}:{octet}", f"pentrain-{name}:{octet}"]
+    names = " ".join(pins)
+    # pure ASCII only — guest-file-write dies on wide chars inside pvedaemon
+    return f"""SUB=$(ip -4 -o addr show dev eth0 | awk '{{split($4,a,"/"); split(a[1],o,"."); \\
+       print o[1]"."o[2]"."o[3]; exit}}')
+[ -z "$SUB" ] && exit 0
+grep -v ' # pentrain-range$' /etc/hosts > /tmp/h && cat /tmp/h > /etc/hosts
+for p in {names}; do
+  n=${{p%:*}}; o=${{p##*:}}
+  echo "$SUB.$o $n # pentrain-range" >> /etc/hosts
+done
+"""
+
+
+async def _configure_telemetry(db: AsyncSession, engine, session: Session,
+                               quest: Quest | None = None) -> None:
+    """(Re)write telemetried.conf on kali AND every linux target, then restart
+    the agents. HOST= names the box so the backend can tell kali-side commands
+    from commands typed inside a target SSH session."""
     api_url = await settings_svc.get_setting(db, "platform.api_url", "http://pentrain-app:8000")
-    conf = f"TOKEN={session.telemetry_token}\nSESSION={session.id}\nAPI={api_url}\n"
-    try:
-        await engine.pve.agent_write_file(session.kali_vmid, "/etc/pentrain/telemetried.conf", conf)
-        await engine.pve.agent_exec_sh(
-            session.kali_vmid, "systemctl restart pentrain-telemetried || true")
-    except Exception as e:
-        await _append_log(db, session, f"[pentrain] telemetry setup warn: {e}")
+    boxes = [("kali", session.kali_vmid)] + _linux_target_vmids(session, quest)
+    for host, vmid in boxes:
+        if not vmid:
+            continue
+        conf = (f"TOKEN={session.telemetry_token}\nSESSION={session.id}\n"
+                f"HOST={host}\nAPI={api_url}\n")
+        try:
+            await engine.pve.agent_write_file(vmid, "/etc/pentrain/telemetried.conf", conf)
+            await engine.pve.agent_exec_sh(
+                vmid, "systemctl restart pentrain-telemetried || true")
+        except Exception as e:
+            await _append_log(db, session, f"[pentrain] telemetry setup warn ({host}): {e}")
+
+
+async def _pin_range_hosts(db: AsyncSession, engine, session: Session,
+                           quest: Quest | None = None) -> None:
+    """Write /etc/hosts pins for all range names on kali + linux targets."""
+    script = _range_hosts_script(quest)
+    if not script:
+        return
+    boxes = [("kali", session.kali_vmid)] + _linux_target_vmids(session, quest)
+    for host, vmid in boxes:
+        if not vmid:
+            continue
+        try:
+            await engine.pve.agent_file_write(vmid, "/tmp/pentrain-hosts.sh", script)
+            await engine.pve.agent_exec_sh(vmid, "sh /tmp/pentrain-hosts.sh", timeout_s=15)
+        except Exception as e:
+            await _append_log(db, session, f"[pentrain] hosts pin warn ({host}): {e}")
 
 
 async def solved_quest_ids(db: AsyncSession) -> set[str]:

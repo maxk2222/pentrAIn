@@ -50,18 +50,22 @@ hints:
   - id: h1
     cost: 40
     stage: recon
-    text: "db01 drops SSH from everyone except web01. You can't reach it directly — find creds on the web tier."
+    text: "Enumerate the web root on web01 beyond the landing page — the onboarding docs name a low-priv shell account."
   - id: h2
     cost: 50
     stage: pivot
-    text: "Check /etc/intranet/config.ini on web01 — the app config leaks dbadm's ssh password."
+    text: "Check /etc/intranet/config.ini on web01 — the app config leaks dbadm's ssh password. db01 drops SSH from everyone except web01."
   - id: h3
     cost: 60
     stage: pivot
-    text: "ssh -L or ssh -J through web01: `ssh -J student/web01 dbadm@db01` or forward a local port to db01:22."
+    text: "ssh -J or -L through web01: `ssh -J student@web01 dbadm@db01` or forward a local port to db01:22."
 coach:
   briefing_ref: coach_context.md
   checkpoints:
+    - id: cp-entry
+      name: "Found the onboarding doc"
+      detect: { command_match: "(docs|onboarding|curl|gobuster|dirb|nikto)" }
+      hint_after_s: 600
     - id: cp-web
       name: "Found the config leak on web01"
       detect: { command_match: "config.ini|dbadm|PivotOn24" }

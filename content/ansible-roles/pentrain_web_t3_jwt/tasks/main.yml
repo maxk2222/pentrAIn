@@ -1,0 +1,46 @@
+---
+# web-t3-jwt-idor "Signed & Confused" — flask API: weak HS256 secret,
+# IDOR on the export endpoint, admin claim forges the report flag.
+# Teaching quest for the mechanics web-t3-exam grades on.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [python3, python3-flask, python3-jwt]
+    state: present
+    update_cache: true
+
+- name: app dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/opt/reporting-api, /var/lib/api]
+
+- name: deploy the api (deliberately vulnerable)
+  ansible.builtin.copy:
+    src: api/app.py
+    dest: /opt/reporting-api/app.py
+    mode: "0755"
+
+- name: systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pentrain-jwt-api.service
+    content: |
+      [Unit]
+      Description=PenTrAIn jwt-idor teaching api
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/bin/python3 /opt/reporting-api/app.py
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: enable api
+  ansible.builtin.systemd:
+    name: pentrain-jwt-api
+    state: started
+    enabled: true
+    daemon_reload: true

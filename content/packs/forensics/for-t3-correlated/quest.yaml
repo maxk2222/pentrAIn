@@ -59,6 +59,14 @@ flags:
     points: 300
     vm: db01
     file_path: /var/tmp/.s3/flag.txt
+  - id: report-flag
+    name: "IR report — /home/analyst/report.txt reconstructs the full chain"
+    kind: command
+    points: 150
+    command:
+      vm: db01
+      cmd: "test -f /home/analyst/report.txt && grep -qiE 'webops' /home/analyst/report.txt && grep -qiE 'appadm' /home/analyst/report.txt && grep -qiE 'dbadm' /home/analyst/report.txt"
+
 hints:
   - id: h1
     cost: 30

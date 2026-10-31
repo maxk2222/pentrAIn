@@ -16,18 +16,23 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def check_agent_sync() -> list[str]:
-    """telemetry-agent/ is canonical; the kali role ships embedded copies.
-    Drift here silently breaks telemetry on deployed ranges — fail loudly."""
+    """telemetry-agent/ is canonical; the kali + target roles ship embedded
+    copies. Drift here silently breaks telemetry on deployed ranges — fail
+    loudly."""
     src_dir = REPO / "telemetry-agent"
-    role_dir = REPO / "content/ansible-roles/pentrain_kali_agent/files"
+    role_dirs = {
+        "kali-agent": REPO / "content/ansible-roles/pentrain_kali_agent/files",
+        "target-agent": REPO / "content/ansible-roles/pentrain_target_agent/files",
+    }
     errors: list[str] = []
-    for f in src_dir.iterdir():
-        if f.is_file():
-            dst = role_dir / f.name
-            if not dst.exists():
-                errors.append(f"kali-agent role missing {f.name}")
-            elif dst.read_bytes() != f.read_bytes():
-                errors.append(f"kali-agent role {f.name} out of sync with telemetry-agent/")
+    for label, role_dir in role_dirs.items():
+        for f in src_dir.iterdir():
+            if f.is_file():
+                dst = role_dir / f.name
+                if not dst.exists():
+                    errors.append(f"{label} role missing {f.name}")
+                elif dst.read_bytes() != f.read_bytes():
+                    errors.append(f"{label} role {f.name} out of sync with telemetry-agent/")
     return errors
 
 
@@ -45,6 +50,151 @@ def check_roles(found) -> list[str]:
                 if not (roles_root / name / "tasks" / "main.yml").exists():
                     errors.append(f"{qdir.name}: role {name!r} on vm {v.name} "
                                   "missing content/ansible-roles/" + name)
+    return errors
+
+
+def check_role_tasks() -> list[str]:
+    """Structural role checks that only fail at deploy time otherwise:
+    - copy destinations must not precede the `file: state=directory` that
+      creates their parent
+    - every `notify:` must have a matching handler
+    - roles creating password-login users must enable PasswordAuthentication
+    """
+    import re
+    import yaml as _yaml
+
+    errors: list[str] = []
+    roles_root = REPO / "content" / "ansible-roles"
+    for rdir in sorted(roles_root.iterdir()):
+        tasks = rdir / "tasks" / "main.yml"
+        if not tasks.exists():
+            continue
+        text = tasks.read_text()
+        try:
+            task_list = _yaml.safe_load(text) or []
+        except _yaml.YAMLError as e:
+            errors.append(f"{rdir.name}: tasks/main.yml does not parse: {e}")
+            continue
+        if not isinstance(task_list, list):
+            continue
+
+        # -- collect state=directory paths in order + copy dests in order
+        dirs_at: dict[str, int] = {}
+        copies: list[tuple[str, int]] = []
+        creates_user = False
+        notified: set[str] = set()
+        for i, t in enumerate(task_list):
+            if not isinstance(t, dict):
+                continue
+            fmod = t.get("file") or t.get("ansible.builtin.file") or {}
+            if isinstance(fmod, dict) and fmod.get("state") == "directory":
+                dirs_at.setdefault(str(fmod.get("path", "")), i)
+            cmod = t.get("copy") or t.get("ansible.builtin.copy") or {}
+            if isinstance(cmod, dict) and cmod.get("dest"):
+                copies.append((str(cmod["dest"]), i))
+            umod = t.get("user") or t.get("ansible.builtin.user") or {}
+            if isinstance(umod, dict) and umod.get("password"):
+                creates_user = True
+            n = t.get("notify")
+            if isinstance(n, str):
+                notified.add(n)
+            elif isinstance(n, list):
+                notified.update(str(x) for x in n)
+
+        for dest, idx in copies:
+            for d, didx in dirs_at.items():
+                if d and d != "/" and dest.startswith(d.rstrip("/") + "/") and didx > idx:
+                    errors.append(
+                        f"{rdir.name}: copy to {dest} (task #{idx}) precedes "
+                        f"directory {d} (task #{didx})")
+
+        # -- notify ↔ handler
+        hfile = rdir / "handlers" / "main.yml"
+        handlers: set[str] = set()
+        if hfile.exists():
+            for h in (_yaml.safe_load(hfile.read_text()) or []):
+                if isinstance(h, dict) and h.get("name"):
+                    handlers.add(str(h["name"]))
+        for n in sorted(notified):
+            if n not in handlers:
+                errors.append(f"{rdir.name}: notify {n!r} has no handler")
+
+        # -- password-login users need sshd password auth *somewhere in the
+        #    role set*. Role-level findings are collected here; the quest
+        #    pass below decides error vs warning (a sibling role — e.g.
+        #    pentrain_wifi_lab — may own sshd config for the whole lab).
+        if creates_user and "PasswordAuthentication yes" not in text:
+            _USER_AUTH_FINDINGS.append(rdir.name)
+    return errors
+
+
+_USER_AUTH_FINDINGS: list[str] = []
+
+
+def check_ssh_auth(found) -> tuple[list[str], list[str]]:
+    """Quest-level sshd consistency: for every VM, if a role installs or
+    configures openssh-server, SOME role on that VM must set
+    PasswordAuthentication yes — otherwise password login users are
+    unreachable. Password users with no sshd config at all → warning."""
+    import yaml as _yaml
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    roles_root = REPO / "content" / "ansible-roles"
+    for qdir, spec in found:
+        for v in spec.topology.vms:
+            installs_sshd = False
+            sets_passauth = False
+            for r in v.roles:
+                name = r["name"] if isinstance(r, dict) else r
+                t = roles_root / str(name) / "tasks" / "main.yml"
+                if not t.exists():
+                    continue
+                try:
+                    tasks = _yaml.safe_load(t.read_text()) or []
+                except _yaml.YAMLError:
+                    continue
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        continue
+                    apt = task.get("apt") or task.get("ansible.builtin.apt") or {}
+                    names = apt.get("name") if isinstance(apt, dict) else None
+                    if names and ("openssh-server" in
+                                  (names if isinstance(names, list) else [names])):
+                        installs_sshd = True
+                    copy_or_line = task.get("copy") or task.get("lineinfile") or {}
+                    dest = (copy_or_line.get("dest") or copy_or_line.get("path") or ""
+                            if isinstance(copy_or_line, dict) else "")
+                    if "sshd" in str(dest):
+                        installs_sshd = True
+                if "PasswordAuthentication yes" in t.read_text():
+                    sets_passauth = True
+            if installs_sshd and not sets_passauth:
+                errors.append(
+                    f"{qdir.name}: vm {v.name} configures/installs sshd but no "
+                    "attached role sets PasswordAuthentication yes")
+    for role in _USER_AUTH_FINDINGS:
+        warnings.append(
+            f"{role}: password-login user without PasswordAuthentication in "
+            "the same role (ok if a sibling role owns sshd)")
+    return errors, warnings
+
+
+DRAFT_PATTERNS = ("verify before", "signoff", "wait —", "wait --", "TODO",
+                  "FIXME", "XXX", "draft")
+
+
+def check_draft_notes(found) -> list[str]:
+    errors: list[str] = []
+    for qdir, _spec in found:
+        for fname in ("coach_context.md", "briefing.md"):
+            f = qdir / fname
+            if not f.exists():
+                continue
+            low = f.read_text().lower()
+            for pat in DRAFT_PATTERNS:
+                if pat.lower() in low:
+                    errors.append(f"{qdir.name}: {fname} contains draft note {pat!r}")
     return errors
 
 
@@ -66,8 +216,10 @@ def check_cheatsheets(found) -> list[str]:
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else "content/packs")
     found, errors = discover_quests(root)
-    errors = errors + check_roles(found)
-    warnings = check_cheatsheets(found)
+    errors = errors + check_roles(found) + check_role_tasks() + check_draft_notes(found)
+    ssh_errs, ssh_warns = check_ssh_auth(found)
+    errors += ssh_errs
+    warnings = check_cheatsheets(found) + ssh_warns
     for _qdir, spec in found:
         flags = len(spec.flags)
         vms = len(spec.topology.vms) + 1  # +kali

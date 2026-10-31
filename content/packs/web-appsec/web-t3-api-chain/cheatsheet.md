@@ -2,16 +2,16 @@
 
 ## Targets
 
-- **web01** — Flask public app on :80; a fetcher endpoint and an internal API
+- **app01** — Flask public app on :80; a fetcher endpoint and an internal API
   on a private docker network
 
 ## Useful commands
 
 ```bash
-gobuster dir -u http://<web01>/ -w common.txt -x py
-curl -s 'http://<web01>/preview?url=http://example.com'   # probe the fetcher
-curl -s 'http://<web01>/preview?url=file:///etc/hostname' # local file read?
-docker ps                                                # on the host
+gobuster dir -u http://<app01>/ -w common.txt -x py
+curl -s 'http://<app01>/preview?url=http://example.com'   # probe the fetcher
+curl -s 'http://<app01>/preview?url=file:///etc/hostname' # local file read?
+curl -s 'http://<app01>/preview?url=http://<name>:<port>/' # internal dns guess
 ```
 
 ## Concepts

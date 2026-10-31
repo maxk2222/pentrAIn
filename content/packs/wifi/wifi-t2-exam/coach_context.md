@@ -1,7 +1,7 @@
 # Coach context — wifi-t2-exam
 
 ## Ground truth
-- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!`, sudo.
+- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!` (sudo scoped to wireless tools only).
 - wlan0 AP `ops-wifi` **ch1** WPA2 (PSK `corporate-wifi`), wlan2 client
   stays associated (auto-rejoins on deauth), wlan1 attacker.
 - `/opt/wifi/backup.enc` = openssl -aes-256-cbc -pbkdf2 encrypted

@@ -19,6 +19,23 @@
     path: C:\flags\exam
     state: directory
 
+- name: svc-report can read its own drop dir (file acl)
+  ansible.windows.win_acl:
+    path: C:\flags\exam
+    user: CORP\svc-report
+    rights: ReadAndExecute
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: report drop share — the AS-REP account's loot channel
+  community.windows.win_share:
+    name: reportdrop
+    path: C:\flags\exam
+    list: "yes"
+    read: CORP\svc-report
+
 - name: staged breadcrumb tying svc-report to the report service
   ansible.windows.win_copy:
     dest: C:\Windows\SYSVOL\domain\scripts\reports-runbook.txt

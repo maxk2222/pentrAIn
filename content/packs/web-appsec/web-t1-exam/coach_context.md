@@ -13,7 +13,7 @@ This is an EXAM — coach at the stage level:
 - Two independent skills under test: source disclosure AND injection.
   If they brute-force the login panel, ask what else the webroot serves.
 - Redirect specifics to web-t1-git-leak (repo reconstruction) and
-  web-t1-dvwa (sql injection) — techniques identical.
+  web-t1-sqli-login (sql injection) — techniques identical.
 
 Wrong turns: sqlmap against the .git endpoint, hydra on the login form
 (online brute when the query itself is the bug), downloading .git/HEAD

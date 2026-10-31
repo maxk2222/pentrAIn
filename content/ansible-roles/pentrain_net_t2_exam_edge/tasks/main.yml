@@ -40,8 +40,7 @@
     dest: /etc/snmp/snmpd.conf
     content: |
       agentAddress udp:161
-      rocommunity public default -V systemonly
-      rocommunity6 public default -V systemonly
+      rocommunity public
       sysLocation "perimeter rack"
       sysContact edge-op@corp.local
       extend edge-memo /bin/echo "edge01 terminates the range LAN — internal builds reachable via ssh jump"
@@ -73,4 +72,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

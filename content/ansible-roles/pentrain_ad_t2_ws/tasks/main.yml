@@ -7,12 +7,12 @@
     state: directory
   loop: ["C:\\flags", "C:\\ops"]
 
-- name: dc-note — leaks the domain-admin password (the real vulnerability)
+- name: dc-note — leaks a domain-admin password (the real vulnerability)
   ansible.windows.win_copy:
     dest: C:\ops\dc-note.txt
     content: |
       helpdesk note — dc01 admin for emergencies only:
-        CORP\Administrator / D@main2024!
+        CORP\adm-ops / D@main2024!
 
 - name: wuser gets remote-management rights (leaked creds must actually log in)
   ansible.windows.win_group_membership:

@@ -12,13 +12,46 @@
     pentrain_db_host: >-
       {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.22
 
-- name: app landing page
+- name: app landing page — points at the docs dir (that's the recon trail)
   ansible.builtin.copy:
     dest: /var/www/html/index.html
     content: |
       <html><body><h1>intranet-web</h1>
-      <p>HR portal backend: see /etc/intranet/config.ini</p></body></html>
+      <p>HR portal backend. Onboarding docs moved to <a href="/docs/">/docs/</a>.</p></body></html>
     mode: "0644"
+
+- name: docs dir — autoindexed by nginx
+  ansible.builtin.file:
+    path: /var/www/html/docs
+    state: directory
+    mode: "0755"
+
+- name: onboarding doc — leaks the low-priv shell account (the entry point)
+  ansible.builtin.copy:
+    dest: /var/www/html/docs/onboarding.txt
+    content: |
+      INTRANET-WEB — support onboarding
+      ----------------------------------
+      Shell access for support trainees:
+        ssh student@web01  /  Student2024!
+      Student accounts may read app configs for troubleshooting
+      (see /etc/intranet/ once you're on the box).
+    mode: "0644"
+
+- name: student account — the low-priv foothold on the web tier
+  ansible.builtin.user:
+    name: student
+    password: "{{ 'Student2024!' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/student
+    create_home: true
+  no_log: true
+
+- name: /etc/intranet dir
+  ansible.builtin.file:
+    path: /etc/intranet
+    state: directory
+    mode: "0755"
 
 - name: leaked app config with dbadm credentials
   ansible.builtin.copy:
@@ -35,12 +68,6 @@
       ssh_pass = PivotOn24!
     mode: "0644"
 
-- name: /etc/intranet dir
-  ansible.builtin.file:
-    path: /etc/intranet
-    state: directory
-    mode: "0755"
-
 - name: ensure openssh-server
   ansible.builtin.apt:
     name: openssh-server
@@ -51,4 +78,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

@@ -35,14 +35,46 @@
       — IT
     mode: "0644"
 
+# anonymous ftp serves the same onboarding pack — reachable from kali with
+# zero credentials (ftp anonymous@<host>, get welcome.txt)
+- name: anonymous ftp for the onboarding pack
+  ansible.builtin.apt:
+    name: vsftpd
+    state: present
+    update_cache: true
+
+- name: vsftpd — anonymous read-only rooted at /opt/onboarding
+  ansible.builtin.copy:
+    dest: /etc/vsftpd.conf
+    content: |
+      listen=YES
+      listen_ipv6=NO
+      anonymous_enable=YES
+      no_anon_password=YES
+      anon_root=/opt/onboarding
+      anon_upload_enable=NO
+      local_enable=NO
+      write_enable=NO
+      seccomp_sandbox=NO
+    mode: "0644"
+  notify: restart vsftpd
+
+# /usr/bin/python3 is a symlink to python3.x — chmod resolves it so the real
+# ELF ends up SUID (an interpreter = full root shell via GTFOBins exec)
 - name: SUID on /usr/bin/python3 — interpreter = full root shell (GTFOBins exec)
-  ansible.builtin.file:
-    path: /usr/bin/python3
-    mode: "4755"
+  ansible.builtin.command:
+    cmd: chmod 4755 /usr/bin/python3
 
 - name: ssh password auth on
   ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

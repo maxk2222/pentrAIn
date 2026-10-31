@@ -43,7 +43,7 @@ hints:
   - id: h1
     cost: 30
     stage: recon
-    text: "Filesystem enumeration pays: look for notes under /etc mentioning backups or restores."
+    text: "Port enumeration pays: SSH isn't the only service — an anonymous share on this host leaks the ops team's restore procedure."
   - id: h2
     cost: 40
     stage: privesc
@@ -57,7 +57,7 @@ coach:
   checkpoints:
     - id: cp-enum
       name: "Found the leaked credentials"
-      detect: { command_match: "(restore-notes|backup|Summer2024)" }
+      detect: { command_match: "(restore-notes|ftp|Summer2024)" }
       hint_after_s: 600
     - id: cp-ssh
       name: "Logged in as ops"

@@ -23,6 +23,13 @@
     line: "PasswordAuthentication yes"
   notify: restart sshd
 
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
 - name: source IPs on the range /24 (edge hop + router)
   ansible.builtin.set_fact:
     edge_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.21"

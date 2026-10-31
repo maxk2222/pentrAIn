@@ -7,6 +7,14 @@
     path: C:\flags
     state: directory
 
+- name: low-priv entry account (handed out in the briefing)
+  community.windows.win_domain_user:
+    name: intern
+    password: "Welcome2024!"
+    state: present
+    password_never_expires: true
+    groups: ["Domain Users"]
+
 - name: roastable service account (weak password — the vulnerability)
   community.windows.win_domain_user:
     name: svc-backup

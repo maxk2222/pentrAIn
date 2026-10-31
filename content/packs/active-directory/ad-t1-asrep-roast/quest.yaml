@@ -1,0 +1,76 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ad-t1-asrep-roast
+  track: active-directory
+  tier: 1
+  title: "No Preauth"
+  version: 1
+display:
+  tagline: "One legacy service account predates Kerberos preauthentication. You don't need a single credential to steal its hash."
+requirements:
+  min_ram_gb: 22
+  min_vcpus: 8
+  min_disk_gb: 160
+  est_deploy_min: 35
+  needs_windows: true
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: dc01
+      template: win2022-server-x64-template
+      ram_gb: 8
+      cpus: 4
+      vlan: 10
+      ip_last_octet: 51
+      linux: false
+      windows:
+        sysprep: true
+      domain:
+        fqdn: corp.pentrain.local
+        role: primary-dc
+      roles: [pentrain_ad_t1_asrep]
+flags:
+  - id: asrep-flag
+    name: "AS-REP flag — the roasted account's drop share"
+    kind: file
+    points: 300
+    vm: dc01
+    file_path: "C:\\flags\\asrep\\asrep.txt"
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "No creds needed to name users: kerbrute userenum --dc <dc01> -d corp.pentrain.local <users.txt>. SYSVOL over a null session may also name the legacy account."
+  - id: h2
+    cost: 60
+    stage: exploit
+    text: "Accounts with Kerberos preauth disabled hand their AS-REP hash to anyone: impacket-GetNPUsers -no-pass -usersfile users.txt -dc-ip <dc01> corp.pentrain.local/ — crack with hashcat -m 18200."
+  - id: h3
+    cost: 80
+    stage: post
+    text: "The cracked svc account is unprivileged — no WinRM. Its loot channel is an SMB share only it can read: smbclient //<dc01>/<share> -U 'corp\\svc-legacy%<pw>'."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-enum
+      name: "Enumerated domain users"
+      detect: { command_match: "(kerbrute|GetADUsers|userenum|nmap.*(88|389|445))" }
+      hint_after_s: 720
+    - id: cp-asrep
+      name: "Requested the AS-REP"
+      detect: { command_match: "(GetNPUsers|asrep|Rubeus)" }
+      hint_after_s: 900
+    - id: cp-crack
+      name: "Cracked the hash"
+      detect: { command_match: "(hashcat|john)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 300, nudge_s: 720, hint_s: 1200 }
+scoring:
+  base: 450
+  time_bonus_max: 200
+  par_s: 2100
+  takeover_cost: 150

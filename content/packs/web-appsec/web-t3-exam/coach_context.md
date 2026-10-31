@@ -12,7 +12,7 @@ Ground truth for the coach:
 
 This is an EXAM — coach at the stage level:
 - Chain discipline: login → inspect token → IDOR → crack → forge → admin.
-- Redirect to web-t3-api-chain for JWT/IDOR mechanics if stuck.
+- Redirect to web-t3-jwt-idor for JWT/IDOR mechanics if stuck.
 
 Wrong turns: algonone attacks (the lib requires HS256 signature — crack
 the secret instead), fuzzing uids forever (1 is the target), trying to

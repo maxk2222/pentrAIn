@@ -46,6 +46,31 @@
     line: "PasswordAuthentication yes"
   notify: restart sshd
 
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
+# pre-auth surface: the ssh Banner is shown BEFORE login — that's the
+# "credentials in plain sight" the briefing promises (nmap -sC / ssh probe)
+- name: ssh pre-auth banner — leaks the support account
+  ansible.builtin.copy:
+    dest: /etc/issue.net
+    content: |
+      === target01 backup-audit node ===
+      Unauthorized access prohibited.
+      Temporary audit account (remove after review!): student / student123
+    mode: "0644"
+
+- name: enable ssh banner
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?Banner"
+    line: "Banner /etc/issue.net"
+  notify: restart sshd
+
 - name: ensure vim installed
   ansible.builtin.apt:
     name: vim

@@ -1,0 +1,77 @@
+---
+# web-t1-sqli-login "Trusting Query" — php/sqlite login with raw-string SQL.
+# Login bypass renders flag A; the users table leaks ssh creds for flag B.
+# Teaching quest for the technique web-t1-exam/web-t2-exam grade on.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, php, libapache2-mod-php, php-sqlite3, sqlite3, openssh-server]
+    state: present
+    update_cache: true
+
+- name: data dir — flag lands here post-deploy
+  ansible.builtin.file:
+    path: /var/lib/portal-data
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: portal app (deliberately injectable)
+  ansible.builtin.copy:
+    src: "portal/{{ item }}"
+    dest: "/var/www/html/{{ item }}"
+    mode: "0644"
+  loop: [index.php, user.php]
+
+- name: drop the stock index.html so php takes precedence
+  ansible.builtin.file:
+    path: /var/www/html/index.html
+    state: absent
+
+- name: sqlite users db — webdev row leaks the ssh password for flag B
+  ansible.builtin.command: >
+    sqlite3 /var/lib/portal-data/portal.db
+    "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password TEXT,
+     notes TEXT);
+     INSERT INTO users VALUES
+     (1,'admin','Sup3rAdm!n','it admin'),
+     (2,'guest','guest','read-only demo'),
+     (3,'webdev','D3vBox!24','dev box login — shared with ssh');"
+  args:
+    creates: /var/lib/portal-data/portal.db
+
+- name: db readable by www-data
+  ansible.builtin.file:
+    path: /var/lib/portal-data/portal.db
+    owner: www-data
+    group: www-data
+    mode: "0644"
+
+- name: webdev — the account whose password lives in the users table
+  ansible.builtin.user:
+    name: webdev
+    password: "{{ 'D3vBox!24' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/webdev
+    create_home: true
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
+- name: ensure apache started
+  ansible.builtin.service:
+    name: apache2
+    state: started
+    enabled: true

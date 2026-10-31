@@ -88,7 +88,9 @@ def debug_exec():
 
 @app.get("/")
 def index():
-    return jsonify({"service": "reporting-api", "endpoints": [
+    return jsonify({"service": "reporting-api",
+                    "demo_account": "guest / guest123",
+                    "endpoints": [
         "POST /api/login", "GET /api/users/<id>/export",
         "GET /api/admin/report", "GET /api/admin/exec?cmd="]})
 

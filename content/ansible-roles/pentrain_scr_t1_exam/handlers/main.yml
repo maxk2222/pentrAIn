@@ -4,3 +4,6 @@
 
 - name: restart vsftpd
   ansible.builtin.service: {name: vsftpd, state: restarted}
+
+- name: restart sshd
+  ansible.builtin.service: {name: sshd, state: restarted}

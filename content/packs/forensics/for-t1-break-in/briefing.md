@@ -24,4 +24,5 @@ flags they planted.
 ## Rules of engagement
 
 - This is a *blue* quest: collect evidence, don't attack the box.
+- Deliverable: write your findings to `/home/analyst/report.txt` — attacker IP, compromised account, persistence mechanism.
 - Flags look like `pentrAIn{...}` — submit them in the Flags panel.

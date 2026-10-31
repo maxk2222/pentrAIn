@@ -1,7 +1,7 @@
 # Coach context — wifi-t3-pmkid-rogue
 
 ## Ground truth
-- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!`, sudo.
+- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!` (sudo scoped to wireless tools only).
 - Radios: wlan0 AP `secure-net` ch6 WPA2 (PSK `dragon!99`, pmkid=1),
   wlan2 AP `free-wifi` ch11 open (rogue), wlan1 attack radio.
 - `secadmin` password = `dragon!99`; flag `/home/secadmin/flag.txt`.

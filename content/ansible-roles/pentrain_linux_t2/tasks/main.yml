@@ -16,6 +16,12 @@
     group: ops
     mode: "0750"
 
+- name: /etc/backup dir
+  ansible.builtin.file:
+    path: /etc/backup
+    state: directory
+    mode: "0755"
+
 - name: leaked credentials note
   ansible.builtin.copy:
     dest: /etc/backup/restore-notes.txt
@@ -28,11 +34,46 @@
     mode: "0644"
     mtime: preserve
 
-- name: /etc/backup dir
+# anonymous ftp mirrors the draft into the lan — the pre-auth leak the
+# quest needs (ftp anonymous@<host>, get restore-notes.txt)
+- name: ftp drop dir
   ansible.builtin.file:
-    path: /etc/backup
+    path: /srv/ftp
     state: directory
     mode: "0755"
+
+- name: restore notes on the anonymous share
+  ansible.builtin.copy:
+    dest: /srv/ftp/restore-notes.txt
+    content: |
+      Restore procedure (DRAFT)
+      --------------------------
+      1. log in as ops / Summer2024!
+      2. restore /srv/backup with rsync
+      3. check cron status: sudo -l  (ops can run find as root for file checks)
+    mode: "0644"
+
+- name: anonymous ftp server
+  ansible.builtin.apt:
+    name: vsftpd
+    state: present
+    update_cache: true
+
+- name: vsftpd — anonymous read-only rooted at /srv/ftp
+  ansible.builtin.copy:
+    dest: /etc/vsftpd.conf
+    content: |
+      listen=YES
+      listen_ipv6=NO
+      anonymous_enable=YES
+      no_anon_password=YES
+      anon_root=/srv/ftp
+      anon_upload_enable=NO
+      local_enable=NO
+      write_enable=NO
+      seccomp_sandbox=NO
+    mode: "0644"
+  notify: restart vsftpd
 
 - name: sudo misconfig — ops may run find as root (find . -exec privesc)
   ansible.builtin.copy:
@@ -40,6 +81,14 @@
     content: "ops ALL=(root) NOPASSWD: /usr/bin/find\n"
     mode: "0440"
     validate: visudo -cf %s
+
+- name: maintenance dir
+  ansible.builtin.file:
+    path: /opt/maintenance
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
 
 - name: world-writable cron script — alternative privesc path (misconfig)
   ansible.builtin.copy:
@@ -49,14 +98,6 @@
       # nightly cleanup — runs as root, DO NOT break
       find /var/tmp -mtime +7 -delete
     mode: "0777"
-    owner: root
-    group: root
-
-- name: maintenance dir
-  ansible.builtin.file:
-    path: /opt/maintenance
-    state: directory
-    mode: "0755"
     owner: root
     group: root
 
@@ -78,4 +119,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

@@ -1,0 +1,76 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: scr-t3-cmd-inject
+  track: scripting
+  tier: 3
+  title: "Blind Pipe"
+  version: 1
+display:
+  tagline: "A diagnostics CGI that trusts your input one 'ip' command too far. Script the injection — don't just paste payloads."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: web01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 20
+      roles: [pentrain_scr_t3_cmdinject]
+flags:
+  - id: loot-flag
+    name: "Loot flag — ~wwwops/loot.txt via the injected shell"
+    kind: file
+    points: 200
+    vm: web01
+    file_path: /home/wwwops/loot.txt
+  - id: inject-script
+    name: "inject.py exists and exfiltrated the flag to /root/loot.txt"
+    kind: command
+    points: 250
+    command:
+      vm: kali
+      cmd: "test -f /root/inject.py && test -f /root/loot.txt && grep -q 'pentrAIn{' /root/loot.txt"
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "curl 'http://<web01>/cgi-bin/status?iface=lo' — the param goes into `ip -brief addr show <you>`. Break out with ; or $( )."
+  - id: h2
+    cost: 45
+    stage: exploit
+    text: "?iface=eth0;id works by hand — but the quest wants /root/inject.py: requests.get with params= (it url-encodes for you), then parse the output after the '== iface' header."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "Chain the enum inside the script: `;cat /home/wwwops/notes.txt` → `;cat /home/wwwops/loot.txt` → save the pentrAIn{} string to /root/loot.txt."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-probe
+      name: "Probed the CGI"
+      detect: { command_match: "(cgi-bin|status\\?|iface)" }
+      hint_after_s: 480
+    - id: cp-inject
+      name: "Got command output"
+      detect: { command_match: "(;id|%3B|\\$\\(|inject)" }
+      hint_after_s: 600
+    - id: cp-script
+      name: "Scripted the exfil"
+      detect: { command_match: "(inject\\.py|requests|loot\\.txt)" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 450
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

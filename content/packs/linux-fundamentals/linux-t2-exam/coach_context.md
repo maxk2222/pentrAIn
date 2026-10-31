@@ -1,7 +1,8 @@
 Quest: linux-t2-exam (tier 2 EXAM, linux-fundamentals)
 
 Ground truth for the coach:
-- foothold: /etc/motd leaks maint / Maint2024! → ssh
+- foothold: pre-auth ssh Banner (/etc/issue.net, mirrored in /etc/motd)
+  leaks maint / Maint2024! → ssh
 - privesc A: sudo -l → NOPASSWD /usr/bin/journalctl → `sudo journalctl`
   then `!/bin/sh` in the pager
 - privesc B: /etc/cron.d/pentrain-t2-exam — root runs

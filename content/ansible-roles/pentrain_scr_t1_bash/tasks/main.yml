@@ -4,7 +4,7 @@
 # and a planted auth.log full of brute-force noise for grep/awk practice.
 - name: packages
   ansible.builtin.apt:
-    name: [nginx-light, vsftpd, python3]
+    name: [nginx-light, vsftpd, python3, openssh-server]
     state: present
     update_cache: true
 
@@ -75,7 +75,7 @@
       Oct 30 21:06:30 filesrv01 sshd[420]: Accepted password for ops from 10.x.10.5 port 40244 ssh2
       Oct 30 21:09:15 filesrv01 sshd[430]: Failed password for invalid user oracle from 203.0.113.66 port 51071 ssh2
       Oct 30 21:10:03 filesrv01 sshd[431]: Failed password for invalid user www from 198.51.100.23 port 52140 ssh2
-    mode: "0640"
+    mode: "0644"
 
 - name: lab user for ftp/login practice
   ansible.builtin.user:
@@ -83,6 +83,20 @@
     shell: /bin/bash
     password: "{{ 'Start123!' | password_hash('sha512') }}"
   no_log: true
+
+- name: ssh password auth on (the script greps the log remotely)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
 
 - name: ensure services started
   ansible.builtin.service:

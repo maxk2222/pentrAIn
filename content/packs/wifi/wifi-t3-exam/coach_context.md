@@ -1,7 +1,7 @@
 # Coach context — wifi-t3-exam
 
 ## Ground truth
-- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!`, sudo. 4 radios:
+- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!` (sudo scoped to wireless tools only). 4 radios:
   wlan0 `mgmt-wifi` ch6 (pmkid=1, PSK `spring!2024`),
   wlan2 `exec-wifi` ch11 (PSK `pentest-rocks`), wlan3 exec client
   (reassoc ~15s), wlan1 attacker.
@@ -29,11 +29,11 @@ sshpass -p 'spring!2024' ssh mgmt-admin@localhost 'cat ~/flag.txt'
 ```
 
 ## Coach guidance
-- Watch for single-thread thinking — the two attacks are independent;
-  running hcxdumptool then airodump serially is fine but parallel is
-  the pro move.
-- hcxdumptool on wlan1 while it's needed for airodump is a conflict —
-  sequence matters: harvest PMKID first OR use it after. Actually one
-  interface can only do one thing at a time; hint them to serialize.
+- Sequence matters: wlan1 can only do one thing at a time. Harvest the
+  PMKID first (hcxdumptool), release the interface, then run the
+  airodump+deauth cycle for exec-wifi. Parallelism is NOT possible with
+  a single attack radio — if a trainee tries, explain why.
 - The exec client is on wlan3 — only shows as STATION on ch11.
 - Report needs BOTH key strings; partial = no flag.
+- wifi's sudo is scoped to wireless tools — if they try `sudo cat` on
+  hostapd confs or flags, that's the lesson: recover the PSK on-air.

@@ -63,9 +63,24 @@
     home: /home/ops-backup
     create_home: true
 
+- name: ops-backup home is private — the flag demands the ssh login
+  ansible.builtin.file:
+    path: /home/ops-backup
+    state: directory
+    owner: ops-backup
+    group: ops-backup
+    mode: "0700"
+
 - name: ssh password auth on
   ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

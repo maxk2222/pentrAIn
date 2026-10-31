@@ -12,7 +12,8 @@ that diagnostic tools should run "elevated" via the setuid bit.
 
 ## Suggested flow
 
-- Loot what the filesystem offers before touching a wordlist.
+- Loot what the host *exposes* before touching a wordlist — the onboarding
+  share was meant for new starters, not the whole LAN.
 - Once inside: what runs as root that shouldn't?
 - Not every setuid binary is a door — figure out which one actually is.
 

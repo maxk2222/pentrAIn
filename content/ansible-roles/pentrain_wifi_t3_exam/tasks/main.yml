@@ -109,4 +109,4 @@
     path: /home/mgmt-admin
     state: directory
     owner: mgmt-admin
-    mode: "0755"
+    mode: "0700"

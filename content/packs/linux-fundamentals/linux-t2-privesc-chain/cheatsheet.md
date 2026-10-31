@@ -2,13 +2,15 @@
 
 ## Targets
 
-- **app01** — several users, escalating rights; SUID + cron + sudo chain
+- **server01** — backup host; anonymous share, sudo rights, writable cron script
 
 ## Useful commands
 
 ```bash
+nmap -sV -sC <server01>
+ftp anonymous@<server01>             # anonymous read shares leak procedures
 find / -perm -4000 -type f 2>/dev/null   # SUID hunting
-sudo -l -l                               # per-user sudo rights
+sudo -l                                # per-user sudo rights
 crontab -l; cat /etc/crontab; ls /etc/cron.*
 getcap -r / 2>/dev/null                  # capabilities over SUID
 ```

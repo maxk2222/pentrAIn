@@ -29,4 +29,4 @@
     path: /home/backup-admin
     state: directory
     owner: backup-admin
-    mode: "0755"
+    mode: "0700"

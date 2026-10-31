@@ -12,7 +12,8 @@ everything else you derive yourself.
 
 ## Rules of engagement
 
-- Three flags: stash, user, persistence.
+- Three flags: stash, user, persistence — plus your report.
+- Deliverable: write your findings to `/home/analyst/report.txt` — compromised account + persistence mechanism.
 - IR access to fetch the evidence: `ssh analyst@<archive01>` (pw `analysis`).
 - The capture is your head start — read it properly before walking the host.
 

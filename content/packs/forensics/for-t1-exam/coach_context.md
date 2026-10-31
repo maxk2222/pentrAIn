@@ -19,3 +19,8 @@ This is an EXAM — coach at the stage level:
 Wrong turns: hunting for a second protocol in the pcap (it's all ftp),
 checking crontab only (persistence here is a systemd unit), deleting
 evidence files instead of reading them.
+
+Dirs are nightops-owned 0700 (/var/tmp/.apt-cache, /var/lib/.fonts-cache,
+/home/nightops) — analyst alone reaches nothing; the pcap creds are the
+only way in. report-flag: /home/analyst/report.txt (write as analyst or
+via nightops) must name nightops + fonts-cache.

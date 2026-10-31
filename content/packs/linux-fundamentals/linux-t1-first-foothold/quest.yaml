@@ -43,7 +43,7 @@ hints:
   - id: h1
     cost: 25
     stage: recon
-    text: "Start with what you know: credentials were leaked in the briefing. Try ssh student@<target>."
+    text: "The SSH service greets you before authentication — connect with any username (`ssh anything@target01` or `nmap -sC`) and read the banner."
   - id: h2
     cost: 25
     stage: privesc

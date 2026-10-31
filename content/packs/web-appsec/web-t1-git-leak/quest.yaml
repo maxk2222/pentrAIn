@@ -51,7 +51,7 @@ hints:
   - id: h3
     cost: 60
     stage: exploit
-    text: "config.php holds the deploy account — and that password is reused for SSH (`ssh deploy@<ip>`)."
+    text: "An older commit's config.php holds the deploy account — that password is reused for SSH (`ssh deploy@<ip>`) AND for the /admin/ area (`curl -u deploy:<pass> http://<ip>/admin/flag.txt`)."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

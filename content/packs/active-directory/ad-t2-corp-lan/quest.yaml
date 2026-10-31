@@ -84,7 +84,7 @@ hints:
   - id: h3
     cost: 80
     stage: privesc
-    text: "From ws01, the domain-admin creds in C:\\ops\\dc-note.txt reach the DC — evil-winrm/psexec as CORP\\Administrator."
+    text: "From ws01, the domain-admin creds in C:\\ops\\dc-note.txt reach the DC — evil-winrm/psexec as CORP\\adm-ops."
 coach:
   briefing_ref: coach_context.md
   checkpoints:
@@ -98,7 +98,7 @@ coach:
       hint_after_s: 900
     - id: cp-da
       name: "Domain-admin attempt"
-      detect: { command_match: "(Administrator|secretsdump|dcsync|ntds)" }
+      detect: { command_match: "(adm-ops|Administrator|secretsdump|dcsync|ntds)" }
       hint_after_s: 900
   escalation: { observe_grace_s: 300, nudge_s: 720, hint_s: 1200 }
 scoring:

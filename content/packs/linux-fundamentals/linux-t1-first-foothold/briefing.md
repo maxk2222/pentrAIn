@@ -14,8 +14,9 @@ rights were granted carelessly.
 ## Getting started
 
 Your Kali desktop is already on the same network. The target answers on the
-range subnet — discover it with `nmap` or just read the machine's notes; the
-admin was not careful about what ends up in `/etc`.
+range subnet — discover it with `nmap`, then knock on the services you find:
+some machines greet you with more than a login prompt. The admin was not
+careful about what ends up in `/etc`, either.
 
 ## Ground rules
 

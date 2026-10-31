@@ -12,7 +12,10 @@ everything into one timeline and recover the three flags.
 
 ## Rules of engagement
 
-- IR access on both hosts: `ssh analyst@<host>` (pw `analysis`, sudo).
+- IR access on both hosts: `ssh analyst@<host>` (pw `analysis`, read-only
+  with log access via the adm group).
+- Deliverable: write your findings to `/home/analyst/report.txt` on **db02**
+  — abused account and where the loot was staged.
 - Three flags: webshell, loot, account.
 - The deliverable is the *timeline*: pcap ↔ access.log ↔ auth.log.
 

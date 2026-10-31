@@ -85,8 +85,13 @@ async def inject_flags(db: AsyncSession, engine, session: Session, flags: list[F
                     vmid,
                     f"docker exec {_shq(container)} /bin/sh -c "
                     f"'mkdir -p $(dirname {_shq(path)}); echo {b64} | base64 -d > {_shq(path)}'")
-            else:
+            elif path.startswith("/"):
                 await engine.pve.agent_write_file(vmid, path, f"{secret}\n")
+            else:
+                # windows path (C:\...) — guest-file-write needs no guest
+                # shell and survives where exec-args wedge the virtio channel;
+                # the role owns the parent directory
+                await engine.pve.agent_file_write(vmid, path, f"{secret}\n")
             logs.append(f"flag {f.key} injected → {vm_name}:{path}"
                         + (f" (container {container})" if container else ""))
         except Exception as e:

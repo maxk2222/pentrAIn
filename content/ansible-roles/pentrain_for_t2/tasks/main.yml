@@ -29,6 +29,13 @@
     line: "PasswordAuthentication yes"
   notify: restart sshd
 
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
 - name: upload dir (webshell + flag live here)
   ansible.builtin.file:
     path: /var/www/html/uploads

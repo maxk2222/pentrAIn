@@ -7,25 +7,19 @@
 ## Useful commands
 
 ```bash
-ssh deployer@bastion01                        # creds in the motd
-cat ~/DEPLOY.txt                              # loot the runbook
-ssh -J deployer@bastion01 app@app01           # ProxyJump hop 2
-sudo -l
-sudo journalctl                               # in the pager: !/bin/sh
-cat /opt/app/config.yml                       # db creds
-ssh -J deployer@bastion01,app@app01 dba@db01  # two-hop jump list
-sudo cat /root/db.txt
+ssh <user>@<host>                            # read the pre-auth banner
+ssh -J <hop-user>@<hop> <user>@<next>        # ProxyJump hop
+ssh -J <hop1>,<hop2> <user>@<final>          # multi-hop jump list
+sudo -l                                      # check rights on every hop
+cat /opt/app/*.yml                           # app configs wire the next tier
 
-# ~/.ssh/config alternative — then plain `ssh db01`
-Host bastion01
+# ~/.ssh/config alternative — then plain `ssh <name>`
+Host hop1
   HostName <bastion-ip>
-  User deployer
-Host app01
-  ProxyJump bastion01
-  User app
-Host db01
-  ProxyJump bastion01,app01
-  User dba
+  User <hop-user>
+Host hop2
+  ProxyJump hop1
+  User <user>
 ```
 
 ## Concepts

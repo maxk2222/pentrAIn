@@ -14,6 +14,7 @@ how the intruder got in and what they left behind — on the actual victim host.
 
 - The capture is ground truth. Read every stream, not just the login.
 - Cleartext protocols hand out credentials — and humans reuse them.
+- Deliverable: write your findings to `/home/analyst/report.txt` — abused account + persistence path.
 - The transferred files say where to look on disk.
 
 ## Environment

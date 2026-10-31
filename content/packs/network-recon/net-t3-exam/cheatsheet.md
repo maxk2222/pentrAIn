@@ -9,19 +9,19 @@
 ```bash
 sudo nmap -sU --top-ports 200 <edge>
 snmpwalk -v2c -c public <edge>               # read the WHOLE tree — extends leak
-dig @<edge> corp.local axfr                  # zone + TXT records
-ssh edgeop@<edge>                            # flag A
+dig @<edge> <zone> axfr                      # zone + TXT records
+ssh <user>@<edge>
 
-curl http://<dmz>/docs/                      # flag B + netplan.txt creds
-ssh docmaster@<dmz>                          # pivot foothold
+curl http://<dmz>/<dir>/                     # public docs are public
+ssh <user>@<dmz>                             # pivot foothold
 
-ssh -J docmaster@<dmz> vaultop@<vault>       # flag C chain
-# or two steps: ssh docmaster@dmz → ssh vaultop@vault
-sudo cat /root/vault.txt
+ssh -J <user>@<dmz> <user>@<vault>           # multi-hop in one command
+sshuttle -r <user>@<dmz> <net>/24
+sudo -l && sudo -i
 ```
 
 ## Concepts
 
 - SNMP `extend` runs commands — their output is public enumeration surface
 - Trust-boundary pivots: each hop's loot names the next hop's creds
-- -J composes; on a jump the FIRST hop's creds differ from the last's
+- `-J` composes; on a jump the FIRST hop's creds differ from the last's

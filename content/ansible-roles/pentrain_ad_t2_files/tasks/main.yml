@@ -35,3 +35,12 @@
         read only = yes
         browseable = yes
   notify: restart smbd
+
+- name: password auth for ansible/telemetry reachability
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain.conf
+    content: |
+      PasswordAuthentication yes
+      KbdInteractiveAuthentication yes
+    mode: "0644"
+  notify: restart sshd

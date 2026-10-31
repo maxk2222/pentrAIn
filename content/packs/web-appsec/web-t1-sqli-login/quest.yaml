@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t1-sqli-login
+  track: web-appsec
+  tier: 1
+  title: "Trusting Query"
+  version: 1
+display:
+  tagline: "An employee portal that builds SQL like it's 2004. Bypass the login, then teach the database to give up its secrets."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: sqli01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 34
+      roles: [pentrain_web_t1_sqli]
+flags:
+  - id: portal-flag
+    name: "Portal flag — rendered after the login falls"
+    kind: file
+    points: 150
+    vm: sqli01
+    file_path: /var/lib/portal-data/flag.txt
+  - id: webdev-flag
+    name: "Webdev flag — the table's leaked ssh creds"
+    kind: file
+    points: 250
+    vm: sqli01
+    file_path: /home/webdev/user.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Two endpoints: the POST login on / and a directory lookup at /user.php?u=. The first gates you in, the second echoes query results back."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "Login bypass: a tautology — username ' OR '1'='1' -- makes AND password='x' irrelevant. For the lookup: ' UNION SELECT username,password FROM users-- renders the password column in the notes cell."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "webdev's row says the password is 'shared with ssh'. ssh webdev@sqli01 and read ~/user.txt."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-recon
+      name: "Mapped the endpoints"
+      detect: { command_match: "(curl|sqlmap|user\\.php|gobuster|dirb)" }
+      hint_after_s: 480
+    - id: cp-bypass
+      name: "Bypassed the login"
+      detect: { command_match: "(OR 1=1|or 1=1|' OR|sqlmap)" }
+      hint_after_s: 600
+    - id: cp-union
+      name: "Extracted with UNION"
+      detect: { command_match: "(UNION|union select)" }
+      hint_after_s: 720
+    - id: cp-ssh
+      name: "SSH'd as webdev"
+      detect: { command_match: "ssh .*webdev" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 100

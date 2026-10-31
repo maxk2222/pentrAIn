@@ -1,0 +1,52 @@
+---
+# ad-t1-asrep-roast "No Preauth" — teaching quest for the AS-REP primitive:
+# unauthenticated user enum → GetNPUsers -no-pass → hashcat -m 18200 →
+# the roasted account's own drop share holds the flag.
+
+- name: flag dir (loot channel for the roasted account)
+  ansible.windows.win_file:
+    path: C:\flags\asrep
+    state: directory
+
+- name: svc-legacy — AS-REP roastable (preauth disabled — the vuln)
+  community.windows.win_domain_user:
+    name: svc-legacy
+    password: "L3gacy2024!"
+    state: present
+    password_never_expires: true
+
+- name: disable kerberos preauth on svc-legacy
+  ansible.windows.win_powershell:
+    script: Set-ADAccountControl -Identity svc-legacy -DoesNotRequirePreAuth $true
+
+- name: decoy accounts (user enum practice — these need preauth)
+  community.windows.win_domain_user:
+    name: "{{ item.name }}"
+    password: "{{ item.pw }}"
+    state: present
+    password_never_expires: true
+  loop:
+    - { name: mwright, pw: "Wr1ght-IT-24!" }
+    - { name: akim, pw: "Ak!m-Sec-24!" }
+
+- name: svc-legacy can read its drop dir (file acl)
+  ansible.windows.win_acl:
+    path: C:\flags\asrep
+    user: CORP\svc-legacy
+    rights: ReadAndExecute
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: legacy drop share — the roasted account's loot channel
+  community.windows.win_share:
+    name: legacydrop
+    path: C:\flags\asrep
+    list: "yes"
+    read: CORP\svc-legacy
+
+- name: staged breadcrumb tying svc-legacy to the legacy sync job
+  ansible.windows.win_copy:
+    dest: C:\Windows\SYSVOL\domain\scripts\legacy-sync.txt
+    content: "legacy sync job runs as svc-legacy — DO NOT enable kerberos preauth, the agent predates it\n"

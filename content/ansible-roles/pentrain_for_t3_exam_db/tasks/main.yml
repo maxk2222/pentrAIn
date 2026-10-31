@@ -15,7 +15,7 @@
     shell: /bin/bash
     home: /home/analyst
     create_home: true
-    groups: [sudo]
+    groups: [adm]
     append: true
 
 - name: dbmaint — the account the attacker abused
@@ -25,6 +25,14 @@
     shell: /bin/bash
     home: /home/dbmaint
     create_home: true
+
+- name: dbmaint home is private — the flag demands the stolen login
+  ansible.builtin.file:
+    path: /home/dbmaint
+    state: directory
+    owner: dbmaint
+    group: dbmaint
+    mode: "0700"
 
 - name: auth.log evidence — ssh from web02's address
   ansible.builtin.copy:
@@ -62,4 +70,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

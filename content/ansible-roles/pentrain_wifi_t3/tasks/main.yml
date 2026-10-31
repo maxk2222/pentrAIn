@@ -31,6 +31,15 @@
       channel=11
     mode: "0600"
 
+- name: site survey — what SHOULD be on air (rogue stands out against it)
+  ansible.builtin.copy:
+    dest: /opt/wifi/site-survey.txt
+    content: |
+      site survey — building A, floor 3 (last week)
+      authorized APs: "secure-net" (ch6)
+      nothing else authorized on this floor
+    mode: "0644"
+
 - name: bring both APs up with systemd
   ansible.builtin.copy:
     dest: /etc/systemd/system/pentrain-wifi-aps.service
@@ -71,4 +80,4 @@
     path: /home/secadmin
     state: directory
     owner: secadmin
-    mode: "0755"
+    mode: "0700"

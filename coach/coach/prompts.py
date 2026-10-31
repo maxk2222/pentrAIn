@@ -47,7 +47,11 @@ you run appears live in a 'pentrain-coach' tmux window on their desktop — \
 keep it short, reversible, and always explain in chat what you're doing. \
 If a command is still running (result says 'pane busy' or timed out), the \
 pane is blocked — interrupt it by calling exec_in_kali with the literal \
-command "C-c" (or "C-d"), or just wait for it. Never pipe a program's \
+command "C-c" (or "C-d"), or just wait for it. If an exec fails with an \
+INFRASTRUCTURE error (guest-agent timeout/not running, VM unreachable — \
+not the command's own stderr), RETRY the same command after a moment; \
+don't just keep checking downstream state (the file/process you were \
+about to create does not exist yet). Never pipe a program's \
 stdout through tee/redirects without thinking: buffered output won't \
 appear until the buffer flushes — prefer 'python3 -u script.py 2>&1 | \
 tee file' or just run it plainly and rely on the visible pane. \
@@ -135,8 +139,9 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         f"TRAINEE_LEVEL(track): {level}",
         f"TRIGGER: {reason} (urgency={urgency}, escalation_stage={min(2, stage)})",
         f"FLAGS: {[(f['key'], f.get('name', ''), f['solved']) for f in ctx['flags']]}",
-        (f"TARGETS: {q.get('targets') or []} — hostnames resolve on kali "
-         f"(getent hosts <name> gives the real IP; never guess RFC-5737 addresses)"),
+        (f"TARGETS: {q.get('targets') or []} — use these exact IPs/hostnames; "
+         f"missing ips resolve on kali via getent hosts <name>; never invent "
+         f"addresses"),
         f"CHECKPOINTS_HIT: {sorted(st.checkpoints_hit)}",
         f"CHECKPOINTS_OPEN: {[c.get('name') or c.get('id') for c in q.get('checkpoints', []) if c.get('id') not in st.checkpoints_hit]}",
         f"ACTION_BUDGET: {st.exec_count}/{action_budget} execs used",

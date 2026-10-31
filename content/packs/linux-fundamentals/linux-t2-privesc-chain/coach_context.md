@@ -1,7 +1,8 @@
 Quest: linux-t2-privesc-chain (tier 2, linux-fundamentals)
 
 Ground truth for the coach:
-- creds: ops / Summer2024! (in /etc/backup/restore-notes.txt)
+- creds: ops / Summer2024! — anonymous vsftpd on :21 serves
+  /srv/ftp/restore-notes.txt; /etc/backup/restore-notes.txt repeats it
 - privesc A: sudo /usr/bin/find → `sudo find /etc -name x -exec /bin/sh \;`
 - privesc B: /opt/maintenance/cleanup.sh is world-writable, runs as root cron every 2 min
 - flags: /home/ops/user.txt, /root/root.txt

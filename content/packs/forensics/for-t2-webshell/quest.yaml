@@ -39,6 +39,14 @@ flags:
     points: 200
     vm: web01
     file_path: /tmp/.loot/flag.txt
+  - id: report-flag
+    name: "IR report — /home/analyst/report.txt names entry vector + shell"
+    kind: command
+    points: 100
+    command:
+      vm: web01
+      cmd: "test -f /home/analyst/report.txt && grep -qiE '10\\.66\\.6\\.6' /home/analyst/report.txt && grep -qiE 'x\\.php' /home/analyst/report.txt"
+
 hints:
   - id: h1
     cost: 30

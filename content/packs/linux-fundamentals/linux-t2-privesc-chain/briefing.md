@@ -12,7 +12,7 @@ notes lying around — and their idea of "least privilege" is generous.
 
 ## Suggested flow
 
-- Read everything world-readable under `/etc` that mentions *backup* or *restore*.
+- Enumerate every service — the ops team shares recovery notes a little too openly.
 - `sudo -l` on the target reveals what `ops` may run.
 - A scheduled task runs every couple of minutes — check who can modify what it runs.
 

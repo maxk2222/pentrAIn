@@ -1,6 +1,6 @@
 # Exam: Dual Band
 
-**Tier-3 capstone.** Every wireless technique from the track, in parallel,
+**Tier-3 capstone.** Every wireless technique from the track, back to back,
 under time pressure.
 
 **Situation.** Final assessment: two WPA2 networks on air —
@@ -15,7 +15,7 @@ radios — `wlan1` is your attack interface.
 
 1. Map both networks — which attack applies to which?
 2. Harvest mgmt-wifi's PMKID clientless; deauth exec-wifi's client for the
-   handshake. Run them in parallel if you're good.
+   handshake. `wlan1` is one interface — work the two attacks sequentially.
 3. Crack both.
 4. Report: `/home/wifi/exam-report.txt` must name both networks with
    both recovered keys.

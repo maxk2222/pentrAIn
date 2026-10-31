@@ -20,3 +20,45 @@
       ws fleet local admin (ws01 + ws02 — same for all):
         wadmin / WAdmin2024!
       ws02 helpdesk scripts under C:\helpdesk\.
+
+# anonymous-read share — the misconfiguration that is the intended entry.
+# (null-session access needs all four knobs: share acl, ntfs acl,
+#  RestrictNullSessAccess=0, NullSessionShares entry)
+
+- name: Everyone can read the ops dir (ntfs)
+  ansible.windows.win_acl:
+    path: C:\ops
+    user: Everyone
+    rights: ReadAndExecute
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: ops share — readable by Everyone (the leak)
+  community.windows.win_share:
+    name: ops
+    path: C:\ops
+    list: "yes"
+    read: Everyone
+
+- name: allow anonymous session access to shares
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+    name: RestrictNullSessAccess
+    data: 0
+    type: dword
+
+- name: treat anonymous as Everyone
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+    name: everyoneincludesanonymous
+    data: 1
+    type: dword
+
+- name: whitelist the ops share for null sessions
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+    name: NullSessionShares
+    data: ["ops"]
+    type: multistring

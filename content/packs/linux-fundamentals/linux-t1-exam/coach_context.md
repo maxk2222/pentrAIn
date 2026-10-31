@@ -1,8 +1,9 @@
 Quest: linux-t1-exam (tier 1 EXAM, linux-fundamentals)
 
 Ground truth for the coach:
-- foothold: /opt/onboarding/welcome.txt → intern / Intern2024! → ssh
-- privesc: /usr/bin/python3 has SUID →
+- foothold: anonymous vsftpd on :21 (anon_root=/opt/onboarding) —
+  `ftp anonymous@onboarding01` → get welcome.txt → intern / Intern2024! → ssh
+- privesc: /usr/bin/python3 (→ python3.11) carries SUID →
   python3 -c 'import os;os.execl("/bin/sh","sh","-p")' → root shell
 - flags: /home/intern/user.txt, /root/root.txt
 
@@ -16,5 +17,5 @@ This is an EXAM — coaching posture is stricter than teaching quests:
   credentials?"), escalate to stage hints only after real time passes.
 
 Wrong turns: brute-forcing ssh (creds are lootable, that's the point),
-searching /home for the note (it's /opt/onboarding), trying every SUID
-binary instead of checking GTFOBins per candidate.
+ignoring the ftp/http services nmap shows, trying every SUID binary instead
+of checking GTFOBins per candidate.

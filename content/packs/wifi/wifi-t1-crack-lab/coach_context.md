@@ -1,7 +1,7 @@
 # Coach context — wifi-t1-crack-lab
 
 ## Ground truth
-- `wifilab01` 10.x.10.25 — lab user `wifi`/`WifiLab-24!`, sudo group.
+- `wifilab01` 10.x.10.25 — lab user `wifi`/`WifiLab-24!` (sudo scoped to wireless tools only).
 - `/opt/wifi/handshake.cap` — REAL captured handshake for SSID `labnet`,
   WPA2, PSK `coffee123` (generated live via hwsim). 
 - `/opt/wifi/wordlist.txt` contains coffee123.

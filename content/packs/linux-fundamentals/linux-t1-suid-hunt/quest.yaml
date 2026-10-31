@@ -43,7 +43,7 @@ hints:
   - id: h1
     cost: 25
     stage: recon
-    text: "Before brute-forcing SSH, look for what the last admin left behind — /opt is a good place to start."
+    text: "Before brute-forcing SSH, enumerate the other service — the onboarding documents are shared with the whole LAN. `curl http://suid01/`"
   - id: h2
     cost: 40
     stage: privesc
@@ -55,6 +55,10 @@ hints:
 coach:
   briefing_ref: coach_context.md
   checkpoints:
+    - id: cp-http
+      name: "Looted the onboarding share"
+      detect: { command_match: "(curl |wget |gobuster|nikto|dirb|ftp )" }
+      hint_after_s: 480
     - id: cp-ssh
       name: "Logged in as trainee"
       detect: { command_match: "ssh .*trainee" }

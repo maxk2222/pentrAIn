@@ -12,9 +12,10 @@
     state: present
     password_never_expires: true
 
-- name: domain admin password (matches the ws01 note — weak, rotatable lesson)
+- name: adm-ops — the DA whose creds leak on ws01 (never touch builtin Admin)
   community.windows.win_domain_user:
-    name: Administrator
+    name: adm-ops
     password: "D@main2024!"
     state: present
-    update_password: always
+    password_never_expires: true
+    groups: ["Domain Admins"]

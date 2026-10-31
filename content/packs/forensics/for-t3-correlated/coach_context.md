@@ -20,6 +20,8 @@
 - Staging dirs: `/var/tmp/.s1`, `.s2`, `.s3` — flag file inside each.
 - `/var/log/collected.log` on db01 is the "aha" — lines prefixed with the
   source hostname; sorting by time reconstructs the kill chain.
+- report-flag: /home/analyst/report.txt **on db01** must name all three
+  abused accounts: webops, appadm, dbadm.
 - `analyst/analysis` creds are in the briefing on every host.
 
 ## Common wrong turns

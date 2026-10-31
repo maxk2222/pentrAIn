@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_scr_t3_cmdinject
+  author: pentrain
+  description: "scr-t3 teaching quest: cgi shell injection for scripted exfiltration"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

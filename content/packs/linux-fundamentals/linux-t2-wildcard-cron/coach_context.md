@@ -1,7 +1,8 @@
 Quest: linux-t2-wildcard-cron (tier 2, linux-fundamentals)
 
 Ground truth for the coach:
-- foothold: /var/backups/NOTES.txt → ops / Ops2024! → ssh
+- foothold: nginx on :80 autoindexes /var/backups → NOTES.txt leaks
+  ops / Ops2024! → ssh
 - vuln: /etc/cron.d/pentrain-wildcard runs every minute as root:
   `cd /home/ops/backup && tar czf /var/backups/ops-home.tar.gz *`
 - exploit: drop files into /home/ops/backup named
@@ -11,8 +12,9 @@ Ground truth for the coach:
 - flags: /home/ops/user.txt, /root/root.txt
 
 Intended path:
-read NOTES → ssh ops@ → /etc/crontab + /etc/cron.d → notice the wildcard in
-a root job → craft --checkpoint filenames in the archived dir → wait ≤60s
+curl http://cron01/ → NOTES.txt → ssh ops@ → /etc/crontab + /etc/cron.d →
+notice the wildcard in a root job → craft --checkpoint filenames in the
+archived dir → wait ≤60s
 
 Common wrong turns:
 - editing the cron line — it's root-owned; the DIR is the writable surface

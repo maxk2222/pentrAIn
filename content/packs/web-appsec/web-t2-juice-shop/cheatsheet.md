@@ -2,15 +2,15 @@
 
 ## Targets
 
-- **web01** — OWASP Juice Shop (Node/Express SPA + API)
+- **juice01** — OWASP Juice Shop (Node/Express SPA + API) on :3000
 
 ## Useful commands
 
 ```bash
-curl -s http://<web01>:3000/rest/products/search?q=x | jq .
-gobuster dir -u http://<web01>:3000/ -w common.txt
+curl -s http://<juice01>:3000/rest/products/search?q=x | jq .
+gobuster dir -u http://<juice01>:3000/ -w common.txt
 # score-board leaks the challenge list — your roadmap
-curl http://<web01>:3000/#/score-board
+curl http://<juice01>:3000/#/score-board
 ```
 
 ## Concepts

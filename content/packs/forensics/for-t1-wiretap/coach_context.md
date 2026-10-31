@@ -20,6 +20,8 @@ Common wrong turns:
   stream; point out FTP's two-channel nature
 - dumping the pcap with strings and missing stream context
 - forgetting password reuse — creds work on SSH
+- report-flag: /home/analyst/report.txt must name ops-backup + the
+  systemd-helper drop path. /home/ops-backup is 0700 — the flag needs the ssh login.
 
 Style: tier 1 blue-side — the skill is stream reconstruction + turning
 network evidence into host triage. Wireshark GUI on Kali is fine; tshark

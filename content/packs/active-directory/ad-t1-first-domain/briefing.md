@@ -9,6 +9,9 @@ Server 2022 DC. Somewhere in it is a service account that was created years
 ago with a password nobody rotated. Enumerate the domain, roast it, own the
 box.
 
+You've been provisioned a low-privilege domain account to get started:
+**`intern / Welcome2024!`** (domain: `corp.pentrain.local` or `CORP`).
+
 ## Objectives
 
 1. Enumerate the domain — users, SPNs, shares

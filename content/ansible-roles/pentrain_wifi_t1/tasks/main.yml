@@ -20,4 +20,4 @@
     path: /home/ap-admin
     state: directory
     owner: ap-admin
-    mode: "0755"
+    mode: "0700"

@@ -17,6 +17,7 @@ minutes, captured in a reusable bash script.
 **Environment.** One target VM (`filesrv01`), reachable directly from your
 Kali console — range hostnames resolve, no IP guessing needed.
 Anonymous FTP is said to carry a host inventory — worth a look for context.
+SSH access for log fetching: `trainee / Start123!` (low-priv audit account).
 
 **Why this matters.** Recon by hand doesn't scale to a 200-host engagement.
 A script you trust turns ten minutes into ten seconds — and this one is

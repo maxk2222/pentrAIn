@@ -24,4 +24,5 @@ the two flags hidden in the evidence.
 ## Rules of engagement
 
 - Blue quest: analyze, don't attack.
+- Deliverable: write your findings to `/home/analyst/report.txt` — attacker IP + webshell filename.
 - Flags look like `pentrAIn{...}` — submit them in the Flags panel.

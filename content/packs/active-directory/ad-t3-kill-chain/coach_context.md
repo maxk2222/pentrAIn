@@ -4,8 +4,9 @@
 
 1. Recon: `nmap` the .51/.53/.54/.55 hosts — DCs on .51/.54 (88/389/445/636),
    workstations on .53/.55.
-2. `ws01`: local admin `wadmin/WAdmin2024!` is in `C:\ops\readme.txt`
-   (leaked via the share/page or guessable path) → `ws-flag`.
+2. `ws01`: `\\ws01\ops` is an **anonymous-read share** (null session) —
+   `smbclient -N //ws01/ops` → `readme.txt` leaks local admin
+   `wadmin/WAdmin2024!` → winrm/evil-winrm → `ws-flag`.
 3. ws01's readme names `ws02`'s local admin — same `WAdmin2024!` (reuse
    lesson) → `ws-flag`→`ws2-flag` at `C:\flags\ws02.txt`.
 4. ws02: `C:\helpdesk\dc-script.ps1` contains `svc-rep / RepSvc2024!` — a

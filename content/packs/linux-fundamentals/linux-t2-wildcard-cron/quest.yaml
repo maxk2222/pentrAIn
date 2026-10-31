@@ -43,7 +43,7 @@ hints:
   - id: h1
     cost: 30
     stage: recon
-    text: "Loot the readable files — /var/backups holds more than archives. The note names credentials."
+    text: "The backup share is served over plain HTTP — `curl http://cron01/` lists it. The policy note names credentials."
   - id: h2
     cost: 50
     stage: privesc

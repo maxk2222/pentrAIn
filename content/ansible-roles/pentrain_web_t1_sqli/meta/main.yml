@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_web_t1_sqli
+  author: pentrain
+  description: "web-t1 teaching quest: php/sqlite portal with raw-string SQL, UNION creds leak"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

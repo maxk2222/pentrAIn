@@ -31,4 +31,4 @@ openssl enc -d -aes-128-cbc -pbkdf2 ...
 ## Reminder
 
 PSK recovered → it may unlock MORE than wifi. Try: enc backups, account
-passwords, ssh keys, sudo.
+passwords, ssh keys, local files.

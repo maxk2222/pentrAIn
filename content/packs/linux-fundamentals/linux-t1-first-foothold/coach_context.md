@@ -2,7 +2,8 @@ Quest: linux-t1-first-foothold (tier 1, linux-fundamentals)
 
 Ground truth the coach may reference (never reveal answers directly unless
 autonomy level allows takeover):
-- student / student123 — leaked in /etc/backup-notes.txt
+- student / student123 — leaked in the pre-auth ssh Banner (/etc/issue.net);
+  /etc/backup-notes.txt repeats them post-login
 - sudo vim path to root: `sudo -l` shows NOPASSWD /usr/bin/vim
 - flags: /home/student/user.txt (file), /root/root.txt (file)
 - intended arc: recon → ssh → sudo -l → vim escape → cat flags

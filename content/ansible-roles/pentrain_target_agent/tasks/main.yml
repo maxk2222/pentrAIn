@@ -1,0 +1,68 @@
+---
+# pentrain_target_agent — lightweight telemetry for Linux TARGET VMs.
+#
+# Same shell hook + shipper as pentrain_kali_agent, minus the kali toolchain,
+# the coach tmux autostart and the motd (targets keep their own banners and
+# must stay near-stock Debian). Attached automatically by the backend to
+# every linux: true VM — commands typed inside SSH sessions on a target are
+# what checkpoints/coach matching need to see.
+- name: ensure qemu-guest-agent present and running
+  ansible.builtin.apt:
+    name: qemu-guest-agent
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+- name: enable qemu-guest-agent
+  ansible.builtin.service:
+    name: qemu-guest-agent
+    enabled: true
+    state: started
+
+- name: install pentrain dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /opt/pentrain
+    - /etc/pentrain
+    - /var/spool/pentrain
+
+# telemetry log dir must be writable by every lab user (the shell hook appends
+# per-user cmd-$USER.log) — sticky world-writable like /tmp, so no one can
+# clobber another user's log.
+- name: install telemetry log dir (world-writable, sticky)
+  ansible.builtin.file:
+    path: /var/log/pentrain
+    state: directory
+    mode: "1777"
+
+- name: install telemetried
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: telemetried.py, dest: /opt/pentrain/telemetried.py, mode: "0755" }
+    - { src: hook.sh, dest: /etc/pentrain/hook.sh, mode: "0644" }
+    - { src: pentrain-telemetried.service, dest: /etc/systemd/system/pentrain-telemetried.service, mode: "0644" }
+
+- name: default telemetried config (overwritten by backend at deploy)
+  ansible.builtin.copy:
+    dest: /etc/pentrain/telemetried.conf
+    content: "TOKEN=\nSESSION=\nHOST=\nAPI=http://pentrain-app:8000\n"
+    mode: "0640"
+
+- name: source telemetry hook in bash
+  ansible.builtin.lineinfile:
+    path: /etc/bash.bashrc
+    line: "[ -f /etc/pentrain/hook.sh ] && . /etc/pentrain/hook.sh"
+    create: true
+
+- name: enable + start telemetried
+  ansible.builtin.systemd:
+    name: pentrain-telemetried
+    daemon_reload: true
+    enabled: true
+    state: started

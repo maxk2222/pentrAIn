@@ -49,7 +49,7 @@ hints:
   - id: h2
     cost: 40
     stage: exploit
-    text: "Parallel work: hcxdumptool on mgmt-wifi for the PMKID while airodump sits on exec-wifi's channel — then one deauth, one crack each."
+    text: "One interface means one job at a time: hcxdumptool on mgmt-wifi for the PMKID first, then airodump + deauth on exec-wifi's channel — then one crack each."
   - id: h3
     cost: 60
     stage: post

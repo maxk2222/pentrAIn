@@ -68,7 +68,7 @@
     path: /home/wifi-admin
     state: directory
     owner: wifi-admin
-    mode: "0755"
+    mode: "0700"
 
 - name: plain backup payload (encrypts to backup.enc below)
   ansible.builtin.copy:

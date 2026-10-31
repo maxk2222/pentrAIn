@@ -18,7 +18,7 @@
       ns1     IN A   {{ ansible_default_ipv4.address }}
       edge    IN A   {{ ansible_default_ipv4.address }}
       dmz     IN TXT "dmz01 serves the public docs; vault01 talks only to dmz"
-      vault   IN TXT "see: /srv/notes/netplan.txt on the dmz host"
+      vault   IN TXT "see: http://dmz01/docs/netplan.txt"
     mode: "0644"
   notify: restart named
 
@@ -59,4 +59,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

@@ -60,9 +60,12 @@
   changed_when: false
   ignore_errors: true
 
+# the cli container must share the wordpress container's /var/www/html —
+# wp-config.php lives in that volume; without --volumes-from wp-cli sees an
+# empty docroot and 'wp core install' dies silently
 - name: install wordpress — admin / passw0rd (the weak-cred lesson)
   ansible.builtin.command: >-
-    docker run --rm --network wp-net wordpress:cli
+    docker run --rm --network wp-net --volumes-from wordpress wordpress:cli
     wp core install --allow-root
     --url=http://{{ ansible_default_ipv4.address }}
     --title='Corp Intranet'
@@ -73,7 +76,27 @@
   register: wpi
   changed_when: "'Success' in (wpi.stdout | default(''))"
   failed_when: wpi.rc != 0 and 'already installed' not in (wpi.stderr | default('')) + (wpi.stdout | default(''))
-  ignore_errors: true
+
+# WP 6.5 defaults to a block theme (no classic Theme File Editor). Ship a
+# minimal classic theme in the shared volume — offline-safe, editable 404.php.
+- name: labtheme — minimal classic theme (offline-safe)
+  ansible.builtin.command: >-
+    docker exec wordpress /bin/sh -c '
+    mkdir -p /var/www/html/wp-content/themes/labtheme &&
+    printf "/*\nTheme Name: Lab Theme\n*/\n" > /var/www/html/wp-content/themes/labtheme/style.css &&
+    printf "<?php // silence\n" > /var/www/html/wp-content/themes/labtheme/index.php &&
+    printf "<?php echo \"404 - nothing here\";\n" > /var/www/html/wp-content/themes/labtheme/404.php &&
+    printf "<?php\n" > /var/www/html/wp-content/themes/labtheme/functions.php &&
+    chown -R www-data:www-data /var/www/html/wp-content/themes/labtheme'
+  changed_when: false
+
+- name: activate labtheme
+  ansible.builtin.command: >-
+    docker run --rm --network wp-net --volumes-from wordpress wordpress:cli
+    wp theme activate labtheme --allow-root
+  register: theme
+  changed_when: "'Success' in (theme.stdout | default(''))"
+  failed_when: theme.rc != 0 and 'already active' not in (theme.stderr | default('')) + (theme.stdout | default(''))
 
 - name: uploads + flag staging dirs inside the container
   ansible.builtin.command: docker exec wordpress /bin/sh -c 'mkdir -p /var/www/html/wp-content/uploads'

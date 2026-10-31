@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t3-jwt-idor
+  track: web-appsec
+  tier: 3
+  title: "Signed & Confused"
+  version: 1
+display:
+  tagline: "A reporting API that trusts its tokens a little too much. Read the JWT, learn its secret, become admin."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 80
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: jwt01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 36
+      roles: [pentrain_web_t3_jwt]
+flags:
+  - id: user-flag
+    name: "User flag — admin's export via IDOR"
+    kind: file
+    points: 150
+    vm: jwt01
+    file_path: /var/lib/api/user-flag.txt
+  - id: admin-flag
+    name: "Admin flag — forged token, restricted report"
+    kind: file
+    points: 300
+    vm: jwt01
+    file_path: /var/lib/api/admin-flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "GET / maps the API and hands you a demo account. POST your creds to /api/login, then decode the JWT — the payload has uid and admin claims."
+  - id: h2
+    cost: 45
+    stage: exploit
+    text: "IDOR first, forging second: your valid token reads ANY /api/users/<id>/export — uid 1 belongs to admin. Then crack the HS256 secret (jwt_tool -C or hashcat -m 16500) — it's a dictionary word."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "Forge {\"sub\":\"admin\",\"uid\":1,\"admin\":true} signed with the cracked secret, then GET /api/admin/report."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-map
+      name: "Mapped the API"
+      detect: { command_match: "(curl|/api/login|jwt)" }
+      hint_after_s: 480
+    - id: cp-idor
+      name: "Read another user's export"
+      detect: { command_match: "(export|users/1|idor)" }
+      hint_after_s: 600
+    - id: cp-crack
+      name: "Cracked the JWT secret"
+      detect: { command_match: "(jwt_tool|hashcat|16500)" }
+      hint_after_s: 720
+    - id: cp-forge
+      name: "Forged an admin token"
+      detect: { command_match: "(admin.*report|-I |-pc admin)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 450
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

@@ -11,6 +11,15 @@
     groups: sudo
     append: true
 
+# NOPASSWD so `ssh -J … dbadm@db01 "sudo cat /root/db.txt"` works without a
+# tty on the pivot channel
+- name: dbadm full sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/dbadm
+    content: "dbadm ALL=(ALL) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
 - name: install mariadb
   ansible.builtin.apt:
     name: [mariadb-server, iptables-persistent]
@@ -54,4 +63,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

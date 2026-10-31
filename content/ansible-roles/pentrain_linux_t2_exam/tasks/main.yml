@@ -26,6 +26,24 @@
       report issues to ops@corp.local
     mode: "0644"
 
+# /etc/motd only renders POST-login — mirror it into the pre-auth ssh Banner
+# so the contractor creds are the actual recon surface from kali
+- name: pre-auth banner — same contractor ad, before login
+  ansible.builtin.copy:
+    dest: /etc/issue.net
+    content: |
+      === maintenance window: sundays 02:00-04:00 ===
+      maintenance account for contractors:  maint / Maint2024!
+      report issues to ops@corp.local
+    mode: "0644"
+
+- name: enable ssh banner
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?Banner"
+    line: "Banner /etc/issue.net"
+  notify: restart sshd
+
 - name: spool dir the root cron packs every minute (wildcard surface)
   ansible.builtin.file:
     path: /home/maint/spool
@@ -63,4 +81,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

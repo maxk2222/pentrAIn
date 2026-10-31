@@ -3,3 +3,8 @@
   ansible.builtin.service:
     name: ssh
     state: restarted
+
+- name: restart vsftpd
+  ansible.builtin.service:
+    name: vsftpd
+    state: restarted

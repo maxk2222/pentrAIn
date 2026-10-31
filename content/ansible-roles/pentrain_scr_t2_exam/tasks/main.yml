@@ -3,7 +3,7 @@
 # pull the capture, extract the leaked creds, ssh in and drop a proof file.
 - name: packages
   ansible.builtin.apt:
-    name: [nginx-light]
+    name: [nginx-light, openssh-server]
     state: present
     update_cache: true
 
@@ -44,6 +44,20 @@
     state: directory
     owner: ops-backup
     mode: "0755"
+
+- name: ssh password auth on (the script must ssh in with the pcap creds)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
 
 - name: ensure nginx started
   ansible.builtin.service:

@@ -34,6 +34,33 @@
       elevated" — yes, I know, I'll clean it up later.
     mode: "0644"
 
+# the "share" — /opt/onboarding is served to the whole LAN on :80 so the
+# leaked creds are reachable from kali before any login exists
+- name: onboarding web drop (autoindex of /opt/onboarding on :80)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/onboarding-http.service
+    content: |
+      [Unit]
+      Description=Onboarding docs http drop
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 -m http.server 80 --directory /opt/onboarding
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: enable + start onboarding http
+  ansible.builtin.systemd:
+    name: onboarding-http
+    enabled: true
+    state: started
+    daemon_reload: true
+
 - name: the actual misconfig — base64 with the setuid bit (GTFOBins file-read)
   ansible.builtin.file:
     path: /usr/bin/base64
@@ -56,4 +83,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

@@ -46,6 +46,14 @@ flags:
     points: 250
     vm: web01
     file_path: /var/lib/.sysmon/flag.txt
+  - id: report-flag
+    name: "IR report — /home/analyst/report.txt incl. the quiet implant"
+    kind: command
+    points: 100
+    command:
+      vm: web01
+      cmd: "test -f /home/analyst/report.txt && grep -qiE '10\\.9\\.9\\.9' /home/analyst/report.txt && grep -qiE 'shell\\.phtml' /home/analyst/report.txt && grep -qiE 'sysmon' /home/analyst/report.txt"
+
 hints:
   - id: h1
     cost: 30

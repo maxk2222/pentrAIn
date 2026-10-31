@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_web_t3_jwt
+  author: pentrain
+  description: "web-t3 teaching quest: weak HS256 JWT + IDOR export + forged admin claim"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

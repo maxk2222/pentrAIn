@@ -2,9 +2,23 @@
 # scr-t3-exam db01 — ssh only from web01; scripted chain writes the marker.
 - name: packages
   ansible.builtin.apt:
-    name: [iptables-persistent]
+    name: [iptables-persistent, openssh-server]
     state: present
     update_cache: true
+
+- name: ssh password auth on (sshpass drives the pivot)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
 
 - name: vaultadm account for the pivot
   ansible.builtin.user:
@@ -13,10 +27,12 @@
     password: "{{ 'V4ult-Adm1n!' | password_hash('sha512') }}"
   no_log: true
 
-- name: compute web host (same subnet, .20)
+- name: compute web host + router (same /24 — web .20, router .254)
   ansible.builtin.set_fact:
     pentrain_web_host: >-
       {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.20
+    pentrain_router: >-
+      {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.254
 
 - name: restrict ssh to the web host only
   ansible.builtin.iptables:
@@ -26,6 +42,14 @@
     source: "{{ pentrain_web_host }}"
     jump: ACCEPT
   when: ansible_default_ipv4.address is defined
+
+- name: router keeps ssh too (ansible reprovisioning / soft reset)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: 22
+    source: "{{ pentrain_router }}"
+    jump: ACCEPT
 
 - name: keep established sessions alive (ansible provisioning + pivots)
   ansible.builtin.iptables:

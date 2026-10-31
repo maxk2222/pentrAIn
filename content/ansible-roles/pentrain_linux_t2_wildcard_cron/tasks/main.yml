@@ -46,6 +46,27 @@
         archiving script gets confused. (weird, whatever)
     mode: "0644"
 
+# the "open backup share" — /var/backups served read-only on :80 so the
+# leaked creds (and the tar artifacts the root cron produces) are reachable
+# from kali before any login exists
+- name: backup share — nginx autoindex over /var/backups
+  ansible.builtin.apt:
+    name: nginx-light
+    state: present
+    update_cache: true
+
+- name: backup share site
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 80 default_server;
+          root /var/backups;
+          autoindex on;
+      }
+    mode: "0644"
+  notify: restart nginx
+
 - name: the vulnerable root cronjob — `tar czf … *` unquoted wildcard
   ansible.builtin.cron:
     name: pack ops backups
@@ -59,4 +80,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

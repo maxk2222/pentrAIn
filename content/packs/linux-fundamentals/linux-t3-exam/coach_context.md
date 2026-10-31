@@ -1,7 +1,7 @@
 Quest: linux-t3-exam (tier 3 EXAM, linux-fundamentals)
 
 Ground truth for the coach:
-- bastion01 (.50, open): motd → deployer / Deploy2024!
+- bastion01 (.50, open): pre-auth ssh Banner → deployer / Deploy2024!
   home has DEPLOY.txt → app@app01 / AppTier2024!
 - app01 (.51): nftables accepts only bastion + router.
   ssh -J deployer@bastion app@app01. sudo -l → journalctl → `!/bin/sh`.

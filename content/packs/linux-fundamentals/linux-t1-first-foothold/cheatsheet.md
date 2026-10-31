@@ -2,20 +2,21 @@
 
 ## Targets
 
-- **web01** — one web service, one misconfiguration, one flag
+- **target01** — one SSH service, one banner leak, one sudo misconfiguration
 
 ## Useful commands
 
 ```bash
-nmap -sV -sC <web01>
-gobuster dir -u http://<web01>/ -w common.txt
-curl -s http://<web01>/robots.txt
-ssh user@<web01>                # creds hide where they shouldn't
-sudo -l                         # first thing on any shell
+nmap -sV -sC <target01>            # service + banner grab
+ssh anything@<target01>            # the ssh banner shows pre-auth
+ssh <user>@<target01>              # once the banner gives you creds
+sudo -l                            # first thing on any shell
+sudo <binary>                      # GTFOBins says which binaries shell out
 ```
 
 ## Concepts
 
-- Robots.txt / backup files / readable home dirs — the tier-1 trinity
-- `sudo -l` output is the intended privesc map
+- SSH `Banner` (issue.net) is sent BEFORE authentication — grabbing it is legit recon
+- Loot readable files in `/etc` and `/opt` after login — admins leave notes
+- `sudo -l` output is the intended privesc map; GTFOBins has the recipes
 - Flags: user-level + root-level — foothold is only half the quest

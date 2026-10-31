@@ -12,7 +12,7 @@ little too honest about what goes wrong with it.
 
 ## Suggested flow
 
-- Loot the readable filesystem — the backup policy is documented somewhere.
+- Loot what the host shares — the backup policy is published on an open share.
 - Watch what runs on a schedule as root, and *where* it operates.
 - Wildcards in privileged commands trust filenames completely. Filenames are
   yours to choose.

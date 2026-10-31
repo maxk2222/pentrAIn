@@ -7,7 +7,7 @@
 # client generates association traffic on wlan2, and the trainee attacks
 # via wlan1 exactly as with physical gear (airodump/aireplay/aircrack work
 # unmodified). The trainee reaches the lab over SSH from kali.
-- name: wireless toolchain
+- name: wireless toolchain + ssh server (trainee reaches the lab via ssh)
   ansible.builtin.apt:
     name:
       - iw
@@ -21,16 +21,51 @@
       - kmod
       - rfkill
       - sshpass
+      - openssh-server
     state: present
     update_cache: true
 
-- name: lab user (ssh entry point from kali)
+- name: lab user (ssh entry point from kali — NOT a sudoer)
   ansible.builtin.user:
     name: wifi
     shell: /bin/bash
     password: "{{ 'WifiLab-24!' | password_hash('sha512') }}"
-    groups: [sudo]
   no_log: true
+
+- name: scoped sudo — wireless tools only, never generic file reads
+  # the attack tools need root for monitor mode/injection; cat of
+  # /etc/hostapd/*.conf or /home/*-admin/flag.txt must NOT be sudo-able.
+  # args are pinned where a bare binary would escape (ip netns exec,
+  # systemctl edit, modprobe <any module>).
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-pentrain-wifi
+    content: |
+      wifi ALL=(root) NOPASSWD: /usr/sbin/iw *, /usr/sbin/iwconfig *, \
+        /usr/sbin/airmon-ng *, /usr/sbin/airodump-ng *, /usr/sbin/aireplay-ng *, \
+        /usr/sbin/aircrack-ng *, /usr/sbin/airserv-ng *, /usr/sbin/airtun-ng *, \
+        /usr/sbin/hcxdumptool *, \
+        /usr/sbin/rfkill *, \
+        /usr/sbin/ip link set *, \
+        /sbin/modprobe mac80211_hwsim, /sbin/modprobe -r mac80211_hwsim, \
+        /usr/bin/systemctl start pentrain-*, /usr/bin/systemctl stop pentrain-*, \
+        /usr/bin/systemctl restart pentrain-*, /usr/bin/systemctl status pentrain-*, \
+        /usr/local/sbin/wifi-lab, /usr/local/sbin/wifi-lab *
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: ssh password auth on
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
 
 - name: lab workspace
   ansible.builtin.file:

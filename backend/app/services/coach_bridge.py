@@ -74,6 +74,26 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             CoachAction.tool == "exec_in_kali",
             CoachAction.status.in_(["ok", "confirmed"])))).scalar() or 0
     profile = await db.get(UserProfile, 1)
+    # resolve concrete target IPs for the coach — hostnames alone invite the
+    # model to invent RFC-5737 addresses. The range's /24 prefix comes from
+    # the live kali IP; quest topology supplies each vm's last octet.
+    targets: list[dict] = []
+    try:
+        engine = await get_engine(db)
+        st = (await engine.provider.status(session.range_id)
+              if session.range_id else None)
+        kali_ip = next(
+            (v.ip for v in (st.vms if st else [])
+             if v.ip and (v.role == "kali" or "kali" in v.name.lower())), None)
+    except Exception:
+        kali_ip = None
+    for v in (quest.topology or {}).get("vms") or []:
+        name = v.get("name")
+        if not name:
+            continue
+        octet = v.get("ip_last_octet")
+        ip = f"{kali_ip.rsplit('.', 1)[0]}.{octet}" if kali_ip and octet else None
+        targets.append({"name": name, "ip": ip})
     return {
         "session": {
             "id": session.id, "state": session.state,
@@ -91,11 +111,9 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             "coach_context": quest.coach_context_md,
             "checkpoints": quest.coach_cfg.get("checkpoints", []) if quest.coach_cfg else [],
             "escalation": quest.coach_cfg.get("escalation", {}) if quest.coach_cfg else {},
-            # real hostnames the trainee can reach — resolve on kali via
-            # range DNS; keeps the model from inventing RFC-5737 IPs
-            "targets": [v.get("name") for v in
-                        ((quest.topology or {}).get("vms") or [])
-                        if v.get("name")],
+            # real hostnames + resolved IPs the trainee can reach — keeps the
+            # model from inventing RFC-5737 addresses
+            "targets": targets,
         },
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
                    "solved": f.key in solved} for f in flags],

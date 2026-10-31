@@ -1,0 +1,62 @@
+---
+# scr-t3-cmd-inject "Blind Pipe" — a diagnostics CGI with unquoted shell
+# interpolation. The trainee must SCRIPT the injection (requests + payload
+# encoding + output parsing) — teaching quest for scr-t3-exam.
+
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2]
+    state: present
+    update_cache: true
+
+- name: cgi dir
+  ansible.builtin.file:
+    path: /usr/lib/cgi-bin
+    state: directory
+    mode: "0755"
+
+- name: vulnerable status cgi — unquoted parameter into shell
+  ansible.builtin.copy:
+    dest: /usr/lib/cgi-bin/status
+    content: |
+      #!/bin/bash
+      echo "Content-Type: text/plain"
+      echo
+      Q="${QUERY_STRING#iface=}"
+      Q="${Q%%&*}"
+      Q="${Q//+/ }"
+      Q=$(printf '%b' "${Q//%/\\x}")
+      echo "== iface $Q =="
+      /bin/bash -c "ip -brief addr show $Q" 2>&1 | head -64
+    mode: "0755"
+
+- name: enable cgi
+  ansible.builtin.command: a2enmod cgid
+  notify: restart apache2
+
+- name: landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: "<h1>web01 — interface status</h1><p>/cgi-bin/status?iface=&lt;name&gt;</p>\n"
+    mode: "0644"
+
+- name: operator account — flag lands in its home
+  ansible.builtin.user:
+    name: wwwops
+    shell: /bin/bash
+    password: "{{ 'Www0ps!24' | password_hash('sha512') }}"
+    home: /home/wwwops
+    create_home: true
+  no_log: true
+
+- name: decoy note — rewards enumeration through the shell
+  ansible.builtin.copy:
+    dest: /home/wwwops/notes.txt
+    content: "status cgi is legacy — replace before audit. loot is in ~wwwops.\n"
+    mode: "0644"
+
+- name: ensure apache started
+  ansible.builtin.service:
+    name: apache2
+    state: started
+    enabled: true

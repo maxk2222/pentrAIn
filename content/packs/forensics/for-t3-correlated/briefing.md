@@ -18,6 +18,7 @@ camp — find all three flags and reconstruct the kill chain end to end.
 
 - **Kali**: analysis workstation — `ssh analyst@<host>` (pw `analysis`,
   NOPASSWD sudo) to each of the three hosts
+- Deliverable: write your findings to `/home/analyst/report.txt` on **db01** — every abused account in the chain.
 - **edge01 / app01 / db01**: the compromised chain, preserved
 - `db01` also collected forwarded syslog in `/var/log/collected.log`
 

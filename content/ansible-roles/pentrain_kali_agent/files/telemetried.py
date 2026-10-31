@@ -129,16 +129,20 @@ def main() -> None:
     while True:
         conf = load_conf()
         token, api = conf.get("TOKEN", ""), conf.get("API", "")
+        # HOST names the box in multi-VM telemetry (kali vs targets); falls
+        # back to the OS hostname when the backend hasn't written one yet.
+        host = conf.get("HOST") or hostname
         now = time.time()
 
         if token:
             for path, line in tailer.read_new():
                 ev = parse_hook_line(path, line)
                 if ev:
+                    ev["payload"]["host"] = host
                     pending.append(ev)
             if now - last_heartbeat >= HEARTBEAT_S:
                 pending.append({"kind": "heartbeat",
-                                "payload": {"host": hostname, "ts": int(now)}})
+                                "payload": {"host": host, "ts": int(now)}})
                 last_heartbeat = now
             tailer.save()
 

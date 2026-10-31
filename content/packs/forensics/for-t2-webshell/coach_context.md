@@ -23,3 +23,5 @@
 - Reading the log top-down — start at the SQLi window, follow timestamps.
 - Looking for the flag inside the tarball — the flag sits BESIDE it.
 - Running the webshell's commands — it's evidence; read, don't execute.
+- report-flag: /home/analyst/report.txt must name attacker IP 10.66.6.6
+  and the webshell filename x.php. /uploads/flag.txt is http-denied — on-box only.

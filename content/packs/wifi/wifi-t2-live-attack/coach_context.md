@@ -1,7 +1,7 @@
 # Coach context — wifi-t2-live-attack
 
 ## Ground truth
-- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!`, sudo.
+- `wifilab01` 10.x.10.25 — `wifi`/`WifiLab-24!` (sudo scoped to wireless tools only).
 - hwsim: wlan0 AP `corp-wifi` ch6 (hostapd), wlan2 client stays
   associated and auto-rejoins when deauthed, wlan1 free for attacker.
 - PSK `sunshine2024` in `/opt/wifi/wordlist.txt`.

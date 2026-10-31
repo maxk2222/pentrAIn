@@ -29,3 +29,5 @@
   inside.
 - `cat auth.log` without sudo → permission denied; analyst has NOPASSWD sudo.
 - Looking only in /var/log — the richest trail is `.bash_history`.
+- report-flag: /home/analyst/report.txt must name attacker IP 10.66.6.6,
+  compromised account ops, and the cron/sysupdate persistence.

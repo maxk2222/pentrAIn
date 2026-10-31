@@ -25,6 +25,9 @@ inj("sshpass -p 'V4ult-Adm1n!' ssh -o StrictHostKeyChecking=no "
 (quote the creds carefully — shell-special chars in V4ult-Adm1n! need
 single quotes; history expansion isn't an issue non-interactively.)
 
+- Redirect mechanics to scr-t3-cmd-inject (same injection shape,
+  friendlier payload — no pivot creds needed there).
+
 ## Coach guidance
 - URL-encoding: params dict handles it; trainees hand-concatenating URLs
   trip on `&`/`;` — point at requests' params argument.

@@ -1,0 +1,14 @@
+[Unit]
+Description=pentrAIn telemetry agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/pentrain/telemetried.py
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

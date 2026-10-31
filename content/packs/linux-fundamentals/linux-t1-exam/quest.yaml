@@ -44,7 +44,7 @@ hints:
   - id: h1
     cost: 30
     stage: recon
-    text: "SSH is open — you just need credentials. Something on the host welcomes new employees; grep the filesystem for onboarding material."
+    text: "SSH is open — you just need credentials. Another service on this host shares files with the whole LAN; check what nmap found beyond port 22."
   - id: h2
     cost: 50
     stage: privesc
@@ -52,7 +52,7 @@ hints:
   - id: h3
     cost: 60
     stage: privesc
-    text: "python3 -c 'import os;os.execl(\"/bin/sh\",\"sh\",\"-p\")' — a SUID interpreter is a full root shell, not just a file read."
+    text: "A SUID interpreter is a full root shell — GTFOBins lists the exec line for the one you found."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

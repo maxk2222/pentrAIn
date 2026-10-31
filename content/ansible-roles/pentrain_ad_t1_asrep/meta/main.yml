@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_ad_t1_asrep
+  author: pentrain
+  description: "ad-t1 teaching quest: AS-REP roastable svc account + loot share"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions: [2022]

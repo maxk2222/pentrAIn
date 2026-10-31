@@ -24,6 +24,23 @@
       deploy account for releases:  deployer / Deploy2024!
     mode: "0644"
 
+# motd renders POST-login — the same ad must run as the pre-auth ssh Banner
+# or there is no way in from kali
+- name: pre-auth banner — deploy account ad before login
+  ansible.builtin.copy:
+    dest: /etc/issue.net
+    content: |
+      === corp bastion ===
+      deploy account for releases:  deployer / Deploy2024!
+    mode: "0644"
+
+- name: enable ssh banner
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?Banner"
+    line: "Banner /etc/issue.net"
+  notify: restart sshd
+
 - name: deploy note in deployer's home — leaks the app-tier creds
   ansible.builtin.copy:
     dest: /home/deployer/DEPLOY.txt
@@ -43,4 +60,11 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
   notify: restart sshd

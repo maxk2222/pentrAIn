@@ -15,7 +15,8 @@ doesn't show.
 
 - Three flags: webshell, exfil, persistence.
 - You have IR access to web01: `ssh analyst@<web01>` (pw `analysis`,
-  sudo-capable — this is post-compromise work, not exploitation).
+  read-only — log access via the adm group).
+- Deliverable: write your findings to `/home/analyst/report.txt` — attacker IP, webshell name, and the second implant.
 
 ## Environment
 
