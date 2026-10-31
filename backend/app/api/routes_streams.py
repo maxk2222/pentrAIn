@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import secrets
+from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, WebSocket
 from sqlalchemy import select
@@ -18,14 +19,21 @@ from ..db import get_db
 from ..models.domain import CoachMessage
 from ..services import coach_bridge
 from ..services.console import proxy_console
-from ..services.events import bus
+from ..services.events import bus, ephemeral_replay
 from .deps import get_current_user, ws_auth
 
 router = APIRouter(tags=["streams"])
 
 
-async def _pump(ws: WebSocket, topics: list[str]) -> None:
+async def _pump(ws: WebSocket, topics: list[str],
+                replay: Callable[[], list[dict]] | None = None) -> None:
     queues = [await bus.subscribe(t) for t in topics]
+    # sticky ephemeral events (mid-turn drafts, live exec output) replayed
+    # AFTER subscribing — deltas that raced the snapshot land in the queue
+    # and overwrite it, and replayed drafts are cumulative anyway
+    if replay:
+        for ev in replay():
+            await ws.send_json(ev)
 
     async def forward() -> None:
         while True:
@@ -64,8 +72,10 @@ async def session_ws(websocket: WebSocket, session_id: int,
     if not await ws_auth(websocket, db):
         return
     await websocket.accept()
-    await _pump(websocket, [
-        f"session.{session_id}", f"telemetry.{session_id}", f"coach.{session_id}"])
+    await _pump(websocket,
+                [f"session.{session_id}", f"telemetry.{session_id}",
+                 f"coach.{session_id}"],
+                replay=lambda: ephemeral_replay(session_id))
 
 
 @router.websocket("/ws/coach")

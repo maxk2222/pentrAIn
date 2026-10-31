@@ -33,7 +33,7 @@ from . import flags as flags_svc
 from . import scoring as scoring_svc
 from . import settings as settings_svc
 from .engine import get_engine
-from .events import bus
+from .events import bus, ephemeral_clear, publish_session
 from .flags import new_seed, new_telemetry_token
 
 log = structlog.get_logger(__name__)
@@ -61,6 +61,9 @@ async def _set_state(db: AsyncSession, session: Session, state: SessionState,
         setattr(session, k, v)
     await db.commit()
     await _broadcast(session.id, "state", {"state": state.value, **{k: str(v) for k, v in fields.items() if v is not None}})
+    if state in (SessionState.ABORTED, SessionState.FAILED, SessionState.SOLVED):
+        # terminal — no replayed drafts/activity should outlive the session
+        ephemeral_clear(session.id)
 
 
 async def _append_log(db: AsyncSession, session: Session, line: str) -> None:
@@ -508,10 +511,9 @@ async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: 
         cmd = action.args.get("command", "")
         try:
             # the confirmed command can run for a while — surface it in the UI
-            await bus.publish(f"session.{session_id}", {
-                "type": "coach_activity", "session_id": session_id,
-                "data": {"active": True,
-                         "text": f"executing confirmed `{cmd[:110]}`"}})
+            await publish_session(session_id, "coach_activity", {
+                "active": True,
+                "text": f"executing confirmed `{cmd[:110]}`"}, sticky=True)
             # user-approved commands run visibly in the coach tmux as well
             res = await coach_bridge.exec_visible_in_kali(
                 engine, session.kali_vmid, cmd, session_id=session_id) \
@@ -530,9 +532,8 @@ async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: 
             action.result = {"error": str(e)}
             action.status = "error"
         finally:
-            await bus.publish(f"session.{session_id}", {
-                "type": "coach_activity", "session_id": session_id,
-                "data": {"active": False, "text": ""}})
+            await publish_session(session_id, "coach_activity",
+                                  {"active": False, "text": ""})
     else:
         action.status = "rejected"
     await db.commit()

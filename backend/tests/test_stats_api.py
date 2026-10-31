@@ -214,3 +214,30 @@ async def test_session_live_mock_engine(db):
     await db.commit()
     r = await rs.session_live(s.id, db=db)
     assert r["ok"] is False and r["reason"] == "mock engine"
+
+
+async def test_ephemeral_replay_sticky_and_clear():
+    """Sticky events replay to late subscribers; done/inactive clears the slot."""
+    from app.services.events import (ephemeral_clear, ephemeral_replay,
+                                     publish_session)
+    await publish_session(42, "coach_stream",
+                          {"draft_id": "d1", "content": "half"}, sticky=True)
+    await publish_session(42, "coach_activity",
+                          {"active": True, "text": "exec"}, sticky=True)
+    evs = ephemeral_replay(42)
+    assert {e["type"] for e in evs} == {"coach_stream", "coach_activity"}
+    # a done draft clears only its own slot — activity survives
+    await publish_session(42, "coach_stream", {"draft_id": "d1", "done": True})
+    assert {e["type"] for e in ephemeral_replay(42)} == {"coach_activity"}
+    ephemeral_clear(42)
+    assert ephemeral_replay(42) == []
+
+
+async def test_ephemeral_replay_ttl_prunes():
+    import time
+
+    from app.services import events as ev_svc
+    ev_svc._ephemeral[7] = {"coach_stream": (time.monotonic() - 999, {
+        "type": "coach_stream", "data": {}})}
+    assert ev_svc.ephemeral_replay(7) == []
+    assert 7 not in ev_svc._ephemeral

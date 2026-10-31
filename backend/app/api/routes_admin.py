@@ -32,7 +32,7 @@ from ..services import packs as packs_svc
 from ..services import settings as settings_svc
 from ..services import telemetry as telemetry_svc
 from ..services.engine import get_engine, rebuild
-from ..services.events import bus
+from ..services.events import publish_session
 from .deps import check_password, get_current_user, hash_password, make_token, require_coach
 
 router = APIRouter(prefix="/api", tags=["admin"])
@@ -592,12 +592,13 @@ async def coach_message(body: CoachMessageIn, db: AsyncSession = Depends(get_db)
 @coach_router.post("/stream")
 async def coach_stream(body: CoachStreamIn):
     """Relay an in-progress draft to the session UI. Pure bus event — nothing
-    is persisted; the final send_chat call creates the real message."""
-    await bus.publish(f"session.{body.session_id}", {
-        "type": "coach_stream", "session_id": body.session_id,
-        "data": {"draft_id": body.draft_id, "content": body.content,
-                 "reasoning": body.reasoning,
-                 "done": body.done, "kind": body.kind}})
+    is persisted; the final send_chat call creates the real message. Sticky
+    while streaming so a page reload re-hydrates the draft bubble."""
+    await publish_session(body.session_id, "coach_stream", {
+        "draft_id": body.draft_id, "content": body.content,
+        "reasoning": body.reasoning,
+        "done": body.done, "kind": body.kind},
+        sticky=not body.done)
     return {"ok": True}
 
 
@@ -605,9 +606,9 @@ async def coach_stream(body: CoachStreamIn):
 async def coach_activity(body: CoachActivityIn):
     """Live 'the coach is doing X' indicator for the session UI — ephemeral
     bus event like /stream, cleared by a follow-up with active=false."""
-    await bus.publish(f"session.{body.session_id}", {
-        "type": "coach_activity", "session_id": body.session_id,
-        "data": {"active": body.active, "text": body.text}})
+    await publish_session(body.session_id, "coach_activity",
+                          {"active": body.active, "text": body.text},
+                          sticky=body.active)
     return {"ok": True}
 
 

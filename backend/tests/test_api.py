@@ -97,3 +97,21 @@ def test_coach_activity_endpoint(client):
                     headers={"Authorization": "Bearer wrong"},
                     json={"session_id": 1, "active": True})
     assert r.status_code == 401
+
+
+def test_ws_replays_sticky_ephemeral_events(client):
+    """A reload mid-draft reconnects to /ws/session — the buffered draft must
+    arrive immediately so the streaming bubble re-hydrates."""
+    import time
+
+    from app.services.events import _ephemeral, ephemeral_clear
+    _ephemeral[9] = {"coach_stream": (time.monotonic(), {
+        "type": "coach_stream", "session_id": 9,
+        "data": {"draft_id": "x", "content": "half text", "done": False}})}
+    try:
+        with client.websocket_connect("/ws/session/9") as ws:
+            first = ws.receive_json()
+            assert first["type"] == "coach_stream"
+            assert first["data"]["content"] == "half text"
+    finally:
+        ephemeral_clear(9)

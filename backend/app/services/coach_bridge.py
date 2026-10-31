@@ -30,7 +30,7 @@ from ..models.domain import (
     UserProfile,
 )
 from .engine import get_engine
-from .events import bus
+from .events import bus, publish_session
 
 # patterns the coach may never execute (defense-in-depth; the kali is disposable
 # but the *host* and other quest VMs must be out of reach)
@@ -252,12 +252,23 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
         return await engine.pve.agent_exec_sh(kali_vmid, command, timeout_s=timeout_s)
 
     # ctrl-key passthrough — "C-c"/"C-d"/"C-z" must reach the pane as real
-    # keys, not typed text, so a wedged foreground process can be freed
+    # keys, not typed text, so a wedged foreground process can be freed.
+    # Report the resulting foreground command so the caller can SEE the
+    # interrupt worked instead of blindly re-sending C-c.
     if re.fullmatch(r"C-[a-z]", command.strip()):
         await engine.pve.agent_exec_sh(
             kali_vmid,
             f"tmux send-keys -t {COACH_TMUX} {command.strip()}", timeout_s=10)
-        return {"out": f"(sent {command.strip()} to the pane)", "err": "",
+        await asyncio.sleep(0.7)
+        fg = await engine.pve.agent_exec_sh(
+            kali_vmid,
+            f"tmux display-message -p -t {COACH_TMUX} "
+            "'#{pane_current_command}'", timeout_s=10)
+        now = (fg.get("out") or "").strip()
+        state = (f"pane free — shell '{now}' at prompt" if now in
+                 ("bash", "zsh", "sh", "dash", "ksh", "fish")
+                 else f"still busy — foreground: '{now}'")
+        return {"out": f"(sent {command.strip()} — {state})", "err": "",
                 "exitcode": 0, "visible": True}
 
     # pane busy? typed lines would buffer into the foreground process's stdin
@@ -326,11 +337,10 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                              if ln.strip() and marker not in ln)[-3000:]
             if tail != last_tail:
                 last_tail = tail
-                await bus.publish(f"session.{session_id}", {
-                    "type": "coach_activity", "session_id": session_id,
-                    "data": {"active": True,
-                             "text": f"executing `{command[:90]}`",
-                             "output": tail}})
+                await publish_session(session_id, "coach_activity", {
+                    "active": True,
+                    "text": f"executing `{command[:90]}`",
+                    "output": tail}, sticky=True)
         await asyncio.sleep(1.0)
     # timed out but still typed — the partial pane tail beats a dead end
     return {"out": last_tail
