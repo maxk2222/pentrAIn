@@ -21,8 +21,16 @@
   loop:
     - /opt/pentrain
     - /etc/pentrain
-    - /var/log/pentrain
     - /var/spool/pentrain
+
+# telemetry log dir must be writable by every lab user (the shell hook appends
+# per-user cmd-$USER.log) — sticky world-writable like /tmp, so no one can
+# clobber another user's log.
+- name: install telemetry log dir (world-writable, sticky)
+  ansible.builtin.file:
+    path: /var/log/pentrain
+    state: directory
+    mode: "1777"
 
 - name: install telemetried
   ansible.builtin.copy:

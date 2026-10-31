@@ -6,13 +6,17 @@
 _pentrain_log_dir=/var/log/pentrain
 mkdir -p "$_pentrain_log_dir" 2>/dev/null || true
 
+# Redirect failures must be silenced by an OUTER redirect — `>> f 2>/dev/null`
+# evaluates `>>` first, so a denied file still prints "permission denied" on the
+# user's shell. The subshell wraps the whole append in one quiet guard.
 _pentrain_log_line() {
-    printf '%s\t%s\t%s\t%s\n' "$(date +%s.%N)" "${USER:-?}" "${PWD:-?}" \
-        "$1" >> "$_pentrain_log_dir/cmd-${USER:-root}.log" 2>/dev/null || true
+    ( printf '%s\t%s\t%s\t%s\n' "$(date +%s.%N)" "${USER:-?}" "${PWD:-?}" \
+        "$1" >> "$_pentrain_log_dir/cmd-${USER:-root}.log" ) 2>/dev/null || true
 }
 
 _pentrain_log_result() {
-    printf 'R\t%s\n' "$1" >> "$_pentrain_log_dir/cmd-${USER:-root}.log" 2>/dev/null || true
+    ( printf 'R\t%s\n' "$1" >> "$_pentrain_log_dir/cmd-${USER:-root}.log" ) \
+        2>/dev/null || true
 }
 
 if [ -n "$BASH_VERSION" ]; then

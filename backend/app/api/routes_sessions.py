@@ -164,6 +164,15 @@ async def console_ticket(session_id: int, db: AsyncSession = Depends(get_db)):
     return result
 
 
+@router.get("/sessions/{session_id}/console/clipboard")
+async def console_clipboard(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Read the Kali X clipboard via qemu-guest-agent — PVE VNC can't relay it."""
+    result = await console_svc.read_guest_clipboard(db, session_id)
+    if "error" in result:
+        raise HTTPException(409, result["error"])
+    return result
+
+
 @router.post("/sessions/{session_id}/activate", response_model=SessionOut)
 async def activate(session_id: int, db: AsyncSession = Depends(get_db)):
     try:

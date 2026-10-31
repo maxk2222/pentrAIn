@@ -47,6 +47,28 @@ async def issue_console_ticket(db: AsyncSession, session_id: int) -> dict:
     return {"ticket": vnc["ticket"]}
 
 
+async def read_guest_clipboard(db: AsyncSession, session_id: int) -> dict:
+    """Copy-out: PVE VNC has no bidirectional clipboard channel (would need
+    qemu-vdagent + a QEMU flag pveproxy doesn't expose), so read the guest's
+    X clipboard through the qemu-guest-agent instead."""
+    session = await db.get(Session, session_id)
+    if not session:
+        return {"error": "session not found"}
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        return {"mock": True}
+    if not session.kali_vmid:
+        return {"error": "kali vm not ready"}
+    try:
+        r = await engine.pve.agent_exec_sh(
+            session.kali_vmid,
+            "DISPLAY=:0 xclip -o -selection clipboard 2>/dev/null || true",
+            timeout_s=10)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    return {"text": r.get("out") or ""}
+
+
 async def proxy_console(db: AsyncSession, ws: WebSocket, session_id: int) -> None:
     session = await db.get(Session, session_id)
     if not session or not session.kali_vmid:
