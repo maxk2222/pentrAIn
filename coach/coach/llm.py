@@ -21,7 +21,7 @@ from .tools import calls_to_actions
 log = structlog.get_logger(__name__)
 
 ALLOWED_ACTIONS = {
-    "send_chat", "offer_hint", "suggest_command", "exec_in_kali",
+    "send_chat", "offer_hint", "suggest_command", "exec_in_kali", "type_in_pane",
     "submit_flag", "check_flag", "mark_checkpoint", "capture_screen", "none",
 }
 

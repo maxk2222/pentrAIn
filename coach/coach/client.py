@@ -28,8 +28,8 @@ class BackendClient:
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def _post(self, path: str, body: dict) -> Any:
-        r = await self._http.post(path, json=body)
+    async def _post(self, path: str, body: dict, timeout: float = 60.0) -> Any:
+        r = await self._http.post(path, json=body, timeout=timeout)
         if r.status_code >= 400:
             await log.awarning("backend POST failed", path=path, status=r.status_code,
                                body=r.text[:200])
@@ -97,8 +97,17 @@ class BackendClient:
                                 {"session_id": session_id, "command": command, "why": why})
 
     async def exec_in_kali(self, session_id: int, command: str) -> dict:
+        # the backend blocks up to 60s on the tmux marker plus tmux-setup
+        # overhead — a 60s client read race kills legit long-running execs
+        # (nmap -sV etc.) right at the finish line. 150s clears it.
         return await self._post("/api/coach/exec",
-                                {"session_id": session_id, "command": command})
+                                {"session_id": session_id, "command": command},
+                                timeout=150.0)
+
+    async def type_in_pane(self, session_id: int, text: str) -> dict:
+        return await self._post("/api/coach/type",
+                                {"session_id": session_id, "text": text},
+                                timeout=30.0)
 
     async def submit_flag(self, session_id: int, value: str) -> dict:
         return await self._post("/api/coach/flag",

@@ -81,24 +81,28 @@ class LudusProvider:
             )
         except LudusError as e:
             # destroy_range deletes the range OBJECT in Ludus 2 — PUT config on a
-            # missing default range 404s. Recreate the range, then retry once.
+            # missing default range 404s. Recreate the range + point the user's
+            # default at it (the dangling default is what 404s), then retry once.
             if "404" not in str(e):
                 raise
-            await self._create_range(name)
+            await self._ensure_default_range(name)
             await self._req(
                 "PUT", "/range/config",
                 files={"file": ("range-config.yml", payload, "application/x-yaml")},
             )
         await self._req("POST", "/range/deploy", json={})
         st = await self.status()
-        # Never return `name` — it isn't a ludus rangeID and would poison later
-        # status(rangeID=...) filters. "" → subsequent calls use the default range.
+        # Return the actual ludus rangeID ("" when ludus doesn't echo one —
+        # subsequent calls then use the user's default range). Callers filter
+        # via `rangeID=`; `userID=` is an admin user filter and 400s on
+        # range names.
         return st.range_id or ""
 
-    async def _create_range(self, name: str) -> None:
-        """POST /api/v2/ranges/create — the first/only range becomes the user's
-        default automatically. rangeID must be a valid proxmox pool name; the
-        ludus API key is `<userID>.<secret>` so the user is derivable."""
+    async def _ensure_default_range(self, name: str) -> None:
+        """POST /api/v2/ranges/create + POST /user/default-range — Ludus does
+        NOT repoint the user's default when the old range object is deleted;
+        PUT /range/config then hits a dangling id and 404s. rangeID must be a
+        valid proxmox pool name; the api key is `<userID>.<secret>`."""
         user = self._api_key.split(".", 1)[0]
         body: dict[str, Any] = {"rangeID": name, "name": name}
         if user:
@@ -106,13 +110,16 @@ class LudusProvider:
         try:
             await self._req("POST", "/ranges/create", json=body)
         except LudusError as e:
-            # 409 "already in use" → a range exists; PUT config will land on the
-            # default range — nothing to do.
+            # 409 "already in use" → the range exists; just repoint the default.
             if "409" not in str(e):
                 raise
+        # POST /user/default-range accepts `rangeID` as the QUERY param (the
+        # `defaultRangeID` name only works in a JSON body — query 400s).
+        await self._req("POST", "/user/default-range",
+                        params={"rangeID": name})
 
     async def status(self, range_id: str | None = None) -> RangeStatus:
-        params = {"userID": range_id} if range_id else {}
+        params = {"rangeID": range_id} if range_id else {}
         try:
             data = await self._req("GET", "/range", params=params)
         except LudusError as e:
@@ -158,7 +165,7 @@ class LudusProvider:
         return RangeStatus(state=state, vms=vms, range_id=rid, log_tail=log_tail)
 
     async def deploy_logs(self, range_id: str | None = None) -> str:
-        params = {"userID": range_id} if range_id else {}
+        params = {"rangeID": range_id} if range_id else {}
         data = await self._try("GET", "/range/logs", "/range/deploy/logs", params=params)
         return data if isinstance(data, str) else str(data)
 
@@ -168,7 +175,7 @@ class LudusProvider:
             await self._req("PUT", "/testing/stop")
         params = {"force": "true"}
         if range_id:
-            params["userID"] = range_id
+            params["rangeID"] = range_id
         # Ludus 2 refuses DELETE /range while VMs exist (409 "use --force") —
         # and even force 500s on a VM that's still running or mid-task:
         # destroy the VMs explicitly first, then the range, one retry for
@@ -224,7 +231,7 @@ class LudusProvider:
             await log.awarning("role install failed", role=role_name, error=str(e))
 
     async def ansible_inventory(self, range_id: str | None = None) -> str:
-        params = {"userID": range_id} if range_id else {}
+        params = {"rangeID": range_id} if range_id else {}
         data = await self._try("GET", "/range/ansibleinventory", "/range/inventory", params=params)
         return data if isinstance(data, str) else str(data)
 

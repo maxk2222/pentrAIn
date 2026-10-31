@@ -35,6 +35,13 @@ TOOLS: list[dict] = [
     _fn("exec_in_kali",
         "Execute a shell command on the trainee's Kali machine (autonomy 4).",
         {"command": _str("single POSIX shell line")}, ["command"]),
+    _fn("type_in_pane",
+        "Type one input line into the busy pane (autonomy 4) — for interactive "
+        "sessions: ssh/ftp/nc logins, su/sudo password prompts, menus. Types "
+        "the literal text + Enter and returns the pane tail. exec_in_kali "
+        "bounces while a foreground program holds the pane; use this instead.",
+        {"text": _str("literal input line — e.g. a password or remote command")},
+        ["text"]),
     _fn("submit_flag",
         "Submit a flag value literally seen in command output (pentrAIn{...}).",
         {"value": _str("flag value")}, ["value"]),
@@ -61,8 +68,9 @@ _LEVEL_TOOLS = {
     2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen", "none"},
     3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
         "capture_screen", "none"},
-    4: {"send_chat", "offer_hint", "exec_in_kali", "submit_flag", "check_flag",
-        "mark_checkpoint", "capture_screen", "none"},
+    4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
+        "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
+        "none"},
 }
 
 

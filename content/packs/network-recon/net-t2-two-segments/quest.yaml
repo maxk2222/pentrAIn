@@ -9,7 +9,7 @@ meta:
 display:
   tagline: "The second host refuses to talk to you — but it does talk to the first one. Pivot."
 requirements:
-  min_ram_gb: 16
+  min_ram_gb: 14
   min_vcpus: 8
   min_disk_gb: 100
   est_deploy_min: 14
@@ -21,14 +21,14 @@ topology:
   vms:
     - name: edge01
       template: debian-12-x64-server-template
-      ram_gb: 4
+      ram_gb: 3
       cpus: 2
       vlan: 10
       ip_last_octet: 21
       roles: [pentrain_net_t2_edge]
     - name: internal01
       template: debian-12-x64-server-template
-      ram_gb: 4
+      ram_gb: 3
       cpus: 2
       vlan: 10
       ip_last_octet: 22

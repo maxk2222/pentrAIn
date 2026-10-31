@@ -72,6 +72,11 @@ class FakeClient:
     async def exec_in_kali(self, sid, command):
         return {"out": "ok", "exitcode": 0, "visible": True}
 
+    async def type_in_pane(self, sid, text):
+        self.typed = getattr(self, "typed", [])
+        self.typed.append(text)
+        return {"out": "student@target01's password: \nLast login: x", "visible": True}
+
     async def submit_flag(self, sid, value):
         self.flags.append(value)
         return {"correct": True, "all_solved": False}
@@ -214,12 +219,94 @@ async def test_exec_turn_resets_streak_instead_of_feeding_it():
     await coach._reflect_tick(60)
     assert coach.state.proactive_streak == 0
 
-    # a chat-only proactive turn still counts toward the streak
+    # a chat-only proactive turn still counts toward the streak — and at L4
+    # triggers ONE corrective re-turn (chat again → streak climbs to 2)
     coach.llm = FakeLlm(actions=[{"type": "send_chat", "content": "nudge"}])
     coach.state.proactive_streak = 0
     coach.state.last_nudge_ts = 0
     await coach._reflect_tick(60)
-    assert coach.state.proactive_streak == 1
+    assert len(coach.llm.calls) == 2          # stalled turn + corrective re-turn
+    assert coach.state.proactive_streak == 2
+
+
+async def test_l4_stall_gets_one_corrective_return():
+    """The L4 announce-not-act failure mode: a turn with no real work is
+    retried ONCE in the same tick — the corrected turn's exec then resets
+    the streak."""
+    class SeqLlm(FakeLlm):
+        seq = 0
+        async def chat(self, messages, **kw):
+            self.calls.append(messages)
+            acts = ([{"type": "send_chat", "content": "will scan now"}]
+                    if SeqLlm.seq == 0 else
+                    [{"type": "exec_in_kali", "command": "nmap 10.1.10.21"}])
+            SeqLlm.seq += 1
+            return {"content": "", "actions": acts, "tool_calls": [],
+                    "raw": {"usage": {"total_tokens": 10}}}
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = SeqLlm()
+    coach.state.last_progress_ts = time.time() - 5000
+    coach.state.last_nudge_ts = 0
+    await coach._reflect_tick(60)
+    assert len(coach.llm.calls) == 2          # stall → one corrective re-turn
+    assert coach.state.proactive_streak == 0  # the exec reset it
+    assert "STALL_ALERT" in coach.llm.calls[1][-1]["content"]
+
+
+async def test_l4_busy_pane_gets_interactive_return():
+    """ssh's LoginGraceTime (~120s) is shorter than the reflect cadence —
+    when an exec leaves the pane busy the SAME tick must get a follow-up
+    turn so the password can be typed before the connection dies."""
+    class BusyLlm(FakeLlm):
+        seq = 0
+        async def chat(self, messages, **kw):
+            self.calls.append(messages)
+            acts = ([{"type": "exec_in_kali", "command": "ssh student@target01"}]
+                    if BusyLlm.seq == 0 else
+                    [{"type": "type_in_pane", "text": "student123"}])
+            BusyLlm.seq += 1
+            return {"content": "", "actions": acts, "tool_calls": [],
+                    "raw": {"usage": {"total_tokens": 10}}}
+    class BusyClient(FakeClient):
+        async def exec_in_kali(self, sid, command):
+            return {"out": "student@target01's password: ",
+                    "err": "still running — pane is now busy",
+                    "exitcode": None, "visible": True, "timed_out": True}
+    coach, c = _coach()
+    coach.client = BusyClient()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = BusyLlm()
+    coach.state.last_progress_ts = time.time() - 5000
+    coach.state.last_nudge_ts = 0
+    await coach._reflect_tick(60)
+    assert len(coach.llm.calls) == 2        # busy pane → immediate re-turn
+    assert coach._pane_interactive is True
+    assert coach.client.typed == ["student123"]
+    assert "interactive input pending" in coach.llm.calls[1][-1]["content"]
+
+
+async def test_type_in_pane_dispatch_and_tool_schema():
+    """Interactive panes (ssh password prompts) can't be driven by
+    exec_in_kali — type_in_pane must reach the client and count as work."""
+    from coach.tools import tools_for_level
+    names = {t["function"]["name"] for t in tools_for_level(4)}
+    assert "type_in_pane" in names
+    assert "type_in_pane" not in {
+        t["function"]["name"] for t in tools_for_level(3)}
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    did, res = await coach._dispatch(
+        {"type": "type_in_pane", "text": "student123"}, proactive=True)
+    assert did and c.typed == ["student123"]
+    assert "password" in res
+    # denied below takeover
+    coach.state.autonomy_level = 3
+    did, res = await coach._dispatch(
+        {"type": "type_in_pane", "text": "x"}, proactive=True)
+    assert not did and "denied" in res
 
 
 async def test_activity_status_emitted_around_exec():
@@ -458,7 +545,9 @@ async def test_coach_cmd_marker_suffix_still_matches():
     coach._coach_cmds.append(("nmap -sV 10.0.0.5", time.time()))
     await coach._handle_event(_cmd_event(
         1, "nmap -sV 10.0.0.5 ; echo PTNabc12:$?"))
-    assert coach.state.commands[-1].from_coach
+    # exec_in_kali self-records at dispatch — the telemetry echo of the same
+    # (marker-suffixed) line is recognized and NOT added a second time
+    assert coach.state.commands == []
 
 
 async def test_terminal_session_attach_returns_false():
@@ -581,6 +670,42 @@ async def test_context_lists_done_commands_at_l4():
     assert "ALREADY_DONE" in msg
     assert "getent hosts api01" in msg.split("ALREADY_DONE")[1]
     assert "nmap bad-target" not in msg.split("ALREADY_DONE")[1]
+
+
+async def test_context_stall_alert_at_l4():
+    """Chat-only turns at L4 must surface as a stall alert — announcing a
+    plan is the observed failure mode (model chats forever, never execs)."""
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    coach.ctx["session"]["autonomy_level"] = 4
+    st = coach.state
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "STALL_ALERT" not in msg          # no stall yet
+    st.proactive_streak = 2
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "STALL_ALERT" in msg and "exec_in_kali" in msg
+
+
+async def test_context_recon_saturation_at_l4():
+    """Recon-variant loops (nmap -sV → -sT → -O → -p-) are a real failure
+    mode — the context must call saturation once a target is scanned 3x."""
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    coach.ctx["session"]["autonomy_level"] = 4
+    st = coach.state
+    st.add_command(1.0, "nmap -sV 10.1.10.21", from_coach=True)
+    st.add_command(2.0, "nmap -p- 10.1.10.21", from_coach=True)
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "RECON_SATURATED" not in msg                  # 2 scans is fine
+    st.add_command(3.0, "nmap -O 10.1.10.21", from_coach=True)
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "RECON_SATURATED" in msg and "10.1.10.21" in msg
+    # trainee's own scans don't count toward saturation
+    st2 = coach.state
+    st2.commands.clear()
+    st2.add_command(1.0, "nmap x", from_coach=False)
+    msg = build_context_msg(coach.ctx, st2, "takeover loop", stage=1)
+    assert "RECON_SATURATED" not in msg
 
 
 async def test_context_trainee_framing_below_l4():

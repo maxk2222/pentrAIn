@@ -13,6 +13,20 @@
     enabled: true
     state: started
 
+# pentest helpers the coach/trainee expects to exist — the lab has no
+# internet at runtime, so everything must land at deploy time
+- name: install pentest helper packages
+  ansible.builtin.apt:
+    name:
+      - sshpass
+      - expect
+      - proxychains4
+      - sshuttle
+      - python3-pexpect
+    state: present
+  when: ansible_os_family == "Debian"
+  failed_when: false   # package names drift; never brick the deploy for them
+
 - name: install pentrain dirs
   ansible.builtin.file:
     path: "{{ item }}"

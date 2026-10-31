@@ -285,10 +285,19 @@ async def _finalize(db: AsyncSession, engine, session: Session,
     await db.commit()
     kali = next((v for v in st.vms if v.role == "kali" or "kali" in v.name.lower()), None)
     session.kali_vmid = kali.vmid if kali else None
-    # map short names → vmid (ludus names are "<rid>-<name>")
+    # map short names → vmid. Ludus VM names are "<range_id>-<vmname>" —
+    # strip the WHOLE range prefix (the first-dash split used to leave
+    # "linux-t1-…-target01" which never matched topology names like
+    # "target01", so file-flag injection and target telemetry silently
+    # skipped every named target VM)
+    rid = (session.range_id or "").lower()
+    def _short(name: str) -> str:
+        n = name.lower()
+        if rid and n.startswith(rid + "-"):
+            return n[len(rid) + 1:]
+        return n.rsplit("-", 1)[-1]
     session.target_vmids = {
-        (v.name.split("-", 1)[-1] if "-" in v.name else v.name): v.vmid
-        for v in st.vms if v is not kali and v.vmid}
+        _short(v.name): v.vmid for v in st.vms if v is not kali and v.vmid}
     await _append_log(db, session, f"[pentrain] range RUNNING — kali vmid={session.kali_vmid}")
 
     # telemetry config + short-name resolution on kali and all linux targets

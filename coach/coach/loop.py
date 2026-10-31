@@ -68,6 +68,7 @@ class SessionCoach:
         self._next_reflect = time.monotonic() + 60
         self._llm_lock = asyncio.Lock()      # serialize LLM turns (chat vs reflect)
         self._coach_cmds: list[tuple[str, float]] = []   # commands we issued via exec
+        self._pane_interactive = False   # pane holds a program awaiting input
         self._last_capture_ts = 0.0
         self._last_badflag_ack = 0.0
         self._disabled_notice_sent = False
@@ -128,19 +129,45 @@ class SessionCoach:
         # command_result pairs attach directly — the 60s freshness guard in
         # mark_exit would drop them for old commands
         expect_result = False
+        # commands the coach issued earlier — the backend records them, so a
+        # restart can re-mark them; otherwise replayed coach commands would
+        # count as trainee activity (idle detection + anti-loop guards break)
+        coach_heads = [
+            (str(c.get("command") or "")[:60] if isinstance(c, dict)
+             else str(c)[:60])
+            for c in (self.ctx.get("coach_commands") or [])]
         for ev in reversed(self.ctx.get("telemetry_tail", [])):
             payload = ev.get("payload") or {}
             if ev.get("kind") == "command":
                 cmd = payload.get("command", "")
                 if cmd:
-                    self.state.add_command(payload.get("ts", time.time()), cmd,
-                                           payload.get("cwd", ""))
+                    self.state.add_command(
+                        payload.get("ts", time.time()), cmd,
+                        payload.get("cwd", ""),
+                        from_coach=any(cmd[:60] == h for h in coach_heads))
                     expect_result = True
             elif ev.get("kind") == "command_result" and expect_result:
                 if self.state.commands:
                     self.state.commands[-1].exit_code = int(
                         payload.get("exit_code", 0))
                 expect_result = False
+        # coach execs live in coach_actions, not telemetry (the pane has no
+        # hook) — inject them too or the replayed command memory is empty
+        # and ALREADY_DONE/RECON/FILES guards see nothing after a restart
+        coach_entries = [c for c in (self.ctx.get("coach_commands") or [])
+                         if isinstance(c, dict)]
+        seen_heads = {c.command[:60] for c in self.state.commands}
+        for c in reversed(coach_entries):
+            cmd = str(c.get("command") or "")
+            if not cmd or cmd[:60] in seen_heads:
+                continue
+            self.state.add_command(time.time(), cmd, from_coach=True)
+            try:
+                self.state.commands[-1].exit_code = (
+                    int(c["exitcode"]) if c.get("exitcode") is not None else None)
+            except (TypeError, ValueError):
+                self.state.commands[-1].exit_code = None
+            seen_heads.add(cmd[:60])
         # seed the rewrite guard from replayed history — a restart must not
         # reset the counters and re-enable the solver-rewrite loop
         for c in self.state.commands:
@@ -329,10 +356,13 @@ class SessionCoach:
             payload = data.get("payload", {}) or {}
             if kind == "command":
                 cmd = payload.get("command", "")
-                self.state.add_command(
-                    payload.get("ts", time.time()), cmd,
-                    payload.get("cwd", ""), payload.get("exit_code"),
-                    from_coach=self._is_coach_command(cmd))
+                # exec_in_kali self-records at dispatch — a telemetry echo of
+                # the same line (if the pane ever gets hook coverage) must
+                # not add a duplicate
+                if not self._is_coach_command(cmd):
+                    self.state.add_command(
+                        payload.get("ts", time.time()), cmd,
+                        payload.get("cwd", ""), payload.get("exit_code"))
                 for cid in self.matcher.check(cmd):
                     if cid not in self.state.checkpoints_hit:
                         self.state.checkpoints_hit.add(cid)
@@ -443,6 +473,7 @@ class SessionCoach:
         try:
             # a single wedged turn (stuck HTTP call, lock holder that never
             # returns) must not take the whole session loop down with it
+            t0 = time.monotonic()
             await asyncio.wait_for(
                 self._llm_turn(
                     build_context_msg(self.ctx, self.state, decision.reason,
@@ -450,6 +481,31 @@ class SessionCoach:
                                       action_budget=budget),
                     proactive=True),
                 timeout=LLM_TURN_BUDGET_S)
+            # L4 stall correction: a proactive turn that produced NO real work
+            # (chat-only announce, bare `none`, denied write) gets ONE bounded
+            # retry — the rebuilt context now carries STALL_ALERT naming the
+            # failure. streak>0 post-turn ⟺ this turn did no work (a worked
+            # turn resets it). Skipped when the action budget is exhausted —
+            # every further exec would be denied anyway.
+            left = LLM_TURN_BUDGET_S - (time.monotonic() - t0)
+            # interactive fast-path: the pane holds a program waiting for
+            # input (ssh password, menu). The normal ~90s tick is SLOWER than
+            # LoginGraceTime, so the password arrives after the connection is
+            # already closed — follow up inside this tick's budget instead.
+            if (self.state.autonomy_level >= 4
+                    and (self.state.proactive_streak > 0
+                         or self._pane_interactive)
+                    and self.state.exec_count < budget and left > 30):
+                why = ("interactive input pending"
+                       if self._pane_interactive else "stall correction")
+                await asyncio.wait_for(
+                    self._llm_turn(
+                        build_context_msg(self.ctx, self.state, why,
+                                          decision.urgency,
+                                          stage=decision.stage,
+                                          action_budget=budget),
+                        proactive=True),
+                    timeout=left)
         except TimeoutError:
             await log.aexception("reflect turn exceeded budget — cancelled",
                                  session=self.sid, budget_s=LLM_TURN_BUDGET_S)
@@ -582,8 +638,8 @@ class SessionCoach:
                     spoke |= did
                     if cid := a.get("_call_id"):
                         call_results[cid] = res
-                    if did and a.get("type") in ("exec_in_kali", "submit_flag",
-                                                 "check_flag"):
+                    if did and a.get("type") in ("exec_in_kali", "type_in_pane",
+                                                 "submit_flag", "check_flag"):
                         worked = True
             finally:
                 # whatever happened mid-dispatch — no stale 'working' chip
@@ -592,7 +648,10 @@ class SessionCoach:
                 # real work happened — this turn is progress, not an
                 # unanswered nudge; don't let it feed the backoff streak
                 self.state.proactive_streak = 0
-            elif proactive and spoke:
+            elif proactive and (spoke or self.state.autonomy_level >= 4):
+                # L4: ANY turn without real work is a stall (chat-only AND
+                # silent 'none' turns alike) — the model gets no trainee
+                # reply to react to, it must see the stall counted.
                 self.state.proactive_streak += 1
             if not spoke and force_reply:
                 text = resp["content"][:1500]
@@ -729,17 +788,49 @@ class SessionCoach:
                     self._coach_cmds.append((cmd, time.time()))
                     await self.client.send_activity(
                         self.sid, f"typing `{cmd[:110]}` in Kali")
-                    res = await self.client.exec_in_kali(self.sid, cmd)
+                    try:
+                        res = await self.client.exec_in_kali(self.sid, cmd)
+                    except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                        # backend/qga hiccup — surface as a tool RESULT so the
+                        # model can check/retry next turn instead of the whole
+                        # turn dying on an unhandled transport error
+                        self._coach_cmds.pop()
+                        return spoke, (
+                            f"error: exec transport failed "
+                            f"({type(e).__name__}) — the command may still be "
+                            f"running on the pane; probe before re-running")
+                    typed = False
                     if res.get("status") == "denied" or res.get("error") or res.get("busy"):
                         # never actually typed → a stale entry could mislabel a
                         # user-typed identical command
                         self._coach_cmds.pop()
                     else:
                         self.state.exec_count += 1
+                        typed = True
                     out = (res.get("out") or res.get("err") or res.get("error") or "")
                     code = res.get("exitcode")
+                    # interactive-program tracking: a fresh busy pane means a
+                    # prompt (password/menu) may be ticking — the follow-up
+                    # re-turn in _reflect_tick must come BEFORE ssh's
+                    # LoginGraceTime kills the attempt
+                    if res.get("busy") or res.get("timed_out"):
+                        self._pane_interactive = True
+                    elif code is not None:
+                        self._pane_interactive = False
+                    if typed:
+                        # the pentrain-coach pane is NOT covered by the shell
+                        # telemetry hook — record our own exec so ALREADY_DONE,
+                        # FILES_WRITTEN and RECON_SATURATED see it (without this
+                        # the model has zero command memory and re-scans blind)
+                        self.state.add_command(time.time(), cmd,
+                                               from_coach=True)
+                        self.state.commands[-1].exit_code = code
                     if code is None:
-                        result = out[:1900] or "still running"
+                        err_hint = res.get("err") or ""
+                        if err_hint and err_hint not in out:
+                            result = f"{out[:1500]}\n[{err_hint}]"[:1900]
+                        else:
+                            result = out[:1900] or "still running"
                     else:
                         result = f"{out[:1900]}\n(exit {code})" if out else f"exit {code}"
                     # write/run bookkeeping for the rewrite guard above
@@ -768,6 +859,31 @@ class SessionCoach:
                                                 meta=self._draft_meta())
                     self._record_reply(text)
                     spoke = True
+        elif t == "type_in_pane":
+            if level < 4:
+                result = f"denied: autonomy level {level} < 4"
+            else:
+                text_in = (a.get("text") or a.get("command")
+                           or a.get("content") or "")
+                try:
+                    res = await self.client.type_in_pane(self.sid, text_in)
+                except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                    return spoke, (
+                        f"error: type transport failed "
+                        f"({type(e).__name__}) — the input may still have "
+                        f"reached the pane; probe before re-typing")
+                out = res.get("out") or res.get("error") or res.get("err") or ""
+                result = out[:1900] or "input sent"
+                # interactive input is coach activity too — keep it visible in
+                # command memory (marked so it can't pollute recon/write regexes)
+                self.state.add_command(time.time(), f"<type> {text_in[:80]}",
+                                       from_coach=True)
+                rep = (f"Typed into the pane: `{text_in[:90]}`\n"
+                       f"```\n{out[-1200:]}\n```")
+                await self.client.send_chat(self.sid, rep, kind="action_report",
+                                            meta=self._draft_meta())
+                self._record_reply(rep)
+                spoke = True
         elif t == "submit_flag":
             if level < 4:
                 result = f"denied: autonomy level {level} < 4"

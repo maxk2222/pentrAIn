@@ -16,6 +16,7 @@ from ..schemas import (
     CheckpointIn,
     CoachActivityIn,
     CoachExecIn,
+    CoachTypeIn,
     CoachFlagCheckIn,
     CoachFlagIn,
     CoachMessageIn,
@@ -622,6 +623,11 @@ async def coach_suggest(body: CoachSuggestIn, db: AsyncSession = Depends(get_db)
 @coach_router.post("/exec")
 async def coach_exec(body: CoachExecIn, db: AsyncSession = Depends(get_db)):
     return await coach_bridge.exec_in_kali(db, body.session_id, body.command)
+
+
+@coach_router.post("/type")
+async def coach_type(body: CoachTypeIn, db: AsyncSession = Depends(get_db)):
+    return await coach_bridge.type_in_pane(db, body.session_id, body.text)
 
 
 @coach_router.post("/flag")

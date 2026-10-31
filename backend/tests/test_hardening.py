@@ -203,26 +203,35 @@ async def test_visible_exec_streams_live_output_tail():
         def __init__(self):
             self.marker = "PTN0000000000"
             self.polls = 0
+            self.b_sent = False
 
         async def agent_exec_sh(self, vmid, cmd, timeout_s=30):
             if "send-keys" in cmd:
                 if m := _re.search(r"PTN[0-9a-f]{10}", cmd):
                     self.marker = m.group(0)
+                    if "B:" in cmd:
+                        self.b_sent = True
                 return {"out": "", "exitcode": 0}
             if "has-session" in cmd:
                 return {"out": "", "exitcode": 0}
+            if "pane_current_command" in cmd:
+                # free at entry (no poll yet), busy mid-scan (poll 1),
+                # back at zsh once the scan finished
+                return {"out": "nmap" if self.polls == 1 else "zsh",
+                        "exitcode": 0}
             # the busy-check capture (`-pt`, no -S window) must NOT consume a
-            # scripted pane — only the real poll loop uses -S -400
-            if "capture-pane" in cmd and "-S -400" in cmd:
+            # scripted pane — only the real poll loop uses -S -1500
+            if "capture-pane" in cmd and "-S -1500" in cmd:
                 m = self.marker
                 self.polls += 1
-                if self.polls == 1:
-                    pane = (f"$ echo {m}A\n{m}A\n$ nmap -sV 10.0.0.5\n"
-                            "Starting Nmap 7.94\nscanning…\n")
-                else:
-                    pane = (f"$ echo {m}A\n{m}A\n$ nmap -sV 10.0.0.5\n"
-                            "Starting Nmap 7.94\nscanning…\nPORT STATE\n"
-                            f"22/tcp open\n$ echo {m}B:$?\n{m}B:0\n")
+                pane = (f"$ echo {m}A\n{m}A\n$ nmap -sV 10.0.0.5\n"
+                        "Starting Nmap 7.94\nscanning…\n")
+                if self.polls >= 2:
+                    pane += "PORT STATE\n22/tcp open\n$ \n"
+                if self.b_sent:
+                    # deferred B marker — typed only once the pane is free;
+                    # queued while nmap ran it would be eaten as stdin keys
+                    pane += f"$ echo {m}B:$?\n{m}B:0\n"
                 return {"out": pane, "exitcode": 0}
             return {"out": "", "exitcode": 0}
 
@@ -280,16 +289,18 @@ async def test_ludus_deploy_recreates_missing_range():
     PUT /range/config 404s. deploy_range must create the range and retry."""
     from app.ranges.ludus import LudusProvider
 
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str]] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
-        calls.append((req.method, path))
+        calls.append((req.method, path, str(req.url)))
         if path.endswith("/testing/stop"):
             return httpx.Response(200, json={})
         if path.endswith("/ranges/create"):
             body = httpx.QueryParams() or None
             return httpx.Response(200, json={"rangeID": "quest-x"})
+        if path.endswith("/user/default-range"):
+            return httpx.Response(200, json={})
         if path.endswith("/range/config"):
             # first attempt: range object gone; retry after create succeeds
             if not any(c[1].endswith("/ranges/create") for c in calls):
@@ -310,6 +321,11 @@ async def test_ludus_deploy_recreates_missing_range():
     assert rid == "quest-x"
     creates = [c for c in calls if c[1].endswith("/ranges/create")]
     assert len(creates) == 1
+    # default repointed to the new range — a dangling default is what 404s;
+    # ludus reads `rangeID` from the query (defaultRangeID only works in-body)
+    defaults = [c for c in calls if c[1].endswith("/user/default-range")]
+    assert len(defaults) == 1
+    assert "rangeID=quest-x" in defaults[0][2]
     # config upload retried AFTER the create
     cfg_idx = [i for i, c in enumerate(calls) if c[1].endswith("/range/config")]
     create_idx = calls.index(creates[0])

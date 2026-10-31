@@ -71,9 +71,13 @@ real errors, not on imagined ones.
 # Kali environment facts
 - Lab ranges have NO internet — apt/pip/curl to the outside always fail; \
 never try to install packages during a session.
-- exec_in_kali drives a real tmux shell: interactive programs (ssh, sudo, \
-less) work — run `ssh user@host`, then send the password as your next \
-command when the prompt appears. `sshpass` may be missing; alternative: \
+- exec_in_kali drives a real tmux shell but BOUNCES while a foreground \
+program holds the pane (ssh, nc, su, sudo prompts, menus). Interactive \
+flows need type_in_pane instead: it types one literal input line + Enter \
+into the busy pane and returns the pane tail — e.g. `ssh user@host` via \
+exec_in_kali, then the password via type_in_pane, then each remote \
+command via type_in_pane (exit code check inside sessions: type `echo $?`). \
+`sshpass` may be missing; alternative: \
 `printf '#!/bin/sh\\necho PASS' > /tmp/ap; chmod +x /tmp/ap; \
 SSH_ASKPASS=/tmp/ap SSH_ASKPASS_REQUIRE=force DISPLAY=:0 setsid ssh ...`.
 - Recon ≠ progress: once ports/services are known, act on them. Don't \
@@ -110,6 +114,7 @@ Answer format — JSON only:
             {"type":"offer_hint","content":"...","level":1},
             {"type":"suggest_command","command":"<single shell line>","why":"<one short reason>"},
             {"type":"exec_in_kali","command":"<single shell line>"},
+            {"type":"type_in_pane","text":"<literal input line for a busy interactive pane>"},
             {"type":"submit_flag","value":"<flag value seen in output>"},
             {"type":"check_flag","flag_key":"<key from FLAGS>"},
             {"type":"mark_checkpoint","checkpoint_id":"<id from CHECKPOINTS_OPEN>"},
@@ -175,6 +180,19 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "NEXT un-taken step toward solving FLAGS and execute it now. "
             "Facts in ALREADY_DONE or earlier tool output are settled — "
             "never re-verify them; every repeat burns your action budget.")
+        if st.proactive_streak:
+            parts.append(
+                f"STALL_ALERT: your last {st.proactive_streak} turn(s) "
+                "produced no command execution — announcing a plan is NOT "
+                "progress, nobody answers you. Call exec_in_kali / "
+                "submit_flag / check_flag NOW (batch several in one turn).")
+        saturated = [f"{t} ({n}x)" for t, n in st.recon_counts().items()
+                     if n >= 3]
+        if saturated:
+            parts.append(
+                "RECON_SATURATED: " + ", ".join(saturated) +
+                " — enumeration is DONE. Act on the known services "
+                "(exploit/creds/login), do NOT scan variants again.")
     else:
         parts.append(
             "Decide: is the trainee progressing? If yes → none. If stuck/lost → "

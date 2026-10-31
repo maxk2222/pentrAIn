@@ -102,6 +102,27 @@ class SessionState:
         return out[-n:]
 
     _WRITE_RE = re.compile(r">\s*(/\S+)|\btee\s+(-a\s+)?(\S+)")
+    _RECON_RE = re.compile(
+        r"\b(nmap|masscan|rustscan|unicornscan|naabu|zmap|nikto|gobuster|"
+        r"feroxbuster|dirb|dirsearch|ffuf|nuclei)\b")
+    _IP_RE = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
+
+    def recon_counts(self) -> dict[str, int]:
+        """Scan/enumeration commands per target — the model re-scans variants
+        forever otherwise (nmap -sV, then -sT, then -O, then -p-…). Used to
+        saturate the context with a 'recon is done, act' directive."""
+        counts: dict[str, int] = {}
+        for c in self.commands:
+            if not c.from_coach or not self._RECON_RE.search(c.command):
+                continue
+            ips = self._IP_RE.findall(c.command)
+            if ips:
+                tgt = ips[-1]
+            else:
+                toks = c.command.split()
+                tgt = toks[-1] if toks else "?"
+            counts[tgt] = counts.get(tgt, 0) + 1
+        return counts
 
     def written_files(self) -> list[str]:
         """Files created via redirects or tee (cat > f, tee f, printf > f).

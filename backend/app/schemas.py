@@ -187,6 +187,11 @@ class CoachExecIn(BaseModel):
     command: str
 
 
+class CoachTypeIn(BaseModel):
+    session_id: int
+    text: str
+
+
 class CheckpointIn(BaseModel):
     session_id: int
     checkpoint_id: str
