@@ -14,7 +14,15 @@ from test_loop_reactions import FakeClient, FakeLlm
 
 from coach.llm import ALLOWED_ACTIONS, LlmClient, _fold_history
 from coach.loop import SessionCoach
-from coach.tools import TOOL_NAMES, TOOLS, call_to_action, calls_to_actions, trim_history, wire_history
+from coach.tools import (
+    TOOL_NAMES,
+    TOOLS,
+    call_to_action,
+    calls_to_actions,
+    tools_for_level,
+    trim_history,
+    wire_history,
+)
 
 # ---------- schema contract ----------
 
@@ -41,6 +49,17 @@ def _call(name, args=None, cid="c1", raw=None):
             "function": {"name": name,
                          "arguments": raw if raw is not None
                          else __import__("json").dumps(args or {})}}
+
+
+def test_tools_for_level_filters_by_autonomy():
+    names = lambda lvl: {t["function"]["name"] for t in tools_for_level(lvl)}
+    assert "exec_in_kali" not in names(1) | names(2) | names(3)
+    assert "suggest_command" not in names(1) | names(2)
+    assert "suggest_command" in names(3)
+    l4 = names(4)
+    assert {"exec_in_kali", "submit_flag", "check_flag"} <= l4
+    # takeover runs full-auto — a confirm-chip suggestion can never be clicked
+    assert "suggest_command" not in l4
 
 
 def test_call_to_action_maps_args_and_keeps_call_id():
@@ -203,7 +222,8 @@ async def test_tools_enabled_sends_schemas_to_llm():
     fake = FakeLlm(actions=[{"type": "none"}])
     coach.llm = fake
     await coach._llm_turn("ctx")
-    assert fake.kwargs[0]["tools"] == TOOLS
+    assert fake.kwargs[0]["tools"] == tools_for_level(
+        coach.state.autonomy_level)
 
 
 # ---------- llm.chat normalization (plain path) ----------

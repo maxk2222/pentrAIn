@@ -164,6 +164,7 @@ class CoachStreamIn(BaseModel):
     session_id: int
     draft_id: str = Field(max_length=64)
     content: str = Field(default="", max_length=4000)
+    reasoning: str = Field(default="", max_length=4000)
     done: bool = False
     kind: str = "chat"
 

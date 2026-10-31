@@ -68,13 +68,16 @@ class BackendClient:
                                  "kind": kind, "meta": meta or {}})
 
     async def stream_draft(self, session_id: int, draft_id: str, content: str,
-                           *, done: bool = False, kind: str = "chat") -> None:
+                           *, reasoning: str = "", done: bool = False,
+                           kind: str = "chat") -> None:
         """Relay an in-progress draft to the UI. Fire-and-forget — a dropped
         delta is cosmetic, never worth killing a turn over."""
         try:
             await self._post("/api/coach/stream",
                              {"session_id": session_id, "draft_id": draft_id,
-                              "content": content[:4000], "done": done, "kind": kind})
+                              "content": content[:4000],
+                              "reasoning": reasoning[-4000:], "done": done,
+                              "kind": kind})
         except Exception as e:
             await log.adebug("stream relay failed", error=str(e))
 

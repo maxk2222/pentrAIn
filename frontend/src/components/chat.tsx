@@ -8,7 +8,33 @@ import { cn } from "@/lib/utils";
 
 type Resolved = "confirmed" | "rejected" | "error" | string;
 
-interface Draft { text: string; kind: string; done: boolean }
+interface Draft { text: string; reasoning: string; kind: string; done: boolean }
+
+/** Model chain-of-thought — muted block above the answer. Open while the
+ * draft streams, a collapsed <details> once the real message lands. */
+function ThinkingBlock({ text, open }: { text: string; open?: boolean }) {
+  if (!text.trim()) return null;
+  if (open) {
+    return (
+      <div className="mb-2 border-l-2 border-accent/40 pl-2">
+        <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent/80">
+          <Bot className="h-3 w-3" /> thinking
+        </div>
+        <div className="whitespace-pre-wrap text-xs leading-snug text-muted">{text}</div>
+      </div>
+    );
+  }
+  return (
+    <details className="mb-2">
+      <summary className="cursor-pointer select-none text-[10px] font-semibold uppercase tracking-wide text-accent/70 hover:text-accent">
+        thinking
+      </summary>
+      <div className="mt-1 whitespace-pre-wrap border-l-2 border-accent/30 pl-2 text-xs leading-snug text-muted">
+        {text}
+      </div>
+    </details>
+  );
+}
 
 export function ChatPanel({ sessionId, events }: { sessionId: number; events: WsEvent[] }) {
   const qc = useQueryClient();
@@ -57,10 +83,11 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
     }
     // streaming drafts: cumulative content relayed while the LLM generates
     if (ev.type === "coach_stream" && ev.data?.draft_id) {
-      const { draft_id, content = "", kind = "chat", done } = ev.data as {
-        draft_id: string; content?: string; kind?: string; done?: boolean;
+      const { draft_id, content = "", reasoning = "", kind = "chat", done } = ev.data as {
+        draft_id: string; content?: string; reasoning?: string;
+        kind?: string; done?: boolean;
       };
-      setDrafts((d) => ({ ...d, [draft_id]: { text: content, kind, done: !!done } }));
+      setDrafts((d) => ({ ...d, [draft_id]: { text: content, reasoning, kind, done: !!done } }));
       if (done) {
         // the real message may arrive a beat later — grace period, then drop
         clearTimeout(draftTimers.current.get(draft_id));
@@ -161,7 +188,8 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
               <Bot className="h-3.5 w-3.5" />
             </div>
             <div className="max-w-[85%] rounded-lg bg-surface-2 px-3 py-2 text-sm leading-relaxed">
-              <MarkdownView>{d.text}</MarkdownView>
+              <ThinkingBlock text={d.reasoning} open={!d.done} />
+              {d.text ? <MarkdownView>{d.text}</MarkdownView> : null}
               {!d.done && (
                 <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[1px] bg-primary align-text-bottom" />
               )}
@@ -281,6 +309,9 @@ const Message = memo(function Message({ m, onConfirm }: {
             {style.label}
             {m.kind === "hint" && m.meta?.level != null && ` · level ${m.meta.level}`}
           </div>
+        )}
+        {typeof m.meta?.reasoning === "string" && m.meta.reasoning && (
+          <ThinkingBlock text={m.meta.reasoning} />
         )}
         <MarkdownView>{m.content}</MarkdownView>
         {typeof suggestion?.command === "string" && (

@@ -614,6 +614,7 @@ async def coach_stream(body: CoachStreamIn):
     await bus.publish(f"session.{body.session_id}", {
         "type": "coach_stream", "session_id": body.session_id,
         "data": {"draft_id": body.draft_id, "content": body.content,
+                 "reasoning": body.reasoning,
                  "done": body.done, "kind": body.kind}})
     return {"ok": True}
 

@@ -53,6 +53,23 @@ TOOLS: list[dict] = [
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
+# which tools may be *offered* at which autonomy level — don't let the model
+# pick an action the gate will refuse anyway, and on takeover don't offer
+# suggest_command at all (its confirm-chip can never be clicked in auto mode)
+_LEVEL_TOOLS = {
+    1: {"send_chat", "offer_hint", "capture_screen", "none"},
+    2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen", "none"},
+    3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
+        "capture_screen", "none"},
+    4: {"send_chat", "offer_hint", "exec_in_kali", "submit_flag", "check_flag",
+        "mark_checkpoint", "capture_screen", "none"},
+}
+
+
+def tools_for_level(level: int) -> list[dict]:
+    allowed = _LEVEL_TOOLS.get(level, _LEVEL_TOOLS[1])
+    return [t for t in TOOLS if t["function"]["name"] in allowed]
+
 
 # ---------- normalization ----------
 

@@ -71,6 +71,12 @@ class Policy:
         if since_nudge < min_gap:
             return PolicyDecision(False, f"nudge cooldown ({int(min_gap - since_nudge)}s left)")
 
+        if st.autonomy_level >= 4:
+            # full-auto: idle/stuck gates assume a trainee who must start on
+            # their own — at takeover the coach IS the trainee, so work right
+            # away instead of waiting for a stuck threshold that never fits
+            return PolicyDecision(True, "takeover loop", "high", stage)
+
         if stuck > self.hint_s:
             return PolicyDecision(True, f"stuck {int(stuck)}s > hint_s", "high", stage)
         if stuck > self.nudge_s and idle < self.nudge_s:

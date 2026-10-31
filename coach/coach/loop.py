@@ -23,7 +23,7 @@ from .llm import LlmClient, LlmError
 from .policy import Policy
 from .prompts import build_context_msg, chat_prompt, system_prompt
 from .state import CheckpointMatcher, SessionState
-from .tools import TOOLS, trim_history, wire_history
+from .tools import tools_for_level, trim_history, wire_history
 
 log = structlog.get_logger(__name__)
 
@@ -73,6 +73,7 @@ class SessionCoach:
         self._draft_seq = 0
         self._active_draft: str | None = None   # draft_id for send_chat meta
         self._draft_used = False                 # meta attaches only once
+        self._turn_reasoning = ""                # reasoning of the in-flight turn
 
     # ---------- lifecycle ----------
 
@@ -411,7 +412,7 @@ class SessionCoach:
         try:
             # a single wedged turn (stuck HTTP call, lock holder that never
             # returns) must not take the whole session loop down with it
-            spoke = await asyncio.wait_for(
+            await asyncio.wait_for(
                 self._llm_turn(
                     build_context_msg(self.ctx, self.state, decision.reason,
                                       decision.urgency, stage=decision.stage,
@@ -422,8 +423,6 @@ class SessionCoach:
             await log.aexception("reflect turn exceeded budget — cancelled",
                                  session=self.sid, budget_s=LLM_TURN_BUDGET_S)
             return
-        if spoke:
-            self.state.proactive_streak += 1
 
     async def _answer_chat(self, user_msg: str) -> None:
         if not self.llm or not self.state.coach_enabled:
@@ -489,11 +488,12 @@ class SessionCoach:
             draft_id = f"{self.sid}d{self._draft_seq}"
             self._active_draft = draft_id
             self._draft_used = False
+            self._turn_reasoning = ""
             pushed = False
             last_push = 0.0
             kind = "nudge" if proactive else "message"
 
-            async def on_delta(cum: str) -> None:
+            async def on_delta(cum: str, reasoning: str = "") -> None:
                 nonlocal pushed, last_push
                 if not get_config().llm_stream:
                     return
@@ -502,19 +502,21 @@ class SessionCoach:
                     return  # throttle — LAN relay, ~8 msgs/s is plenty
                 pushed = True
                 last_push = now
-                await self.client.stream_draft(self.sid, draft_id, cum, kind=kind)
+                await self.client.stream_draft(
+                    self.sid, draft_id, cum, reasoning=reasoning, kind=kind)
 
+            tools = (tools_for_level(self.state.autonomy_level)
+                     if tools_active else None)
             try:
                 resp = await self.llm.chat(messages, on_delta=on_delta,
-                                           tools=TOOLS if tools_active else None)
+                                           tools=tools)
             except (LlmError, httpx.HTTPError) as e:
                 # one quiet retry — a slow/flaky endpoint shouldn't kill the
                 # turn outright; the turn budget keeps worst-case bounded
                 await log.awarning("llm call failed, retrying once",
                                    error=str(e))
                 try:
-                    resp = await self.llm.chat(
-                        messages, tools=TOOLS if tools_active else None)
+                    resp = await self.llm.chat(messages, tools=tools)
                 except (LlmError, httpx.HTTPError) as e2:
                     await log.awarning("llm call failed", error=str(e2))
                     if pushed:
@@ -522,6 +524,7 @@ class SessionCoach:
                             self.sid, draft_id, "", done=True)
                     self._active_draft = None
                     return False
+            self._turn_reasoning = (resp.get("reasoning") or "").strip()
             usage = (resp.get("raw") or {}).get("usage") or {}
             self.usage["tokens"] += int(usage.get("total_tokens", 0))
             await log.ainfo("llm turn", session=self.sid,
@@ -553,6 +556,8 @@ class SessionCoach:
                 # real work happened — this turn is progress, not an
                 # unanswered nudge; don't let it feed the backoff streak
                 self.state.proactive_streak = 0
+            elif proactive and spoke:
+                self.state.proactive_streak += 1
             if not spoke and force_reply:
                 text = resp["content"][:1500]
                 await self.client.send_chat(self.sid, text, meta=self._draft_meta())
@@ -592,12 +597,17 @@ class SessionCoach:
         self._history = trim_history(self._history, HISTORY_CAP)
 
     def _draft_meta(self) -> dict:
-        """Attach the active draft_id to the FIRST message this turn posts —
-        the UI swaps the streaming bubble for the real message by this key."""
+        """Attach the active draft_id (+ turn reasoning) to the FIRST message
+        this turn posts — the UI swaps the streaming bubble for the real
+        message by draft_id; reasoning persists as a collapsed 'thinking'
+        section inside that final bubble."""
+        meta: dict = {}
         if self._active_draft and not self._draft_used:
             self._draft_used = True
-            return {"draft_id": self._active_draft}
-        return {}
+            meta["draft_id"] = self._active_draft
+        if meta and self._turn_reasoning:
+            meta["reasoning"] = self._turn_reasoning[:3500]
+        return meta
 
     # ---------- action dispatch ----------
 
@@ -634,6 +644,10 @@ class SessionCoach:
             cmd = (a.get("command") or a.get("content") or "").strip()
             if level < 3:
                 result = f"denied: autonomy level {level} < 3"
+            elif level >= 4:
+                # full-auto mode has nobody to click the confirm chip —
+                # bounce it back so the model exec's directly next call
+                result = "denied: at autonomy 4 run it via exec_in_kali directly"
             elif not cmd:
                 result = "error: empty command"
             else:
@@ -671,7 +685,8 @@ class SessionCoach:
                     note = ("\n\n*(typed live in the `pentrain-coach` tmux)*"
                             if res.get("visible") else "")
                     text = f"Executed: `{cmd}`\n```\n{out[:500]}\n```{note}"
-                    await self.client.send_chat(self.sid, text, kind="action_report")
+                    await self.client.send_chat(self.sid, text, kind="action_report",
+                                                meta=self._draft_meta())
                     self._record_reply(text)
                     spoke = True
         elif t == "submit_flag":
@@ -689,7 +704,8 @@ class SessionCoach:
                 if res.get("all_solved"):
                     result += "; all_solved"
                     text += " — all flags solved, quest complete"
-                await self.client.send_chat(self.sid, text, kind="action_report")
+                await self.client.send_chat(self.sid, text, kind="action_report",
+                                            meta=self._draft_meta())
                 self._record_reply(text)
                 spoke = True
         elif t == "check_flag":
@@ -707,7 +723,8 @@ class SessionCoach:
                 if res.get("all_solved"):
                     result += "; all_solved"
                     text += " — all flags solved, quest complete"
-                await self.client.send_chat(self.sid, text, kind="action_report")
+                await self.client.send_chat(self.sid, text, kind="action_report",
+                                            meta=self._draft_meta())
                 self._record_reply(text)
                 spoke = True
         elif t == "mark_checkpoint":

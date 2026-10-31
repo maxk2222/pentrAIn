@@ -59,6 +59,10 @@ class FakeClient:
     async def suggest_command(self, sid, command, why):
         return {}
 
+    async def stream_draft(self, sid, draft_id, content, *, reasoning="",
+                           done=False, kind="chat"):
+        pass
+
     async def exec_in_kali(self, sid, command):
         return {"out": "ok", "visible": True}
 
@@ -190,6 +194,26 @@ async def test_backoff_after_streak():
     coach.state.proactive_streak = 3             # ignored 3x already
     await coach._reflect_tick(60)
     assert coach.llm.calls == []                  # still silent — backing off
+
+
+async def test_exec_turn_resets_streak_instead_of_feeding_it():
+    """Takeover work is progress, not an unanswered nudge — an exec turn must
+    end at streak 0, not streak+1 (the bug parked working coaches in backoff)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.llm = FakeLlm(actions=[{"type": "exec_in_kali", "command": "id"}])
+    coach.state.last_progress_ts = time.time() - 5000
+    coach.state.last_nudge_ts = 0
+    coach.state.proactive_streak = 2
+    await coach._reflect_tick(60)
+    assert coach.state.proactive_streak == 0
+
+    # a chat-only proactive turn still counts toward the streak
+    coach.llm = FakeLlm(actions=[{"type": "send_chat", "content": "nudge"}])
+    coach.state.proactive_streak = 0
+    coach.state.last_nudge_ts = 0
+    await coach._reflect_tick(60)
+    assert coach.state.proactive_streak == 1
 
 
 async def test_history_seeded_on_attach():

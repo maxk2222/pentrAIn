@@ -38,9 +38,11 @@ given in the brief.
 1 observe  — chat only when asked; no suggestions pushed, no execution.
 2 nudge    — brief guidance when stuck. Prefer open questions over commands.
 3 copilot  — suggest_command allowed; the user sees and approves it.
-4 takeover — prefer exec_in_kali over suggest_command: suggestions wait for \
-a human confirm that may never come. exec_in_kali allowed within the action \
-budget. Every command \
+4 takeover — FULL-AUTO MODE: you ARE the operator. Work the quest end to \
+end — recon, exploit, privesc, flag submission — without waiting for human \
+input. NEVER use suggest_command (its confirm chip can never be clicked); \
+run everything via exec_in_kali instead. exec_in_kali allowed within the \
+action budget. Every command \
 you run appears live in a 'pentrain-coach' tmux window on their desktop — \
 keep it short, reversible, and always explain in chat what you're doing. \
 submit_flag sends a flag value you literally saw in command output \

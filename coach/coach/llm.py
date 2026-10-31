@@ -54,7 +54,8 @@ class LlmClient:
     async def chat(self, messages: list[dict], *, json_mode: bool = True,
                    tools: list[dict] | None = None,
                    model: str | None = None,
-                   on_delta: Callable[[str], Awaitable[None]] | None = None) -> dict:
+                   on_delta: Callable[[str, str], Awaitable[None]] | None = None
+                   ) -> dict:
         body: dict = {
             "model": model or self.model,
             "messages": messages,
@@ -122,8 +123,13 @@ class LlmClient:
             data = r.json()
             message = data["choices"][0]["message"]
             content = message.get("content") or ""
+            reasoning = message.get("reasoning_content") or ""
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             raise LlmError(f"llm malformed response ({type(e).__name__}): {r.text[:200]}") from e
+        # think blocks embedded in content → move to the reasoning channel,
+        # never let them leak into a trainee-facing message
+        content, think = _split_think(content)
+        reasoning = (reasoning + "\n" + think).strip()
         usage = data.get("usage") or {}
         if usage:
             self.tokens_used += int(usage.get("total_tokens", 0))
@@ -131,19 +137,27 @@ class LlmClient:
         actions = (calls_to_actions(message) if calls
                    else parse_actions(content))
         return {"content": content, "actions": actions, "tool_calls": calls,
-                "raw": data, "usage": usage,
+                "raw": data, "usage": usage, "reasoning": reasoning,
                 "latency_ms": int((time.monotonic() - started) * 1000)}
 
     async def _chat_stream(self, body: dict,
-                           on_delta: Callable[[str], Awaitable[None]]) -> dict | None:
+                           on_delta: Callable[[str, str], Awaitable[None]]
+                           ) -> dict | None:
         """SSE stream from an OpenAI-compatible endpoint. Returns None when the
         stream failed BEFORE any token arrived (caller falls back to a plain
         request); raises LlmError when it broke mid-generation — retrying
-        would double-report a turn whose draft is already half-visible."""
+        would double-report a turn whose draft is already half-visible.
+
+        on_delta(answer, reasoning) receives CUMULATIVE strings — reasoning
+        from delta.reasoning_content (LM Studio/vLLM) plus inline <think>
+        blocks split out of content."""
         full = ""
+        reasoning_full = ""
         calls_acc: dict[int, dict] = {}
         usage: dict = {}
         last_pushed = 0
+        last_reason = 0
+        last_answer = ""
         sbody = dict(body, stream=True,
                      stream_options={"include_usage": True})
         try:
@@ -178,22 +192,34 @@ class LlmClient:
                             acc["function"]["name"] = fn["name"]
                         if fn.get("arguments"):
                             acc["function"]["arguments"] += fn["arguments"]
+                    if rc := delta.get("reasoning_content"):
+                        reasoning_full += rc
                     piece = delta.get("content")
+                    if piece:
+                        full += piece
+                    # reasoning visible so far = dedicated channel + any think
+                    # segments embedded in the content stream
+                    _, think_now = _split_think(full)
+                    reasoning_now = (reasoning_full + "\n" + think_now).strip()
+                    if reasoning_now and len(reasoning_now) > last_reason:
+                        last_reason = len(reasoning_now)
+                        await on_delta(last_answer, reasoning_now)
                     if not piece:
                         # a send_chat tool call streams its chat text inside
                         # `arguments` — decode it for the live draft
                         extracted = _stream_send_chat_arg(calls_acc)
                         if extracted and len(extracted) > last_pushed:
                             last_pushed = len(extracted)
-                            await on_delta(extracted)
+                            last_answer = extracted
+                            await on_delta(extracted, reasoning_now)
                         continue
-                    full += piece
                     extracted = _extract_stream_content(full)
                     if extracted and len(extracted) > last_pushed:
                         last_pushed = len(extracted)
-                        await on_delta(extracted)
+                        last_answer = extracted
+                        await on_delta(extracted, reasoning_now)
         except (TimeoutError, httpx.HTTPError, OSError) as e:
-            if full or calls_acc:
+            if full or calls_acc or reasoning_full:
                 raise LlmError(f"llm stream broke mid-response: {e}") from e
             return None
         calls = [calls_acc[i] for i in sorted(calls_acc)]
@@ -201,10 +227,35 @@ class LlmClient:
             return None
         if usage:
             self.tokens_used += int(usage.get("total_tokens", 0))
-        message = {"content": full, "tool_calls": calls}
-        actions = calls_to_actions(message) if calls else parse_actions(full)
-        return {"content": full, "actions": actions, "tool_calls": calls,
-                "raw": {"usage": usage}}
+        content, think = _split_think(full)
+        reasoning = (reasoning_full + "\n" + think).strip()
+        message = {"content": content, "tool_calls": calls}
+        actions = calls_to_actions(message) if calls else parse_actions(content)
+        return {"content": content, "actions": actions, "tool_calls": calls,
+                "reasoning": reasoning, "raw": {"usage": usage}}
+
+
+def _split_think(raw: str) -> tuple[str, str]:
+    """Split `<think>…</think>` segments out of a (possibly partial) text blob.
+    Returns (answer, reasoning) — an unterminated trailing think block counts
+    as reasoning-in-progress, which is exactly what streams produce."""
+    answer_parts: list[str] = []
+    think_parts: list[str] = []
+    rest = raw
+    while True:
+        m = re.search(r"<think\b[^>]*>", rest, re.IGNORECASE)
+        if not m:
+            answer_parts.append(rest)
+            break
+        answer_parts.append(rest[:m.start()])
+        rest = rest[m.end():]
+        end = re.search(r"</think\s*>", rest, re.IGNORECASE)
+        if not end:
+            think_parts.append(rest)
+            break
+        think_parts.append(rest[:end.start()])
+        rest = rest[end.end():]
+    return "".join(answer_parts), "\n".join(t.strip() for t in think_parts if t.strip())
 
 
 def _fold_history(messages: list[dict]) -> list[dict]:

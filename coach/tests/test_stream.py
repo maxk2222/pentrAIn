@@ -76,7 +76,7 @@ async def test_chat_stream_parses_sse_and_emits_deltas():
         transport=httpx.MockTransport(handler), base_url="http://x")
     deltas: list[str] = []
 
-    async def on_delta(cum: str):
+    async def on_delta(cum: str, reasoning: str = ""):
         deltas.append(cum)
 
     resp = await llm.chat([{"role": "user", "content": "hi"}], on_delta=on_delta)
@@ -117,7 +117,7 @@ async def test_chat_stream_accumulates_tool_calls_across_chunks():
     llm._client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="http://x")
     resp = await llm.chat([{"role": "user", "content": "hi"}],
-                          on_delta=lambda c: _noop())
+                          on_delta=lambda c, r="": _noop())
     assert [a["type"] for a in resp["actions"]] == ["exec_in_kali", "submit_flag"]
     assert resp["actions"][0]["command"] == "id"
     assert resp["actions"][1]["value"] == "pentrAIn{x}"
@@ -141,13 +141,13 @@ async def test_chat_stream_tool_call_drafts_send_chat_args():
         transport=httpx.MockTransport(handler), base_url="http://x")
     deltas: list[str] = []
     resp = await llm.chat([{"role": "user", "content": "hi"}],
-                          on_delta=lambda c: _noop_delta(deltas, c))
+                          on_delta=lambda c, r="": _noop_delta(deltas, c))
     assert deltas and deltas[-1] == "run nmap -sV first"
     assert resp["actions"][0]["type"] == "send_chat"
 
 
-async def _noop(cum): ...
-async def _noop_delta(lst, cum): lst.append(cum)
+async def _noop(cum="", reasoning=""): ...
+async def _noop_delta(lst, cum, reasoning=""): lst.append(cum)
 
 
 async def test_chat_stream_falls_back_when_refused():
@@ -164,7 +164,7 @@ async def test_chat_stream_falls_back_when_refused():
         transport=httpx.MockTransport(handler), base_url="http://x")
     called = False
 
-    async def on_delta(cum: str):
+    async def on_delta(cum: str, reasoning: str = ""):
         nonlocal called
         called = True
 
@@ -192,8 +192,10 @@ class StreamClient(FakeClient):
         super().__init__(ctx)
         self.drafts: list[dict] = []
 
-    async def stream_draft(self, sid, draft_id, content, *, done=False, kind="chat"):
-        self.drafts.append({"id": draft_id, "content": content, "done": done})
+    async def stream_draft(self, sid, draft_id, content, *, reasoning="",
+                           done=False, kind="chat"):
+        self.drafts.append({"id": draft_id, "content": content,
+                            "reasoning": reasoning, "done": done})
 
 
 def _coach() -> tuple[SessionCoach, StreamClient]:
@@ -237,3 +239,98 @@ async def test_turn_without_content_sends_done_only():
     # here extractor found no "content" key → pushed=False → no done needed
     assert all(not d["done"] or True for d in c.drafts)
     assert not c.chats
+
+
+# ---------- reasoning channel ----------
+
+
+async def test_stream_collects_reasoning_content_deltas():
+    """LM Studio/Qwen stream reasoning in delta.reasoning_content — it must
+    reach on_delta's second arg and resp['reasoning']."""
+    body = _sse(
+        {"choices": [{"delta": {"reasoning_content": "let me think"}}]},
+        {"choices": [{"delta": {"reasoning_content": " about ports"}}]},
+        {"choices": [{"delta": {"content":
+            '{"actions":[{"type":"send_chat","content":"hi"}]}'}}]},
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    llm = LlmClient("http://x", "k", "m")
+    llm._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x")
+    seen: list[tuple[str, str]] = []
+
+    async def on_delta(ans: str, reasoning: str = ""):
+        seen.append((ans, reasoning))
+
+    resp = await llm.chat([{"role": "user", "content": "hi"}], on_delta=on_delta)
+    assert resp["reasoning"] == "let me think about ports"
+    assert any(r for _, r in seen)            # reasoning streamed live
+    assert resp["actions"][0]["type"] == "send_chat"
+
+
+async def test_stream_splits_inline_think_block():
+    """Models embedding <think>…</think> inside content get it split into the
+    reasoning channel — it must never land in resp['content']."""
+    body = _sse(
+        {"choices": [{"delta": {"content": "<think>scheming"}}]},
+        {"choices": [{"delta": {"content": " quietly</think>"}}]},
+        {"choices": [{"delta": {"content":
+            '{"actions":[{"type":"send_chat","content":"hi"}]}'}}]},
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    llm = LlmClient("http://x", "k", "m")
+    llm._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x")
+    resp = await llm.chat([{"role": "user", "content": "hi"}],
+                          on_delta=lambda a, r="": _noop())
+    assert "<think" not in resp["content"]
+    assert "scheming" in resp["reasoning"]
+    assert resp["actions"][0]["type"] == "send_chat"
+
+
+async def test_plain_response_moves_think_to_reasoning():
+    """Non-stream path: <think> inside message.content + the reasoning_content
+    field both land in resp['reasoning'] — content stays clean for force_reply."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, content=b"stream unsupported") \
+            if b'"stream": true' in req.content or b'"stream":true' in req.content \
+            else httpx.Response(200, content=(
+                b'{"choices":[{"message":{"content":"<think>hmm</think> '
+                b'{\\"actions\\":[{\\"type\\":\\"send_chat\\",\\"content\\":\\"yo\\"}]}",'
+                b'"reasoning_content":"outer"}}],"usage":{}}'))
+
+    llm = LlmClient("http://x", "k", "m")
+    llm._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x")
+    resp = await llm.chat([{"role": "user", "content": "hi"}],
+                          on_delta=lambda a, r="": _noop())
+    assert "<think" not in resp["content"]
+    assert "hmm" in resp["reasoning"] and "outer" in resp["reasoning"]
+    assert resp["actions"][0]["content"] == "yo"
+
+
+async def test_reasoning_relayed_in_draft_and_persisted_in_meta():
+    """The turn must relay reasoning with the draft AND persist it in the
+    final message's meta so the bubble keeps a 'thinking' section."""
+    class ReasonLlm(FakeLlm):
+        async def chat(self, messages, **kw):
+            cb = kw.get("on_delta")
+            if cb:
+                await cb("", "pondering…")
+            resp = await super().chat(messages, **kw)
+            resp["reasoning"] = "pondering deeply"
+            return resp
+
+    coach, c = _coach()
+    coach.llm = ReasonLlm(actions=[{"type": "send_chat", "content": "answer"}])
+    spoke = await coach._llm_turn("ctx")
+    assert spoke
+    assert c.drafts[0]["reasoning"] == "pondering…"
+    assert c.chats[0]["meta"]["draft_id"] == c.drafts[0]["id"]
+    assert c.chats[0]["meta"]["reasoning"] == "pondering deeply"
