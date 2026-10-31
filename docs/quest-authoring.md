@@ -98,6 +98,11 @@ only create the vulnerability and any directory the flag file lands in.
 - `kind: command` — backend runs `command.cmd` on `command.vm` and compares
   stdout to the flag (substring `expect` or exitcode). The check runs a
   **POSIX shell** — not valid on `windows:`/`linux: false` VMs (linted).
+- `vm: kali` — special target resolved to the session's Kali VM (not listed
+  in `topology.vms`). Use it when the trainee proves work *on Kali*
+  (scripting artifacts, decoded loot, report files), e.g.
+  `command: { vm: kali, cmd: "test -f /root/script.sh" }`. Requires the Kali
+  template to run the qemu guest agent.
 - Windows VMs: use `kind: file` only; the guest agent handles `C:\...` paths.
 
 ### Hints

@@ -138,8 +138,12 @@ class LudusProvider:
         # don't leave the wire shut behind a deleted range
         with suppress(LudusError):
             await self._req("PUT", "/testing/stop")
-        params = {"userID": range_id} if range_id else {}
-        await self._try("DELETE", "/range", "/range/vms", params=params)
+        params = {"force": "true"}
+        if range_id:
+            params["userID"] = range_id
+        # Ludus 2 refuses DELETE /range while VMs exist (409 "use --force") —
+        # force=true destroys the range together with its VMs.
+        await self._try("DELETE", "/range", params=params)
 
     async def snapshot_all(self, range_id: str | None, snap_name: str = SNAP_POST_DEPLOY) -> None:
         # Ludus exposes VM snapshots; implementation varies → do it via engine PVE.

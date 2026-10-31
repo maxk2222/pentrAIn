@@ -1,0 +1,76 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: scr-t2-python-automation
+  track: scripting
+  tier: 2
+  title: "Nonce Grinder"
+  version: 1
+display:
+  tagline: "A token API that demands proof-of-work — brute-force the PIN with a Python script and claim the secret behind it."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: api01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 20
+      roles: [pentrain_scr_t2_api]
+flags:
+  - id: api-secret
+    name: "API secret — served from /srv/api/secret.txt"
+    kind: file
+    points: 200
+    vm: api01
+    file_path: /srv/api/secret.txt
+  - id: solve-script
+    name: "solve.py fetched and saved the secret"
+    kind: command
+    points: 150
+    command:
+      vm: kali
+      cmd: "test -f /root/solve.py && test -f /root/loot.txt && grep -q 'pentrAIn{' /root/loot.txt"
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Probe the API first: /api/health and /api/nonce respond without auth. The nonce is single-use and expires fast — fetch one per attempt."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "The proof is sha256(nonce + pin). A 4-digit PIN is only 10k candidates — loop, hash, POST, check for a token in the response."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "requests.Session keeps it tidy: GET nonce → compute proof → POST auth → GET /api/secret with the Bearer token → write /root/loot.txt."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-probe
+      name: "Probed the API endpoints"
+      detect: { command_match: "(curl.*api|/api/nonce|/api/health)" }
+      hint_after_s: 600
+    - id: cp-script
+      name: "Started the Python solver"
+      detect: { command_match: "(solve\\.py|import requests|sha256)" }
+      hint_after_s: 480
+    - id: cp-token
+      name: "Obtained a bearer token"
+      detect: { command_match: "(token|loot\\.txt|/api/secret)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

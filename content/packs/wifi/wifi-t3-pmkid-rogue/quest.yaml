@@ -1,0 +1,83 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: wifi-t3-pmkid-rogue
+  track: wifi
+  tier: 3
+  title: "No Client Needed"
+  version: 1
+display:
+  tagline: "Two networks on air: a WPA2 'secure-net' that leaks its PMKID, and something that shouldn't be there at all."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wifilab01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_wifi_lab, pentrain_wifi_t3]
+flags:
+  - id: rogue-report
+    name: "Rogue AP identified — /home/wifi/rogue.txt"
+    kind: command
+    points: 100
+    command:
+      vm: wifilab01
+      cmd: "test -f /home/wifi/rogue.txt && grep -qi free-wifi /home/wifi/rogue.txt"
+  - id: pmkid-artifact
+    name: "PMKID hash captured — /home/wifi/pmkid.22000"
+    kind: command
+    points: 150
+    command:
+      vm: wifilab01
+      cmd: "test -s /home/wifi/pmkid.22000"
+  - id: secadmin-flag
+    name: "secadmin flag — /home/secadmin/flag.txt"
+    kind: file
+    points: 300
+    vm: wifilab01
+    file_path: /home/secadmin/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Survey first: iw dev + airodump on wlan1 shows every BSSID on air. One of these networks is an impostor — encryption tells you which."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "PMKID needs no client: hcxdumptool on wlan1 requests the PMKID directly from secure-net's AP. Convert with hcxpcapngtool to the .22000 hash format."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "hashcat -m 22000 pmkid.22000 wordlist (or aircrack on a converted cap). The PSK unlocks the secadmin account — and name the rogue in /home/wifi/rogue.txt."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-survey
+      name: "Surveyed the airspace"
+      detect: { command_match: "(airodump|iw dev|iwlist)" }
+      hint_after_s: 600
+    - id: cp-hcx
+      name: "Harvested the PMKID"
+      detect: { command_match: "(hcxdump|pmkid|22000)" }
+      hint_after_s: 480
+    - id: cp-crack
+      name: "Cracked the hash"
+      detect: { command_match: "(hashcat|aircrack)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 600
+  time_bonus_max: 300
+  par_s: 2400
+  takeover_cost: 200

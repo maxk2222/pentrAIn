@@ -1,0 +1,60 @@
+---
+# scr-t3 web01 — sloppy upload endpoint → php webshell → creds for the db hop.
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, php, libapache2-mod-php, curl, sshpass]
+    state: present
+    update_cache: true
+
+- name: upload dir
+  ansible.builtin.file:
+    path: /var/www/html/up
+    state: directory
+    owner: www-data
+    mode: "0755"
+
+- name: naive upload endpoint (extension check only blocks .php)
+  ansible.builtin.copy:
+    dest: /var/www/html/upload.php
+    content: |
+      <?php
+      // legacy asset uploader — the admin "secured" it by rejecting .php names
+      if ($_SERVER["REQUEST_METHOD"] !== "POST") { header("Location: /"); exit; }
+      $name = $_FILES["f"]["name"] ?? "";
+      if (substr($name, -4) === ".php") { http_response_code(400); die("nope"); }
+      move_uploaded_file($_FILES["f"]["tmp_name"], "/var/www/html/up/" . basename($name));
+      echo "stored: /up/" . basename($name);
+      ?>
+    mode: "0644"
+
+- name: landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: |
+      <h1>web01 — asset drop</h1>
+      <form method="POST" action="/upload.php" enctype="multipart/form-data">
+      <input type="file" name="f"><button>upload</button></form>
+    mode: "0644"
+
+- name: operator account + leaked creds for the db hop
+  ansible.builtin.user:
+    name: wwwops
+    shell: /bin/bash
+    password: "{{ 'Www0ps!24' | password_hash('sha512') }}"
+  no_log: true
+
+- name: creds note reachable via the webshell (world-readable — the mistake)
+  ansible.builtin.copy:
+    dest: /home/wwwops/notes.txt
+    content: |
+      reminders for the db hop:
+      ssh dbadmin@db01  (pass: DbAdm1n-24)
+      db01 only takes ssh from this host — firewall.
+    owner: wwwops
+    mode: "0644"
+
+- name: ensure apache started
+  ansible.builtin.service:
+    name: apache2
+    state: started
+    enabled: true

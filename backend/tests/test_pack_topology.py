@@ -46,7 +46,8 @@ def test_flag_vm_references_resolve():
         vms = {v.name for v in spec.topology.vms}
         for f in spec.flags:
             target = f.vm if f.kind == "file" else (f.command or {}).get("vm")
-            assert target in vms, f"{spec.meta.id}: flag {f.id} → unknown vm {target}"
+            assert target in vms | {"kali"}, \
+                f"{spec.meta.id}: flag {f.id} → unknown vm {target}"
 
 
 def test_windows_fields_pass_through_compile():

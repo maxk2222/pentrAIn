@@ -1,0 +1,52 @@
+---
+# scr-t2-exam evidence01 — an "incident share" over HTTP: the script must
+# pull the capture, extract the leaked creds, ssh in and drop a proof file.
+- name: packages
+  ansible.builtin.apt:
+    name: [nginx-light]
+    state: present
+    update_cache: true
+
+- name: evidence dir
+  ansible.builtin.file:
+    path: /srv/evidence
+    state: directory
+    mode: "0755"
+
+- name: packet capture with leaked ftp creds
+  ansible.builtin.copy:
+    src: capture.pcap
+    dest: /srv/evidence/capture.pcap
+    mode: "0644"
+
+- name: nginx serves the evidence share
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 8080 default_server;
+          root /srv/evidence;
+          autoindex on;
+      }
+    mode: "0644"
+  notify: restart nginx
+
+- name: ops-backup account (password leaks inside the capture)
+  ansible.builtin.user:
+    name: ops-backup
+    shell: /bin/bash
+    password: "{{ 'Restore2024!' | password_hash('sha512') }}"
+  no_log: true
+
+- name: proof dir
+  ansible.builtin.file:
+    path: /home/ops-backup
+    state: directory
+    owner: ops-backup
+    mode: "0755"
+
+- name: ensure nginx started
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true

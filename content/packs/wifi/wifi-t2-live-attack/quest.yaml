@@ -1,0 +1,80 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: wifi-t2-live-attack
+  track: wifi
+  tier: 2
+  title: "Live Air"
+  version: 1
+display:
+  tagline: "corp-wifi is broadcasting and a client keeps reconnecting — deauth it, steal the handshake, crack the PSK."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wifilab01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_wifi_lab, pentrain_wifi_t2]
+flags:
+  - id: psk-proof
+    name: "PSK recovered — /home/wifi/psk.txt"
+    kind: command
+    points: 200
+    command:
+      vm: wifilab01
+      cmd: "test -f /home/wifi/psk.txt && grep -q sunshine2024 /home/wifi/psk.txt"
+  - id: admin-flag
+    name: "wifi-admin flag — /home/wifi-admin/flag.txt"
+    kind: file
+    points: 200
+    vm: wifilab01
+    file_path: /home/wifi-admin/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "The lab gives you three virtual radios: wlan0 hosts the AP, wlan2 is a client, wlan1 is YOURS. `iw dev` shows the layout — put wlan1 into monitor mode first."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "airodump-ng on the AP's channel shows the client (STATION). aireplay-ng -0 against the client forces a rejoin — that's your handshake moment."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "Crack the .cap with the lab wordlist, write the PSK to /home/wifi/psk.txt, and ssh the wifi-admin account — its password is the same PSK."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-monitor
+      name: "Monitor mode up"
+      detect: { command_match: "(airmon|iw .*monitor|wlan1mon)" }
+      hint_after_s: 600
+    - id: cp-dump
+      name: "Capturing the target channel"
+      detect: { command_match: "airodump" }
+      hint_after_s: 480
+    - id: cp-deauth
+      name: "Deauthed the client"
+      detect: { command_match: "aireplay|deauth" }
+      hint_after_s: 600
+    - id: cp-crack
+      name: "Cracked the handshake"
+      detect: { command_match: "aircrack.*-w|hashcat" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

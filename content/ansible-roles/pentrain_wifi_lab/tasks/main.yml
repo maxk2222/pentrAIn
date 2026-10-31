@@ -1,0 +1,118 @@
+---
+# pentrain_wifi_lab — shared base for every wireless quest on wifi-lab01.
+#
+# Real WiFi can't cross VM boundaries without hardware radios, so the whole
+# lab lives on ONE box: mac80211_hwsim provides virtual radios (phy0..phy2)
+# in this VM's kernel — hostapd serves a real AP on wlan0, a wpa_supplicant
+# client generates association traffic on wlan2, and the trainee attacks
+# via wlan1 exactly as with physical gear (airodump/aireplay/aircrack work
+# unmodified). The trainee reaches the lab over SSH from kali.
+- name: wireless toolchain
+  ansible.builtin.apt:
+    name:
+      - iw
+      - wireless-tools
+      - hostapd
+      - wpasupplicant
+      - aircrack-ng
+      - hcxdumptool
+      - hcxtools
+      - hashcat
+      - kmod
+      - rfkill
+      - sshpass
+    state: present
+    update_cache: true
+
+- name: lab user (ssh entry point from kali)
+  ansible.builtin.user:
+    name: wifi
+    shell: /bin/bash
+    password: "{{ 'WifiLab-24!' | password_hash('sha512') }}"
+    groups: [sudo]
+  no_log: true
+
+- name: lab workspace
+  ansible.builtin.file:
+    path: /opt/wifi
+    state: directory
+    mode: "0755"
+
+- name: practice wordlist (all lab PSKs included — wordlist attack is the lesson)
+  ansible.builtin.copy:
+    dest: /opt/wifi/wordlist.txt
+    content: |
+      password
+      12345678
+      qwerty123
+      letmein
+      sunshine2024
+      coffee123
+      dragon!99
+      admin1234
+      netgear-admin
+      corporate-wifi
+      hunter2
+      changeme2024
+      winter2024
+      spring!2024
+      pentest-rocks
+      keyboard-cat
+      ilovewifi
+      securepass1
+      tr0ub4dor
+      welcome2thelab
+    mode: "0644"
+
+- name: hwsim radios at boot — 3 radios (AP, attack iface, legit client)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pentrain-hwsim.service
+    content: |
+      [Unit]
+      Description=PenTrAIn virtual wifi radios (mac80211_hwsim)
+      Before=network-pre.target
+      Wants=network-pre.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/sbin/modprobe mac80211_hwsim radios=3
+      ExecStartPost=/usr/sbin/rfkill unblock all
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: enable hwsim unit
+  ansible.builtin.systemd:
+    name: pentrain-hwsim
+    enabled: true
+    daemon_reload: true
+
+- name: radios up now (deploy-time, in case unit ordering raced)
+  ansible.builtin.command: modprobe mac80211_hwsim radios=3
+  register: hwsim
+  changed_when: hwsim.rc == 0
+  failed_when: false
+
+- name: hostapd base dir + helper
+  ansible.builtin.file:
+    path: /etc/hostapd
+    state: directory
+    mode: "0755"
+
+- name: wifi-lab helper (status / reset for trainees)
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/wifi-lab
+    content: |
+      #!/bin/bash
+      # wifi-lab {status|reset} — show virtual radios or bounce the lab AP
+      case "${1:-status}" in
+        status) iw dev; echo; iwconfig 2>/dev/null | grep -v "no wireless" ;;
+        reset)  sudo systemctl restart pentrain-hwsim || true
+                sudo modprobe -r mac80211_hwsim 2>/dev/null
+                sudo modprobe mac80211_hwsim radios=3
+                sudo rfkill unblock all; echo "radios reset"; iw dev ;;
+        *) echo "usage: wifi-lab {status|reset}" ;;
+      esac
+    mode: "0755"

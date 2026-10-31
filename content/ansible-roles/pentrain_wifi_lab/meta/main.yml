@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_wifi_lab
+  author: pentrain
+  description: "wireless lab base: hwsim radios, aircrack/hcx/hashcat toolchain, lab user"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

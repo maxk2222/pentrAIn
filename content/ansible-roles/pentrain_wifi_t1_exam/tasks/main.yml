@@ -1,0 +1,32 @@
+---
+# wifi-t1-exam — offline analysis exam: a second capture (netops corp
+# backup wlan) plus the ap-admin ssh gate; script the analysis end-to-end.
+# Requires pentrain_wifi_lab first (roles list order in quest.yaml).
+- name: exam capture — corporate backup-wifi handshake
+  ansible.builtin.copy:
+    src: exam-handshake.cap
+    dest: /opt/wifi/exam-handshake.cap
+    mode: "0644"
+
+- name: site survey data the report must reconcile
+  ansible.builtin.copy:
+    dest: /opt/wifi/site-survey.txt
+    content: |
+      site survey — building B, floor 2
+      authorized APs: "backup-wifi" (ch6), "guest-wifi" (ch1)
+      note: backup-wifi PSK rotates quarterly; last change sticker missing.
+    mode: "0644"
+
+- name: backup-admin account — password is the captured PSK
+  ansible.builtin.user:
+    name: backup-admin
+    shell: /bin/bash
+    password: "{{ 'winter2024' | password_hash('sha512') }}"
+  no_log: true
+
+- name: flag dir
+  ansible.builtin.file:
+    path: /home/backup-admin
+    state: directory
+    owner: backup-admin
+    mode: "0755"

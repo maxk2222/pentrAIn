@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models.domain import Attempt, Flag, Quest, Session, SessionState, Track
+from ..models.domain import Attempt, Flag, Quest, Track
 from ..schemas import FlagOut, QuestDetailOut, QuestOut, TrackOut
 from ..services import sessions as sessions_svc
 from .deps import get_current_user
@@ -27,10 +27,8 @@ async def list_tracks(db: AsyncSession = Depends(get_db)):
     for t in tracks:
         quests = (await db.execute(
             select(Quest).where(Quest.track_slug == t.slug, Quest.active.is_(True)))).scalars().all()
-        solved = (await db.execute(
-            select(func.count(func.distinct(Session.quest_id)))
-            .where(Session.state == SessionState.SOLVED.value)
-            .where(Session.quest_id.in_([q.id for q in quests] or ["__none__"])))).scalar() or 0
+        solved_ids = await sessions_svc.solved_quest_ids(db)
+        solved = sum(1 for q in quests if q.id in solved_ids)
         out.append(TrackOut(slug=t.slug, title=t.title, description=t.description,
                             icon=t.icon, order=t.order, quest_count=len(quests),
                             solved_count=int(solved),
@@ -45,9 +43,7 @@ async def list_quests(track: str | None = None, db: AsyncSession = Depends(get_d
         q = q.where(Quest.track_slug == track)
     quests = (await db.execute(
         q.order_by(Quest.track_slug, Quest.tier, Quest.exam))).scalars().all()
-    solved_ids = {r[0] for r in (await db.execute(
-        select(Session.quest_id).where(Session.state == SessionState.SOLVED.value)
-        .distinct())).all()}
+    solved_ids = await sessions_svc.solved_quest_ids(db)
     best = {q: s for q, s in (await db.execute(
         select(Attempt.quest_id, func.max(Attempt.score)).group_by(Attempt.quest_id))).all()}
     out: list[QuestOut] = []
@@ -64,10 +60,7 @@ async def quest_detail(quest_id: str, db: AsyncSession = Depends(get_db)):
     if not q:
         raise HTTPException(404, "quest not found")
     ok, reason = await sessions_svc.check_unlock(db, q)
-    solved = (await db.execute(
-        select(Session.id).where(Session.quest_id == q.id,
-                                 Session.state == SessionState.SOLVED.value)
-        .limit(1))).scalar_one_or_none() is not None
+    solved = q.id in await sessions_svc.solved_quest_ids(db)
     flags = (await db.execute(select(Flag).where(Flag.quest_id == q.id))).scalars().all()
     track = await db.get(Track, q.track_slug)
     return QuestDetailOut(

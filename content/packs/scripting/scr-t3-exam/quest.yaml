@@ -1,0 +1,84 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: scr-t3-exam
+  track: scripting
+  tier: 3
+  title: "Exam: Zero-Touch Vault"
+  version: 1
+  exam: true
+display:
+  tagline: "Tier-3 capstone — script the whole kill chain: injection on the edge, creds theft, firewalled pivot, marker, loot."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 8
+  min_disk_gb: 80
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: web01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 20
+      roles: [pentrain_scr_t3_exam_web]
+    - name: db01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 21
+      roles: [pentrain_scr_t3_exam_db]
+flags:
+  - id: chain-marker
+    name: "Chain marker — /home/vaultadm/.pwned on db01"
+    kind: command
+    points: 200
+    command:
+      vm: db01
+      cmd: "test -f /home/vaultadm/.pwned && grep -q 'pwned-by-script' /home/vaultadm/.pwned"
+  - id: vault-flag
+    name: "Vault flag — /home/vaultadm/vault.txt"
+    kind: file
+    points: 300
+    vm: db01
+    file_path: /home/vaultadm/vault.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: exploit
+    text: "The diag CGI puts your input into a ping command — chain a second command after a separator and read files through the output."
+  - id: h2
+    cost: 40
+    stage: pivot
+    text: "Operator homes again — read the notes for the hop creds. Script it: requests with a crafted host= value, then ssh commands through the injection."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "db01 drops kali's ssh attempts — your script must run ssh from web01 (via the injection) or tunnel. Marker + vault.txt are both in vaultadm's home."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-inject
+      name: "Exploited the diag CGI"
+      detect: { command_match: "(cgi-bin/diag|host=|%3[Bb]|%60|;|\u0024\\()" }
+      hint_after_s: 600
+    - id: cp-creds
+      name: "Recovered the vault creds"
+      detect: { command_match: "(notes\\.txt|vaultadm|V4ult)" }
+      hint_after_s: 480
+    - id: cp-pivot
+      name: "Reached db01"
+      detect: { command_match: "(10\\.1\\.10\\.21|vaultadm@|\\.pwned)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 800
+  time_bonus_max: 300
+  par_s: 3000
+  takeover_cost: 200

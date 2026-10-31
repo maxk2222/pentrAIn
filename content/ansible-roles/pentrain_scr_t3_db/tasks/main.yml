@@ -1,0 +1,54 @@
+---
+# scr-t3 db01 — reachable ONLY from web01; the scripted chain must land a
+# marker here and pull the flag.
+- name: packages
+  ansible.builtin.apt:
+    name: [iptables-persistent]
+    state: present
+    update_cache: true
+
+- name: dbadmin account for the pivot
+  ansible.builtin.user:
+    name: dbadmin
+    shell: /bin/bash
+    password: "{{ 'DbAdm1n-24' | password_hash('sha512') }}"
+  no_log: true
+
+- name: compute web host (same subnet, .20)
+  ansible.builtin.set_fact:
+    pentrain_web_host: >-
+      {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.20
+
+- name: restrict ssh to the web host only (forces the scripted pivot)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: 22
+    source: "{{ pentrain_web_host }}"
+    jump: ACCEPT
+  when: ansible_default_ipv4.address is defined
+
+- name: keep established sessions alive (ansible provisioning + pivots)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    ctstate: ESTABLISHED
+    jump: ACCEPT
+
+- name: drop other ssh attempts from the range net
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: 22
+    jump: DROP
+
+- name: persist firewall rules
+  ansible.builtin.command: netfilter-persistent save
+  ignore_errors: true
+
+- name: flag dir for dbadmin proof files
+  ansible.builtin.file:
+    path: /home/dbadmin
+    state: directory
+    owner: dbadmin
+    mode: "0755"

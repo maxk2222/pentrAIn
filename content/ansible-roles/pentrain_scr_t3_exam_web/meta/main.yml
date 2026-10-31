@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_scr_t3_exam_web
+  author: pentrain
+  description: "scr-t3 exam web01: cgi command-injection → creds note → db pivot"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

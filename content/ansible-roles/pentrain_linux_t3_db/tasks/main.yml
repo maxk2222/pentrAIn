@@ -31,6 +31,13 @@
     jump: ACCEPT
   when: ansible_default_ipv4.address is defined
 
+- name: keep established sessions alive (ansible provisioning + pivots)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    ctstate: ESTABLISHED
+    jump: ACCEPT
+
 - name: drop other ssh attempts from the range net
   ansible.builtin.iptables:
     chain: INPUT

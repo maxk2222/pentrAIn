@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_scr_t1_bash
+  author: pentrain
+  description: "scr-t1-bash-recon target: nginx:8080 + anonymous FTP inventory + planted auth.log"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

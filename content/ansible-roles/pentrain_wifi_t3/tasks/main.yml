@@ -1,0 +1,73 @@
+---
+# wifi-t3-pmkid-rogue — two radios serve as access points: the legit
+# "secure-net" WPA2 (PMKID-harvestable) and a rogue OPEN "free-wifi" the
+# trainee must spot. Clientless attack path: hcxdumptool → hcxpcapngtool →
+# hashcat/aircrack → ssh with the recovered PSK.
+# Requires pentrain_wifi_lab first (roles list order in quest.yaml).
+- name: legit AP — secure-net WPA2 on wlan0 (PMKID exposed in EAPOL-1)
+  ansible.builtin.copy:
+    dest: /etc/hostapd/secure.conf
+    content: |
+      interface=wlan0
+      driver=nl80211
+      ssid=secure-net
+      hw_mode=g
+      channel=6
+      wpa=2
+      wpa_passphrase=dragon!99
+      wpa_key_mgmt=WPA-PSK
+      rsn_pairwise=CCMP
+      # pmksa caching enabled (default) → AP emits PMKID — the vuln under study
+    mode: "0600"
+
+- name: rogue AP — open "free-wifi" on wlan2
+  ansible.builtin.copy:
+    dest: /etc/hostapd/rogue.conf
+    content: |
+      interface=wlan2
+      driver=nl80211
+      ssid=free-wifi
+      hw_mode=g
+      channel=11
+    mode: "0600"
+
+- name: bring both APs up with systemd
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pentrain-wifi-aps.service
+    content: |
+      [Unit]
+      Description=PenTrAIn wifi-t3 lab APs (secure + rogue)
+      After=pentrain-hwsim.service
+      Requires=pentrain-hwsim.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'ip link set wlan0 up; ip link set wlan2 up'
+      ExecStart=/usr/sbin/hostapd -B /etc/hostapd/secure.conf
+      ExecStart=/usr/sbin/hostapd -B /etc/hostapd/rogue.conf
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: enable + start lab APs
+  ansible.builtin.systemd:
+    name: pentrain-wifi-aps
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: secadmin account — password is the secure-net passphrase
+  ansible.builtin.user:
+    name: secadmin
+    shell: /bin/bash
+    password: "{{ 'dragon!99' | password_hash('sha512') }}"
+  no_log: true
+
+- name: flag dir
+  ansible.builtin.file:
+    path: /home/secadmin
+    state: directory
+    owner: secadmin
+    mode: "0755"

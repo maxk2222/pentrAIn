@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_wifi_t3
+  author: pentrain
+  description: "wifi-t3: PMKID-able secure-net AP + rogue open AP on hwsim radios"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

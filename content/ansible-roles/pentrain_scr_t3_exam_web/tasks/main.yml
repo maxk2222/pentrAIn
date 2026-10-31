@@ -1,0 +1,58 @@
+---
+# scr-t3-exam web01 — a "diagnostics" CGI with a shell-injection flaw; the
+# scripted chain turns it into RCE, finds the db creds, pivots.
+- name: packages
+  ansible.builtin.apt:
+    name: [apache2, curl, sshpass]
+    state: present
+    update_cache: true
+
+- name: cgi dir
+  ansible.builtin.file:
+    path: /usr/lib/cgi-bin
+    state: directory
+    mode: "0755"
+
+- name: vulnerable diag cgi — unquoted parameter into shell
+  ansible.builtin.copy:
+    dest: /usr/lib/cgi-bin/diag
+    content: |
+      #!/bin/bash
+      echo "Content-Type: text/plain"
+      echo
+      Q="${QUERY_STRING#host=}"
+      echo "== ping $Q =="
+      ping -c1 "$Q" 2>&1 | head -8
+    mode: "0755"
+
+- name: enable cgi
+  ansible.builtin.command: a2enmod cgid
+  notify: restart apache2
+
+- name: landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: "<h1>web01 — net diagnostics</h1><p>/cgi-bin/diag?host=&lt;ip&gt;</p>\n"
+    mode: "0644"
+
+- name: operator account + leaked db creds
+  ansible.builtin.user:
+    name: wwwops
+    shell: /bin/bash
+    password: "{{ 'Www0ps!24' | password_hash('sha512') }}"
+  no_log: true
+
+- name: creds note (world-readable — the mistake)
+  ansible.builtin.copy:
+    dest: /home/wwwops/notes.txt
+    content: |
+      db hop: ssh vaultadm@db01  (pass: V4ult-Adm1n!)
+      vault01 only accepts ssh from this box.
+    owner: wwwops
+    mode: "0644"
+
+- name: ensure apache started
+  ansible.builtin.service:
+    name: apache2
+    state: started
+    enabled: true

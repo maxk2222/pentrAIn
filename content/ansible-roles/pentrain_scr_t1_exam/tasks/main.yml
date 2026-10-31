@@ -1,0 +1,90 @@
+---
+# scr-t1-exam audit01 — three data sources the report script must aggregate:
+# a planted auth.log corpus, an anonymous-ftp inventory, a JSON status page.
+- name: packages
+  ansible.builtin.apt:
+    name: [nginx-light, vsftpd, python3]
+    state: present
+    update_cache: true
+
+- name: nginx site
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 8080 default_server;
+          root /var/www/html;
+          index index.html;
+          location / { try_files $uri $uri/ =404; }
+          location = /status.json { default_type application/json; try_files $uri =404; }
+      }
+    mode: "0644"
+  notify: restart nginx
+
+- name: pages + machine-readable status
+  ansible.builtin.copy:
+    dest: "{{ item.dest }}"
+    content: "{{ item.content }}"
+    mode: "0644"
+  loop:
+    - {dest: /var/www/html/index.html,
+       content: "<h1>audit01 — monitoring snapshot</h1>\n"}
+    - {dest: /var/www/html/status.json,
+       content: '{"host":"audit01","uptime_h":412,"services":["sshd","nginx","vsftpd"],"backup":"daily"}'}
+
+- name: ftp inventory dir
+  ansible.builtin.file:
+    path: /srv/ftp
+    state: directory
+    mode: "0755"
+
+- name: anonymous ftp inventory
+  ansible.builtin.copy:
+    dest: /srv/ftp/assets.csv
+    content: |
+      asset,ip,owner
+      audit01,10.x.10.20,soc
+      ws-edge,10.x.10.30,web
+      mailrelay,10.x.10.31,msg
+      vault,10.x.10.99,sec
+    mode: "0644"
+
+- name: vsftpd anonymous read-only
+  ansible.builtin.copy:
+    dest: /etc/vsftpd.conf
+    content: |
+      listen=YES
+      listen_ipv6=NO
+      anonymous_enable=YES
+      local_enable=NO
+      write_enable=NO
+      anon_root=/srv/ftp
+      pasv_min_port=40000
+      pasv_max_port=40010
+      seccomp_sandbox=NO
+    mode: "0644"
+  notify: restart vsftpd
+
+- name: auth.log corpus — two scanners, one benign admin
+  ansible.builtin.copy:
+    dest: /var/log/auth.log
+    content: |
+      Oct 30 22:01:11 audit01 sshd[511]: Failed password for root from 192.0.2.99 port 33001 ssh2
+      Oct 30 22:01:16 audit01 sshd[511]: Failed password for root from 192.0.2.99 port 33003 ssh2
+      Oct 30 22:01:22 audit01 sshd[512]: Failed password for invalid user backup from 203.0.113.44 port 55112 ssh2
+      Oct 30 22:01:39 audit01 sshd[513]: Failed password for invalid user mysql from 203.0.113.44 port 55120 ssh2
+      Oct 30 22:02:07 audit01 sshd[515]: Accepted password for soc from 10.x.10.5 port 41900 ssh2
+      Oct 30 22:03:41 audit01 sshd[518]: Failed password for invalid user deploy from 192.0.2.99 port 33018 ssh2
+      Oct 30 22:04:02 audit01 sshd[519]: Failed password for root from 203.0.113.44 port 55150 ssh2
+      Oct 30 22:04:33 audit01 sshd[521]: Failed password for invalid user nagios from 203.0.113.44 port 55155 ssh2
+      Oct 30 22:04:55 audit01 sshd[522]: Failed password for invalid user git from 203.0.113.44 port 55160 ssh2
+      Oct 30 22:05:30 audit01 sshd[525]: Accepted password for soc from 10.x.10.5 port 41940 ssh2
+      Oct 30 22:07:12 audit01 sshd[529]: Failed password for invalid user test from 192.0.2.99 port 33055 ssh2
+    mode: "0640"
+
+- name: ensure services started
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: [nginx, vsftpd]

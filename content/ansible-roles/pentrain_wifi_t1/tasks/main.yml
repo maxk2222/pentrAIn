@@ -1,0 +1,23 @@
+---
+# wifi-t1-crack-lab — offline WPA analysis: a captured handshake on the
+# share, a wordlist, and the AP admin whose ssh password is the PSK.
+# Requires pentrain_wifi_lab first (roles list order in quest.yaml).
+- name: exercise material
+  ansible.builtin.copy:
+    src: handshake.cap
+    dest: /opt/wifi/handshake.cap
+    mode: "0644"
+
+- name: ap-admin account — password is the WPA passphrase in the capture
+  ansible.builtin.user:
+    name: ap-admin
+    shell: /bin/bash
+    password: "{{ 'coffee123' | password_hash('sha512') }}"
+  no_log: true
+
+- name: flag dir
+  ansible.builtin.file:
+    path: /home/ap-admin
+    state: directory
+    owner: ap-admin
+    mode: "0755"

@@ -156,3 +156,25 @@ Nothing extra to deploy — the gate is backend logic. AD exams
 (`ad-t1-exam` … `ad-t3-exam`) reuse the teaching roles plus small
 `pentrain_ad_tN_exam*` roles — same template requirements as the
 corresponding tier (see "Windows / Active Directory quests" above).
+
+## Wireless (hwsim) labs
+
+The `wifi-*` quests simulate 802.11 **inside the target VM** using the
+kernel's `mac80211_hwsim` module — no physical radios, no cross-VM
+wireless (hwsim phys are kernel-local). Layout per quest:
+
+- `pentrain_wifi_lab` (dependency of every wifi role) loads
+  `mac80211_hwsim` at boot via `/etc/modules-load.d` + modprobe, installs
+  `hostapd`/`aircrack-ng`/`hcxdumptool`/`hashcat`/`iw`, and drops lab
+  users + wordlists under `/opt/wifi`.
+- Quest roles spawn hostapd/wpa_supplicant pairs on the virtual phys —
+  `wlan0`+ run the networks, `wlan1` is the trainee's attack interface.
+- Trainees reach the lab by SSH from Kali (`wifi` user, creds in the
+  briefing); attack tooling lives on the lab VM itself.
+- Packaged captures (`files/*.cap`) are REAL hwsim-generated handshakes —
+  regenerate with `scripts/make_wifi_handshake.sh <ssid> <psk> <out>`
+  on a host that has hwsim + the wireless tools (PVE host works); validate
+  with `aircrack-ng` before committing.
+- Cleanup: ranges are destroyed whole, but if you run the generator on a
+  shared host, kill leftover `hostapd`/`wpa_supplicant`/`airodump-ng` and
+  `modprobe -r mac80211_hwsim` afterwards.

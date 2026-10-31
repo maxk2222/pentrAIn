@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_scr_t1_exam
+  author: pentrain
+  description: "scr-t1 exam: three data sources (auth.log, ftp inventory, status.json) to aggregate"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

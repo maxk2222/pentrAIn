@@ -1,0 +1,11 @@
+[Unit]
+Description=PenTrAIn scr-t2 target API
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/api/app.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

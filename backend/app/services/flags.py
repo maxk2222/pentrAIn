@@ -32,6 +32,17 @@ def derive_flag_secret(flag_seed: str, flag_key: str) -> str:
     return f"pentrAIn{{{digest.hexdigest()[:16]}}}"
 
 
+def _flag_vmid(session: Session, vm_name: str | None) -> int | None:
+    """Resolve a flag's target VM. "kali" is the trainee console VM itself —
+    scripting quests check their artifacts there; everything else maps through
+    the deployed target_vmids name→vmid dict."""
+    if not vm_name:
+        return None
+    if vm_name == "kali":
+        return session.kali_vmid
+    return (session.target_vmids or {}).get(vm_name)
+
+
 async def create_expected_flags(db: AsyncSession, session: Session, flags: list[Flag]) -> None:
     """(Re)generate per-session secrets for every quest flag.
 
@@ -59,7 +70,7 @@ async def inject_flags(db: AsyncSession, engine, session: Session, flags: list[F
         spec = f.command_spec or {}
         vm_name = spec.get("vm")
         path = spec.get("file_path") or f"/root/{f.key}.txt"
-        vmid = (session.target_vmids or {}).get(vm_name) if vm_name else None
+        vmid = _flag_vmid(session, vm_name)
         if not vmid:
             logs.append(f"flag {f.key}: no vmid for vm={vm_name} — skipped")
             continue
@@ -112,7 +123,7 @@ async def check_command_flag(db: AsyncSession, engine, session: Session, flag: F
     """kind=command: run spec on the target VM (optionally inside a container),
     compare output to `expect` (substring) or exitcode."""
     spec = flag.command_spec or {}
-    vmid = (session.target_vmids or {}).get(spec.get("vm", ""))
+    vmid = _flag_vmid(session, spec.get("vm", ""))
     cmd = spec.get("cmd")
     if not vmid or not cmd:
         return False

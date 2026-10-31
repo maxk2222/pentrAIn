@@ -1,0 +1,76 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: wifi-t1-crack-lab
+  track: wifi
+  tier: 1
+  title: "Captured Keys"
+  version: 1
+display:
+  tagline: "A WPA handshake somebody left on the share — crack it offline and let yourself into the AP admin's account."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wifilab01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_wifi_lab, pentrain_wifi_t1]
+flags:
+  - id: psk-proof
+    name: "PSK recovered — /home/wifi/psk.txt"
+    kind: command
+    points: 150
+    command:
+      vm: wifilab01
+      cmd: "test -f /home/wifi/psk.txt && grep -q coffee123 /home/wifi/psk.txt"
+  - id: admin-flag
+    name: "AP admin flag — /home/ap-admin/flag.txt"
+    kind: file
+    points: 200
+    vm: wifilab01
+    file_path: /home/ap-admin/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "SSH in as the lab user first (credentials in the briefing). The exercise material is under /opt/wifi — identify what kind of capture you're holding before cracking."
+  - id: h2
+    cost: 40
+    stage: analysis
+    text: "aircrack-ng <cap> shows encryption + handshake count. Crack with `aircrack-ng -w wordlist file.cap` — a working list sits next to the capture."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "The recovered passphrase IS a password — the AP admin account on this host uses it. Write it to /home/wifi/psk.txt for the grader, then ssh in."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-ssh
+      name: "Entered the lab"
+      detect: { command_match: "ssh .*wifi" }
+      hint_after_s: 600
+    - id: cp-aircrack
+      name: "Analyzed the capture"
+      detect: { command_match: "(aircrack|\\.cap)" }
+      hint_after_s: 480
+    - id: cp-crack
+      name: "Cracked with a wordlist"
+      detect: { command_match: "(-w |wordlist|hashcat)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 400
+  time_bonus_max: 200
+  par_s: 1200
+  takeover_cost: 150

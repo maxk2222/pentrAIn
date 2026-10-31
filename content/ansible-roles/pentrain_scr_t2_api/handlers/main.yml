@@ -1,0 +1,3 @@
+---
+- name: restart pentrain-api
+  ansible.builtin.service: {name: pentrain-api, state: restarted}

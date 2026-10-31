@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_wifi_t2_exam
+  author: pentrain
+  description: "wifi-t2 exam: live ops-wifi AP + client + encrypted backup"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

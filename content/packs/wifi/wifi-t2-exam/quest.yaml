@@ -1,0 +1,77 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: wifi-t2-exam
+  track: wifi
+  tier: 2
+  title: "Exam: Ops Channel"
+  version: 1
+  exam: true
+display:
+  tagline: "Tier-2 capstone — a live WPA2 network, an encrypted config backup, and a passphrase you still have to earn on air."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wifilab01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_wifi_lab, pentrain_wifi_t2_exam]
+flags:
+  - id: backup-decoded
+    name: "Backup decrypted — /home/wifi/backup.txt"
+    kind: command
+    points: 200
+    command:
+      vm: wifilab01
+      cmd: "test -f /home/wifi/backup.txt && grep -q BACKUP-KEY /home/wifi/backup.txt"
+  - id: admin-flag
+    name: "wifi-admin flag — /home/wifi-admin/flag.txt"
+    kind: file
+    points: 200
+    vm: wifilab01
+    file_path: /home/wifi-admin/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "ops-wifi is on channel 1 this time — survey before you lock your channel. A client is associated right now; your deauth decides when the handshake happens."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "Full cycle: monitor → dump → deauth → capture → crack. The recovered passphrase is also the backup's openssl key AND an account password."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "openssl enc -d -aes-256-cbc -pbkdf2 -in /opt/wifi/backup.enc -out /home/wifi/backup.txt -k <psk> — the plaintext names the backup key the grader greps for."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-dump
+      name: "Capturing ops-wifi"
+      detect: { command_match: "(airodump|ops-wifi)" }
+      hint_after_s: 600
+    - id: cp-handshake
+      name: "Captured the handshake"
+      detect: { command_match: "(aireplay|aircrack)" }
+      hint_after_s: 480
+    - id: cp-decrypt
+      name: "Decrypted the backup"
+      detect: { command_match: "(openssl|backup\\.(enc|txt))" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 550
+  time_bonus_max: 200
+  par_s: 2100
+  takeover_cost: 150

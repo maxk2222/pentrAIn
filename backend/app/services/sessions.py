@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import session_factory
 from ..models.domain import (
+    Attempt,
     CoachAction,
     CoachMessage,
     Flag,
@@ -141,9 +142,7 @@ async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
         if need > budget:
             return False, f"requires {need}{unit} (budget {budget})"
     if quest.tier > 1 or quest.exam:
-        solved_ids = {r[0] for r in (await db.execute(
-            select(Session.quest_id)
-            .where(Session.state == SessionState.SOLVED.value).distinct())).all()}
+        solved_ids = await solved_quest_ids(db)
     if quest.tier > 1:
         # any non-exam quest at the previous tier unlocks this one —
         # exams are capstones, not stepping stones
@@ -378,6 +377,13 @@ async def _configure_kali_telemetry(db: AsyncSession, engine, session: Session) 
             session.kali_vmid, "systemctl restart pentrain-telemetried || true")
     except Exception as e:
         await _append_log(db, session, f"[pentrain] telemetry setup warn: {e}")
+
+
+async def solved_quest_ids(db: AsyncSession) -> set[str]:
+    """Quests that were ever fully solved. Anchored on finalized Attempts
+    (created only on all_solved), NOT session.state — abort() legitimately
+    tears down a solved session's range and must not erase progression."""
+    return {r[0] for r in (await db.execute(select(Attempt.quest_id).distinct())).all()}
 
 
 async def abort(db: AsyncSession, session_id: int) -> Session:

@@ -1,0 +1,77 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: wifi-t1-exam
+  track: wifi
+  tier: 1
+  title: "Exam: Backup Channel"
+  version: 1
+  exam: true
+display:
+  tagline: "Tier-1 capstone — a second capture, a site survey that doesn't match, and an admin shell on the other side of the crack."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wifilab01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_wifi_lab, pentrain_wifi_t1_exam]
+flags:
+  - id: analysis-report
+    name: "analysis.txt names network + PSK"
+    kind: command
+    points: 150
+    command:
+      vm: wifilab01
+      cmd: "test -f /home/wifi/analysis.txt && grep -qi backup-wifi /home/wifi/analysis.txt && grep -q winter2024 /home/wifi/analysis.txt"
+  - id: admin-flag
+    name: "backup-admin flag — /home/backup-admin/flag.txt"
+    kind: file
+    points: 250
+    vm: wifilab01
+    file_path: /home/backup-admin/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Two artifacts in /opt/wifi: a new capture and a site survey. The survey names the authorized networks — the capture's SSID should be among them."
+  - id: h2
+    cost: 40
+    stage: analysis
+    text: "Same toolchain as the tier — aircrack-ng -w against the exam capture. This PSK rotates quarterly; the wordlist knows the current season."
+  - id: h3
+    cost: 60
+    stage: exploit
+    text: "Write the findings to /home/wifi/analysis.txt (network name AND recovered key), then use the PSK as the backup-admin password over ssh."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-material
+      name: "Reviewed the exam material"
+      detect: { command_match: "(exam-handshake|site-survey|ls /opt/wifi)" }
+      hint_after_s: 600
+    - id: cp-crack
+      name: "Cracked the exam capture"
+      detect: { command_match: "(aircrack|hashcat)" }
+      hint_after_s: 480
+    - id: cp-report
+      name: "Wrote the analysis"
+      detect: { command_match: "analysis\\.txt" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 450
+  time_bonus_max: 200
+  par_s: 1500
+  takeover_cost: 150

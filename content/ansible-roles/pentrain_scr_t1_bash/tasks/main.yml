@@ -1,0 +1,92 @@
+---
+# scr-t1-bash-recon — a small "corporate fileserver" the trainee's bash script
+# must recon: sshd (stock), nginx on 8080, anonymous FTP with an inventory,
+# and a planted auth.log full of brute-force noise for grep/awk practice.
+- name: packages
+  ansible.builtin.apt:
+    name: [nginx-light, vsftpd, python3]
+    state: present
+    update_cache: true
+
+- name: nginx listens on 8080 (non-standard port for the recon script to find)
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 8080 default_server;
+          root /var/www/html;
+          index index.html;
+          location / { try_files $uri $uri/ =404; }
+          location /internal/ { return 403; }
+      }
+    mode: "0644"
+  notify: restart nginx
+
+- name: landing page
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: "<h1>filesrv01 — internal file services</h1><p>ops only.</p>\n"
+    mode: "0644"
+
+- name: ftp inventory dir
+  ansible.builtin.file:
+    path: /srv/ftp
+    state: directory
+    mode: "0755"
+
+- name: anonymous ftp inventory
+  ansible.builtin.copy:
+    dest: /srv/ftp/users.csv
+    content: |
+      host,owner,team
+      filesrv01,ops,infra
+      web01,webteam,apps
+      db01,dba,data
+      jump01,ops,infra
+    mode: "0644"
+
+- name: vsftpd anonymous read-only
+  ansible.builtin.copy:
+    dest: /etc/vsftpd.conf
+    content: |
+      listen=YES
+      listen_ipv6=NO
+      anonymous_enable=YES
+      local_enable=NO
+      write_enable=NO
+      anon_root=/srv/ftp
+      anon_upload_enable=NO
+      pasv_min_port=40000
+      pasv_max_port=40010
+      seccomp_sandbox=NO
+    mode: "0644"
+  notify: restart vsftpd
+
+- name: planted auth.log with brute-force attempts (grep/awk corpus)
+  ansible.builtin.copy:
+    dest: /var/log/auth.log
+    content: |
+      Oct 30 21:02:11 filesrv01 sshd[411]: Failed password for invalid user admin from 203.0.113.66 port 51022 ssh2
+      Oct 30 21:02:14 filesrv01 sshd[411]: Failed password for invalid user admin from 203.0.113.66 port 51024 ssh2
+      Oct 30 21:02:17 filesrv01 sshd[412]: Failed password for root from 203.0.113.66 port 51026 ssh2
+      Oct 30 21:03:01 filesrv01 sshd[415]: Accepted password for ops from 10.x.10.5 port 40210 ssh2
+      Oct 30 21:04:44 filesrv01 sshd[418]: Failed password for invalid user test from 198.51.100.23 port 52100 ssh2
+      Oct 30 21:05:02 filesrv01 sshd[419]: Failed password for root from 203.0.113.66 port 51040 ssh2
+      Oct 30 21:06:30 filesrv01 sshd[420]: Accepted password for ops from 10.x.10.5 port 40244 ssh2
+      Oct 30 21:09:15 filesrv01 sshd[430]: Failed password for invalid user oracle from 203.0.113.66 port 51071 ssh2
+      Oct 30 21:10:03 filesrv01 sshd[431]: Failed password for invalid user www from 198.51.100.23 port 52140 ssh2
+    mode: "0640"
+
+- name: lab user for ftp/login practice
+  ansible.builtin.user:
+    name: trainee
+    shell: /bin/bash
+    password: "{{ 'Start123!' | password_hash('sha512') }}"
+  no_log: true
+
+- name: ensure services started
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: [nginx, vsftpd]

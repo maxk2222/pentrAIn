@@ -6,7 +6,7 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
-from app.models.domain import Flag, Quest, Session, SessionState
+from app.models.domain import Attempt, Flag, Quest, Session, SessionState
 from app.services import flags as flags_svc
 from app.services import scoring as scoring_svc
 from app.services import sessions as sessions_svc
@@ -30,6 +30,18 @@ async def _wait_state(session_id: int, want: str, timeout_s: float = 15.0) -> Se
         raise AssertionError(f"timeout waiting for {want} (last={last and last.state})")
 
 
+async def _mark_solved(db, *qids: str) -> None:
+    """Record quests as solved the way the game stores it — a finished Session
+    plus its finalized Attempt (attempts are the progression anchor, not
+    session.state, which abort() may end honestly)."""
+    for qid in qids:
+        s = Session(quest_id=qid, state="solved")
+        db.add(s)
+        await db.flush()
+        db.add(Attempt(quest_id=qid, session_id=s.id, score=100))
+    await db.commit()
+
+
 async def _solve_prereqs(db, quest: Quest) -> None:
     """Mark everything check_unlock needs as solved for `quest`.
 
@@ -41,17 +53,13 @@ async def _solve_prereqs(db, quest: Quest) -> None:
         Quest.track_slug == quest.track_slug,
         Quest.tier <= quest.tier,
         Quest.exam.is_not(True)))).scalars().all()
-    for qid in rows:
-        db.add(Session(quest_id=qid, state="solved"))
-    await db.commit()
+    await _mark_solved(db, *rows)
 
 
 async def test_unlock_gates_on_resource_budget(db_with_packs):
     db = db_with_packs
     # clear the tier gate so only the resource gate can fire
-    for q in ("linux-t1-first-foothold", "linux-t2-privesc-chain"):
-        db.add(Session(quest_id=q, state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-first-foothold", "linux-t2-privesc-chain")
 
     quest = await db.get(Quest, "linux-t3-pivot")
     ok, _ = await sessions_svc.check_unlock(db, quest)
@@ -69,8 +77,7 @@ async def test_unlock_gates_on_tier_progression(db_with_packs):
     assert not ok and "tier" in reason.lower()
 
     # solve t1 → t2 unlocks
-    db.add(Session(quest_id="linux-t1-first-foothold", state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-first-foothold")
     ok, _ = await sessions_svc.check_unlock(db, t2)
     assert ok
 
@@ -83,8 +90,7 @@ async def test_unlock_tier_any_solved(db_with_packs):
     assert not ok
 
     # solving the *other* tier-1 quest (not the canonical first) unlocks t2
-    db.add(Session(quest_id="linux-t1-suid-hunt", state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-suid-hunt")
     ok, _ = await sessions_svc.check_unlock(db, t2)
     assert ok
 
@@ -99,14 +105,12 @@ async def test_exam_gate_requires_all_tier_quests(db_with_packs):
     assert not ok and "exam" in reason.lower()
 
     # one of the two t1 quests is not enough
-    db.add(Session(quest_id="linux-t1-first-foothold", state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-first-foothold")
     ok, _ = await sessions_svc.check_unlock(db, exam)
     assert not ok
 
     # all t1 non-exam quests solved → exam unlocks
-    db.add(Session(quest_id="linux-t1-suid-hunt", state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-suid-hunt")
     ok, _ = await sessions_svc.check_unlock(db, exam)
     assert ok
 
@@ -114,11 +118,26 @@ async def test_exam_gate_requires_all_tier_quests(db_with_packs):
 async def test_exam_solve_does_not_unlock_next_tier(db_with_packs):
     """Exams are capstones — solving one alone must not open tier+1."""
     db = db_with_packs
-    db.add(Session(quest_id="linux-t1-exam", state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-exam")
     t2 = await db.get(Quest, "linux-t2-privesc-chain")
     ok, _ = await sessions_svc.check_unlock(db, t2)
     assert not ok
+
+
+async def test_solved_progression_survives_abort(db_with_packs):
+    """Aborting a solved session tears the range down but must NOT erase
+    progression — attempts anchor 'solved', not the session lifecycle."""
+    db = db_with_packs
+    s = Session(quest_id="linux-t1-suid-hunt", state="solved")
+    db.add(s)
+    await db.flush()
+    db.add(Attempt(quest_id="linux-t1-suid-hunt", session_id=s.id, score=100))
+    await db.commit()
+
+    await sessions_svc.abort(db, s.id)
+    t2 = await db.get(Quest, "linux-t2-privesc-chain")
+    ok, _ = await sessions_svc.check_unlock(db, t2)
+    assert ok
 
 
 async def test_t2_exam_needs_prev_tier_and_all_peers(db_with_packs):
@@ -128,15 +147,12 @@ async def test_t2_exam_needs_prev_tier_and_all_peers(db_with_packs):
     assert exam is not None and exam.exam
 
     # t2 peers solved but no t1 → still locked on the tier gate
-    for qid in ("linux-t2-privesc-chain", "linux-t2-wildcard-cron"):
-        db.add(Session(quest_id=qid, state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t2-privesc-chain", "linux-t2-wildcard-cron")
     ok, _ = await sessions_svc.check_unlock(db, exam)
     assert not ok
 
     # + one t1 quest → fully unlocked
-    db.add(Session(quest_id="linux-t1-first-foothold", state="solved"))
-    await db.commit()
+    await _mark_solved(db, "linux-t1-first-foothold")
     ok, _ = await sessions_svc.check_unlock(db, exam)
     assert ok
 
@@ -217,6 +233,40 @@ async def test_full_session_lifecycle_mock(db_with_packs):
     # abort destroys
     s = await sessions_svc.abort(db, s.id)
     assert s.state == "aborted"
+
+
+async def test_command_flag_on_kali_uses_kali_vmid(db_with_packs):
+    """flags with vm: kali run the check shell on the trainee console VM —
+    scripting quests verify their artifacts there."""
+    from app.services import engine as engine_svc
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    engine = await engine_svc.get_engine(db)
+    flag = Flag(quest_id=s.quest_id, key="kali-check", name="k",
+                kind="command", points=10,
+                command_spec={"vm": "kali", "cmd": "id", "expect": "mock"})
+    assert await flags_svc.check_command_flag(db, engine, s, flag)
+    assert engine.pve.exec_log[-1][0] == s.kali_vmid
+    await sessions_svc.abort(db, s.id)
+
+
+async def test_file_flag_on_kali_injects_to_kali_vmid(db_with_packs):
+    """kind=file + vm: kali lands the flag on the trainee console VM —
+    same resolver as command flags, exercised through inject_flags."""
+    from app.services import engine as engine_svc
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    engine = await engine_svc.get_engine(db)
+    flag = Flag(quest_id=s.quest_id, key="kali-file", name="k",
+                kind="file", points=10,
+                command_spec={"vm": "kali", "file_path": "/root/kali-flag.txt"})
+    await flags_svc.create_expected_flags(db, s, [flag])
+    logs = await flags_svc.inject_flags(db, engine, s, [flag])
+    assert (s.kali_vmid, "/root/kali-flag.txt") in engine.pve.files
+    assert any("injected" in l for l in logs)
+    await sessions_svc.abort(db, s.id)
 
 
 async def test_check_flag_rejects_noncommand_flag(db_with_packs):

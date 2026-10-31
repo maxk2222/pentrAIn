@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_wifi_t3_exam
+  author: pentrain
+  description: "wifi-t3 exam: dual WPA2 APs (PMKID + deauth handshake), 4 hwsim radios"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

@@ -1,0 +1,39 @@
+---
+# scr-t2-python-automation — target API the trainee must script against.
+- name: packages
+  ansible.builtin.apt:
+    name: [python3, python3-flask]
+    state: present
+    update_cache: true
+
+- name: api dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/opt/api, /srv/api]
+
+- name: deploy app
+  ansible.builtin.copy:
+    src: app.py
+    dest: /opt/api/app.py
+    mode: "0755"
+
+- name: secret placeholder (flag injected here post-deploy)
+  ansible.builtin.copy:
+    dest: /srv/api/secret.txt
+    content: "pending\n"
+    mode: "0644"
+
+- name: systemd unit
+  ansible.builtin.copy:
+    src: pentrain-api.service
+    dest: /etc/systemd/system/pentrain-api.service
+    mode: "0644"
+
+- name: enable api
+  ansible.builtin.systemd:
+    name: pentrain-api
+    state: started
+    enabled: true
+    daemon_reload: true

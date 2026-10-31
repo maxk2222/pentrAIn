@@ -1,0 +1,78 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: scr-t1-exam
+  track: scripting
+  tier: 1
+  title: "Exam: Report Generator"
+  version: 1
+  exam: true
+display:
+  tagline: "Tier-1 capstone — one bash script, three data sources, one machine-readable report."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: audit01
+      template: debian-12-x64-server-template
+      ram_gb: 2
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 20
+      roles: [pentrain_scr_t1_exam]
+flags:
+  - id: report-script
+    name: "report.sh exists and runs"
+    kind: command
+    points: 150
+    command:
+      vm: kali
+      cmd: "test -x /root/report.sh && timeout 60 /root/report.sh >/dev/null 2>&1"
+  - id: report-fields
+    name: "report.txt aggregates all three sources"
+    kind: command
+    points: 250
+    command:
+      vm: kali
+      cmd: "test -f /root/report.txt && grep -q '^SERVICES=.*nginx' /root/report.txt && grep -q '^ATTACKER=203.0.113.44' /root/report.txt && grep -q '^ASSETS=.*vault' /root/report.txt"
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Three sources: /var/log/auth.log on the box, the anonymous-ftp CSV, and /status.json on :8080. Fetch each, then aggregate."
+  - id: h2
+    cost: 40
+    stage: analysis
+    text: "The attacker is the IP with the most failed logins — count per IP, sort, take the top. `sort | uniq -c | sort -rn | head -1` is the pattern."
+  - id: h3
+    cost: 60
+    stage: analysis
+    text: "Format is checked literally: SERVICES=<list>, ATTACKER=<ip>, ASSETS=<hosts from the csv> — one line each in /root/report.txt."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-fetch
+      name: "Fetched at least one data source"
+      detect: { command_match: "(curl|wget|ftp|scp|ssh)" }
+      hint_after_s: 600
+    - id: cp-count
+      name: "Counted failures per attacker IP"
+      detect: { command_match: "(uniq -c|sort -rn|awk)" }
+      hint_after_s: 480
+    - id: cp-report
+      name: "Wrote report.txt"
+      detect: { command_match: "report\\.(txt|sh)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 1800
+  takeover_cost: 150

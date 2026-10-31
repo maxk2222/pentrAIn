@@ -1,0 +1,111 @@
+---
+# wifi-t3-exam — capstone: two WPA2 APs up at once. "mgmt-wifi" leaks PMKID
+# (clientless path), "exec-wifi" needs the classic deauth handshake — the
+# trainee must run BOTH attack styles and report both PSKs.
+# Requires pentrain_wifi_lab first (roles list order in quest.yaml).
+- name: AP 1 — mgmt-wifi WPA2 on wlan0 (PMKID path)
+  ansible.builtin.copy:
+    dest: /etc/hostapd/mgmt.conf
+    content: |
+      interface=wlan0
+      driver=nl80211
+      ssid=mgmt-wifi
+      hw_mode=g
+      channel=6
+      wpa=2
+      wpa_passphrase=spring!2024
+      wpa_key_mgmt=WPA-PSK
+      rsn_pairwise=CCMP
+    mode: "0600"
+
+- name: AP 2 — exec-wifi WPA2 on wlan2 (deauth-handshake path)
+  ansible.builtin.copy:
+    dest: /etc/hostapd/exec.conf
+    content: |
+      interface=wlan2
+      driver=nl80211
+      ssid=exec-wifi
+      hw_mode=g
+      channel=11
+      wpa=2
+      wpa_passphrase=pentest-rocks
+      wpa_key_mgmt=WPA-PSK
+      rsn_pairwise=CCMP
+    mode: "0600"
+
+- name: radios for the exam — 4 hwsim radios (2 APs + client + attack iface)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pentrain-hwsim.service
+    content: |
+      [Unit]
+      Description=PenTrAIn virtual wifi radios (mac80211_hwsim) — exam set
+      Before=network-pre.target
+      Wants=network-pre.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/sbin/modprobe mac80211_hwsim radios=4
+      ExecStartPost=/usr/sbin/rfkill unblock all
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: client on wlan3 for exec-wifi (deauth target)
+  ansible.builtin.copy:
+    dest: /etc/wpa_supplicant/lab-client.conf
+    content: |
+      network={
+          ssid="exec-wifi"
+          psk="pentest-rocks"
+          scan_ssid=1
+      }
+    mode: "0600"
+
+- name: bring all APs + client up
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pentrain-wifi-aps.service
+    content: |
+      [Unit]
+      Description=PenTrAIn wifi-t3 exam APs + client
+      After=pentrain-hwsim.service
+      Requires=pentrain-hwsim.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'ip link set wlan0 up; ip link set wlan2 up; ip link set wlan3 up'
+      ExecStart=/usr/sbin/hostapd -B /etc/hostapd/mgmt.conf
+      ExecStart=/usr/sbin/hostapd -B /etc/hostapd/exec.conf
+      ExecStart=/sbin/wpa_supplicant -B -i wlan3 -c /etc/wpa_supplicant/lab-client.conf
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: reload radios now (4 radios need a fresh modprobe — before APs bind)
+  ansible.builtin.command: /bin/sh -c 'modprobe -r mac80211_hwsim 2>/dev/null; modprobe mac80211_hwsim radios=4; rfkill unblock all'
+  changed_when: true
+  failed_when: false
+
+- name: enable + start exam APs
+  ansible.builtin.systemd:
+    name: pentrain-wifi-aps
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: mgmt-admin account — password is the mgmt-wifi passphrase
+  ansible.builtin.user:
+    name: mgmt-admin
+    shell: /bin/bash
+    password: "{{ 'spring!2024' | password_hash('sha512') }}"
+  no_log: true
+
+- name: flag dir
+  ansible.builtin.file:
+    path: /home/mgmt-admin
+    state: directory
+    owner: mgmt-admin
+    mode: "0755"

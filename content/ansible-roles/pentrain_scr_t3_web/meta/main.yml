@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_scr_t3_web
+  author: pentrain
+  description: "scr-t3 web01: naive upload → .phtml webshell → db creds note"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

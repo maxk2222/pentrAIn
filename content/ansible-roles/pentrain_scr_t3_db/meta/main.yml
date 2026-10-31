@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_scr_t3_db
+  author: pentrain
+  description: "scr-t3 db01: ssh only from web01, dbadmin account, marker+flag target"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

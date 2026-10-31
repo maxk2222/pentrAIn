@@ -1,0 +1,71 @@
+---
+# wifi-t2-live-attack — real AP on hwsim wlan0 ("corp-wifi", WPA2, weak PSK),
+# a chatty wpa_supplicant client on wlan2, and the trainee's attack iface on
+# wlan1: airmon → airodump → aireplay deauth → handshake → aircrack.
+# Requires pentrain_wifi_lab first (roles list order in quest.yaml).
+- name: hostapd config — corp-wifi WPA2 on wlan0
+  ansible.builtin.copy:
+    dest: /etc/hostapd/lab.conf
+    content: |
+      interface=wlan0
+      driver=nl80211
+      ssid=corp-wifi
+      hw_mode=g
+      channel=6
+      wpa=2
+      wpa_passphrase=sunshine2024
+      wpa_key_mgmt=WPA-PSK
+      rsn_pairwise=CCMP
+    mode: "0600"
+
+- name: legitimate client profile (constant rejoin traffic to deauth)
+  ansible.builtin.copy:
+    dest: /etc/wpa_supplicant/lab-client.conf
+    content: |
+      network={
+          ssid="corp-wifi"
+          psk="sunshine2024"
+          scan_ssid=1
+      }
+    mode: "0600"
+
+- name: bring the lab AP + client up with systemd
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pentrain-wifi-ap.service
+    content: |
+      [Unit]
+      Description=PenTrAIn corp-wifi lab AP + client
+      After=pentrain-hwsim.service
+      Requires=pentrain-hwsim.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'ip link set wlan0 up; ip link set wlan2 up'
+      ExecStart=/usr/sbin/hostapd -B /etc/hostapd/lab.conf
+      ExecStart=/sbin/wpa_supplicant -B -i wlan2 -c /etc/wpa_supplicant/lab-client.conf
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+
+- name: enable + start lab AP
+  ansible.builtin.systemd:
+    name: pentrain-wifi-ap
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: wifi-admin account — password is the AP passphrase
+  ansible.builtin.user:
+    name: wifi-admin
+    shell: /bin/bash
+    password: "{{ 'sunshine2024' | password_hash('sha512') }}"
+  no_log: true
+
+- name: flag dir
+  ansible.builtin.file:
+    path: /home/wifi-admin
+    state: directory
+    owner: wifi-admin
+    mode: "0755"

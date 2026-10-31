@@ -1,0 +1,77 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: wifi-t3-exam
+  track: wifi
+  tier: 3
+  title: "Exam: Dual Band"
+  version: 1
+  exam: true
+display:
+  tagline: "Tier-3 capstone — two WPA2 networks up at once. One falls to PMKID, the other needs the full handshake cycle. Report both."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 60
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: wifilab01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 25
+      roles: [pentrain_wifi_lab, pentrain_wifi_t3_exam]
+flags:
+  - id: exam-report
+    name: "exam-report.txt holds both PSKs"
+    kind: command
+    points: 200
+    command:
+      vm: wifilab01
+      cmd: "test -f /home/wifi/exam-report.txt && grep -q 'spring' /home/wifi/exam-report.txt && grep -q 'pentest-rocks' /home/wifi/exam-report.txt"
+  - id: mgmt-flag
+    name: "mgmt-admin flag — /home/mgmt-admin/flag.txt"
+    kind: file
+    points: 300
+    vm: wifilab01
+    file_path: /home/mgmt-admin/flag.txt
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Two BSSIDs live: mgmt-wifi (ch6) and exec-wifi (ch11). mgmt emits PMKID on request (clientless); exec has a connected client to deauth."
+  - id: h2
+    cost: 40
+    stage: exploit
+    text: "Parallel work: hcxdumptool on mgmt-wifi for the PMKID while airodump sits on exec-wifi's channel — then one deauth, one crack each."
+  - id: h3
+    cost: 60
+    stage: post
+    text: "Report format: name both networks and both recovered keys in /home/wifi/exam-report.txt. The mgmt-admin account takes the mgmt passphrase."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-survey
+      name: "Mapped both networks"
+      detect: { command_match: "(airodump|mgmt-wifi|exec-wifi)" }
+      hint_after_s: 600
+    - id: cp-pmkid
+      name: "PMKID harvested"
+      detect: { command_match: "(hcxdump|22000|pmkid)" }
+      hint_after_s: 480
+    - id: cp-both
+      name: "Both PSKs recovered"
+      detect: { command_match: "(hashcat|aircrack|exam-report)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 120, nudge_s: 420, hint_s: 780 }
+scoring:
+  base: 750
+  time_bonus_max: 300
+  par_s: 3000
+  takeover_cost: 200

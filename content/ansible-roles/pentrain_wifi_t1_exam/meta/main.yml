@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  role_name: pentrain_wifi_t1_exam
+  author: pentrain
+  description: "wifi-t1 exam: second capture backup-wifi + survey + ssh gate"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]

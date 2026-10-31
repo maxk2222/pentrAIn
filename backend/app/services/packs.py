@@ -132,6 +132,8 @@ TRACK_TITLES = {
     "network-recon": ("Network & Recon", "Discovery, enumeration, segmentation and pivoting across routed networks.", "radar", 30),
     "active-directory": ("Active Directory", "Domain attacks from a single DC to multi-forest corporate networks.", "building", 40),
     "forensics": ("Forensics", "Log triage, disk artifacts and full intrusion timelines on attacked ranges.", "search", 50),
+    "scripting": ("Scripting & Automation", "Bash and Python glue code, automation and tooling for pentesters.", "terminal", 60),
+    "wifi": ("Wireless", "WiFi recon, handshake capture and cracking on a simulated radio lab.", "wifi", 70),
 }
 
 
@@ -155,7 +157,9 @@ def validate_quest_dir(qdir: Path) -> tuple[QuestYaml | None, list[str]]:
         errs.append(f"{qdir.name}: missing mandatory defense.md")
     if spec.coach.briefing_ref and not (qdir / spec.coach.briefing_ref).exists():
         errs.append(f"{qdir.name}: coach.briefing_ref {spec.coach.briefing_ref} not found")
-    vm_names = {v.name for v in spec.topology.vms}
+    # "kali" is a valid flag target for scripting quests — the trainee console
+    # VM is resolved to session.kali_vmid at flag check/injection time
+    vm_names = {v.name for v in spec.topology.vms} | {"kali"}
     windows_vms = {v.name for v in spec.topology.vms if v.windows or not v.linux}
     for v in spec.topology.vms:
         if v.ip_last_octet == 254:
