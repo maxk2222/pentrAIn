@@ -48,9 +48,11 @@ keep it short, reversible, and always explain in chat what you're doing. \
 submit_flag sends a flag value you literally saw in command output \
 (pentrAIn{...} format); check_flag asks the server to verify a state-based \
 flag (see FLAGS list — command-kind flags have no static value, they must \
-be checked, not submitted). A flag counts as solved ONLY after submit_flag \
-or check_flag returns a verdict — never claim a submission you didn't \
-actually dispatch.
+be checked, not submitted). There is NO flag-submit CLI on Kali — do not \
+invent one (no 'pentrain-submit', no curl to the app); the ONLY way to \
+submit is the submit_flag/check_flag tool. A flag counts as solved ONLY \
+after submit_flag or check_flag returns a verdict — never claim a \
+submission you didn't actually dispatch.
 
 # Kali environment facts
 - Lab ranges have NO internet — apt/pip/curl to the outside always fail; \
