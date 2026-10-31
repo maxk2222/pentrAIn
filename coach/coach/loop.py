@@ -541,17 +541,22 @@ class SessionCoach:
             await log.ainfo("llm actions", session=self.sid,
                             proactive=proactive,
                             actions=[a.get("type") for a in resp["actions"]])
-            for a in resp["actions"]:
-                # model "reasoning notes" become working memory for later turns
-                if a.get("type") == "none" and a.get("reason"):
-                    self.state.notes.append(str(a["reason"])[:300])
-                    self.state.notes = self.state.notes[-8:]
-                did, res = await self._dispatch(a, proactive=proactive)
-                spoke |= did
-                if cid := a.get("_call_id"):
-                    call_results[cid] = res
-                if did and a.get("type") in ("exec_in_kali", "submit_flag", "check_flag"):
-                    worked = True
+            try:
+                for a in resp["actions"]:
+                    # model "reasoning notes" become working memory for later turns
+                    if a.get("type") == "none" and a.get("reason"):
+                        self.state.notes.append(str(a["reason"])[:300])
+                        self.state.notes = self.state.notes[-8:]
+                    did, res = await self._dispatch(a, proactive=proactive)
+                    spoke |= did
+                    if cid := a.get("_call_id"):
+                        call_results[cid] = res
+                    if did and a.get("type") in ("exec_in_kali", "submit_flag",
+                                                 "check_flag"):
+                        worked = True
+            finally:
+                # whatever happened mid-dispatch — no stale 'working' chip
+                await self.client.send_activity(self.sid, active=False)
             if worked:
                 # real work happened — this turn is progress, not an
                 # unanswered nudge; don't let it feed the backoff streak
@@ -672,6 +677,8 @@ class SessionCoach:
                         return spoke, "error: empty command"
                     # mark BEFORE the call so telemetry echo is recognized as ours
                     self._coach_cmds.append((cmd, time.time()))
+                    await self.client.send_activity(
+                        self.sid, f"typing `{cmd[:110]}` in Kali")
                     res = await self.client.exec_in_kali(self.sid, cmd)
                     if res.get("status") == "denied" or res.get("error"):
                         # never actually typed → a stale entry could mislabel a
@@ -696,6 +703,7 @@ class SessionCoach:
                 val = (a.get("value") or a.get("content") or "").strip()[:256]
                 if not val:
                     return spoke, "error: empty flag value"
+                await self.client.send_activity(self.sid, "submitting flag…")
                 res = await self.client.submit_flag(self.sid, val)
                 verdict = ("correct — flag solved" if res.get("correct")
                            else f"rejected ({res.get('error') or 'wrong value'})")
@@ -715,6 +723,7 @@ class SessionCoach:
                 key = (a.get("flag_key") or "").strip()[:64]
                 if not key:
                     return spoke, "error: empty flag_key"
+                await self.client.send_activity(self.sid, f"verifying `{key}`…")
                 res = await self.client.check_flag(self.sid, key)
                 verdict = ("verified — flag solved" if res.get("correct")
                            else f"not satisfied ({res.get('error') or 'check failed'})")
@@ -745,6 +754,7 @@ class SessionCoach:
                 result = "rate_limited"
             else:
                 self._last_capture_ts = time.time()
+                await self.client.send_activity(self.sid, "analyzing screen…")
                 res = await self.client.capture_screen(self.sid)
                 if res.get("png_b64"):
                     self.state.screen_desc = await self._describe_screen(res["png_b64"])
