@@ -137,6 +137,11 @@ class PveClient:
         q = urllib.parse.urlencode({"port": port, "vncticket": vncticket})
         return f"{host}/api2/json/nodes/{self.creds.node}/qemu/{vmid}/vncwebsocket?{q}"
 
+    def auth_headers(self) -> dict[str, str]:
+        """API-token header for raw connections (vncwebsocket) that bypass the
+        shared httpx client — without it pveproxy 401s the WS handshake."""
+        return {"Authorization": f"PVEAPIToken={self.creds.token_id}={self.creds.token_secret}"}
+
     def ssl_context(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context()
         if not self.creds.verify_tls:

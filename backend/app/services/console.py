@@ -85,6 +85,7 @@ async def proxy_console(db: AsyncSession, ws: WebSocket, session_id: int) -> Non
     try:
         async with websockets.connect(
             upstream_url, ssl=engine.pve.ssl_context(),
+            additional_headers=engine.pve.auth_headers(),
             subprotocols=["binary"], max_size=16 * 1024 * 1024,
             ping_interval=None,
         ) as upstream:
