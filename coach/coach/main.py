@@ -95,11 +95,24 @@ class CoachService:
             await log.ainfo("coach detached", session=sid)
 
 
+async def _task_watchdog() -> None:
+    """Dump every asyncio task's stack every 5 min — thread-level
+    faulthandler only shows an idle eventloop's select(), hiding the actual
+    wedged await."""
+    while True:
+        await asyncio.sleep(300)
+        tasks = [t for t in asyncio.all_tasks() if not t.done()]
+        await log.ainfo("task watchdog", alive=len(tasks))
+        for t in tasks:
+            await log.ainfo(
+                "task stack", task=t.get_name(),
+                stack=" | ".join(
+                    f"{f.f_code.co_name}:{f.f_lineno}"
+                    for f in t.get_stack(limit=6)))
+
+
 async def amain() -> None:
-    import faulthandler
-    # dump all task stacks every 5 min — if the loop ever wedges, the logs
-    # show exactly which await it's sitting on
-    faulthandler.dump_traceback_later(300, repeat=True)
+    asyncio.create_task(_task_watchdog())
     svc = CoachService()
     await svc._config(force=True)
     await svc.run()

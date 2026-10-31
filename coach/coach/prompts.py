@@ -127,6 +127,9 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
     parts = [
         f"QUEST: {q['title']} (track={q['track']} tier={q['tier']})",
         f"SESSION: state={s['state']} autonomy={s['autonomy_level']} coach_on={s['coach_enabled']}",
+        *([("INTERNET: YES — kali has a LAN uplink (second nic, DHCP) so "
+            "apt/pip/curl DO work this session; range targets stay isolated")]
+          if s.get("kali_internet") else []),
         f"BRIEF: {q.get('briefing', '')[:1200]}",
         f"COACH_NOTES: {q.get('coach_context', '')[:800]}",
         f"TRAINEE_LEVEL(track): {level}",

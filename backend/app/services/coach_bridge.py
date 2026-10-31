@@ -80,6 +80,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             "autonomy_level": session.autonomy_level,
             "coach_enabled": session.coach_enabled,
             "kali_vmid": session.kali_vmid,
+            "kali_internet": bool(session.kali_internet),
             "started_at": session.started_at.isoformat() if session.started_at else None,
             "ready_at": session.ready_at.isoformat() if session.ready_at else None,
             "deploy_tail": (session.deploy_log or "")[-600:],
@@ -272,7 +273,10 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                 "exitcode": 0, "visible": True}
 
     # pane busy? typed lines would buffer into the foreground process's stdin
-    # and never reach the shell — tell the caller to free the pane first
+    # and never reach the shell — tell the caller to free the pane first.
+    # Two checks: (a) a non-shell foreground command, (b) a continuation
+    # prompt (heredoc/quote) — pane_current_command stays 'zsh' while the
+    # shell waits for a delimiter, so typed lines land as heredoc input.
     fg = await engine.pve.agent_exec_sh(
         kali_vmid,
         f"tmux display-message -p -t {COACH_TMUX} '#{{pane_current_command}}'",
@@ -283,6 +287,16 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                 "err": (f"pane busy: '{fg_cmd}' is still running — send "
                         "'C-c' via exec_in_kali to interrupt it, or wait "
                         "for it to finish")}
+    tail = await engine.pve.agent_exec_sh(
+        kali_vmid,
+        f"tmux capture-pane -pt {COACH_TMUX} 2>/dev/null | grep -v '^$' "
+        "| tail -1", timeout_s=10)
+    last = (tail.get("out") or "").strip()
+    if re.search(r"(heredoc|dquote|quote|pipe)?>\s*$", last) and last != ">":
+        return {"out": "", "visible": True, "busy": True, "exitcode": None,
+                "err": (f"pane busy: shell awaits more input ({last[-40:]!r} "
+                        "— unfinished heredoc/quote?) — send 'C-c' via "
+                        "exec_in_kali to reset the prompt")}
 
     marker = f"PTN{secrets.token_hex(5)}"
     # three SEPARATE key sends — appending `; echo …` to the command line broke
@@ -303,8 +317,9 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
         f"tmux send-keys -t {COACH_TMUX} {shlex.quote(f'echo {marker}B:$?')} Enter",
         timeout_s=10)
 
-    # -J joins wrapped lines so each typed line maps to exactly one pane line
-    pane_cmd = (f"tmux capture-pane -ptJ {COACH_TMUX} -S -400 2>/dev/null "
+    # -J joins wrapped lines so each typed line maps to exactly one pane line;
+    # flag order matters — `-ptJ` parses as `-t J` and the capture fails
+    pane_cmd = (f"tmux capture-pane -pJ -t {COACH_TMUX} -S -400 2>/dev/null "
                 "| tail -200")
     # only real marker *output* lines count: `PTN…A` alone, `PTN…B:<digits>`
     begin = re.compile(rf"{re.escape(marker)}A\s*$")
@@ -324,16 +339,32 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
             if ai >= 0 and bi >= 0:
                 break
         if ai >= 0 and bi >= 0:
-            # after A's output line: n_cmd_lines typed command lines, then the
-            # real output, then the typed `echo PTN…B` line at bi - 1
-            out = "\n".join(ln for ln in
-                            lines[ai + 1 + n_cmd_lines:bi - 1]
-                            if ln.strip())[-4000:]
+            # typed command lines sit between PTNA and the output — their
+            # exact pane-line count is unreliable (multi-line zsh prompt,
+            # heredoc `>` prefixes). Anchor on the typed text itself: the
+            # last typed line ends with the command's own tail.
+            cmd_tail = command.split("\n")[-1][-60:].rstrip()
+            typed_end = next(
+                (i for i in range(bi - 2, ai, -1)
+                 if cmd_tail and lines[i].rstrip().endswith(cmd_tail)),
+                ai + n_cmd_lines)
+            # last line before the typed `echo PTN…B` is the first half of
+            # the next two-line zsh prompt (`(host)-[cwd]`) — drop it
+            out_lines = [ln for ln in lines[typed_end + 1:bi - 1]
+                         if ln.strip() and marker not in ln]
+            if out_lines and re.search(r"\)-\[[^\]]*\]\s*$", out_lines[-1]):
+                out_lines.pop()
+            out = "\n".join(out_lines)[-4000:]
             return {"out": out, "err": "", "exitcode": exitcode, "visible": True}
         if session_id and ai >= 0:
             # live output-so-far: everything after the typed command lines,
             # marker text hidden so the sentinels never reach the chat
-            tail = "\n".join(ln for ln in lines[ai + 1 + n_cmd_lines:]
+            cmd_tail = command.split("\n")[-1][-60:].rstrip()
+            typed_end = next(
+                (i for i in range(len(lines) - 1, ai, -1)
+                 if cmd_tail and lines[i].rstrip().endswith(cmd_tail)),
+                ai + n_cmd_lines)
+            tail = "\n".join(ln for ln in lines[typed_end + 1:]
                              if ln.strip() and marker not in ln)[-3000:]
             if tail != last_tail:
                 last_tail = tail

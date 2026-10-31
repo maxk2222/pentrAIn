@@ -149,6 +149,16 @@ class SessionCoach:
             self.state.last_activity_ts = self.state.last_progress_ts
         self._ready.set()
         self._task = asyncio.create_task(self._run())
+        # a silently-dead run task is the worst failure mode — log its fate
+        def _on_run_done(t: asyncio.Task) -> None:
+            try:
+                exc = t.exception()
+            except asyncio.CancelledError:
+                exc = "cancelled"
+            asyncio.get_event_loop().call_soon(
+                log.info, "coach run task ended", session=self.sid,
+                outcome=repr(exc))
+        self._task.add_done_callback(_on_run_done)
         await log.ainfo("coach attached", session=self.sid,
                         autonomy=self.state.autonomy_level)
         await self._maybe_welcome()
@@ -275,7 +285,12 @@ class SessionCoach:
                 if time.monotonic() >= self._next_reflect:
                     await self._reflect_tick(reflect)
             except TimeoutError:
-                await self._reflect_tick(reflect)
+                try:
+                    await self._reflect_tick(reflect)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    await log.aexception("reflect tick failed", error=str(e))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
