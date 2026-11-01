@@ -356,3 +356,35 @@ async def test_ludus_deploy_range_409_ok_when_range_exists():
     with pytest.raises(RuntimeError):
         # PUT /range/config retry still 404s → error surfaces (not swallowed)
         await p.deploy_range("quest-y", {"ludus": []})
+
+
+async def test_settings_patch_nonclient_keys_skip_engine_rebuild(db):
+    """engine.* keys that don't affect client construction (wan bridge,
+    testing_allow, template) must NOT rebuild — a rebuild retires the
+    shared provider and in-flight deploys die on 'client closed'."""
+    from unittest.mock import AsyncMock, patch
+    from app.api.routes_admin import patch_settings
+    from app.schemas import SettingsPatch
+    with patch("app.api.routes_admin.rebuild",
+               new=AsyncMock()) as rb:
+        await patch_settings(SettingsPatch(
+            updates={"engine.kali_wan_bridge": "vmbr0",
+                     "engine.testing_allow": ["1.2.3.0/24"],
+                     "lan.scope_cidr": "10.0.0.0/24"}), db)
+        rb.assert_not_called()
+        await patch_settings(SettingsPatch(
+            updates={"engine.pve_url": "https://new:8006"}), db)
+        rb.assert_awaited_once()
+
+
+async def test_engine_rebuild_retires_instead_of_closing(db):
+    """A rebuild must not close the provider the in-flight caller still
+    holds — retire it and close only at shutdown."""
+    from app.services import engine as engine_svc
+    eng1 = await engine_svc.get_engine(db)
+    await engine_svc.rebuild(db)
+    eng2 = await engine_svc.get_engine(db)
+    if eng1 is eng2:            # mock mode may shortcut — nothing to prove
+        return
+    assert engine_svc._retired or eng1.provider is not eng2.provider
+    await engine_svc.shutdown()

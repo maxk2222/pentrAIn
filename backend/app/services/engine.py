@@ -29,6 +29,18 @@ class Engine:
 _engine: Engine | None = None
 _engine_key: tuple | None = None
 _engine_lock = asyncio.Lock()
+# settings that actually change client construction — an engine.* patch
+# touching anything else (kali_wan_bridge, testing_allow, …) needs no
+# rebuild at all, and rebuilding must NEVER close the live provider under
+# in-flight deploys (they hold the reference and die on "client closed").
+CLIENT_KEYS = frozenset({
+    "engine.mode", "engine.pve_url", "engine.pve_node",
+    "engine.pve_token_id", "engine.pve_token_secret",
+    "engine.ludus_url", "engine.ludus_api_key", "engine.pve_verify_tls",
+})
+# providers retired by a rebuild — closed at shutdown or when the list
+# overruns, never eagerly (in-flight calls keep them usable meanwhile)
+_retired: list = []
 
 
 async def _build(db: AsyncSession) -> Engine:
@@ -72,9 +84,13 @@ async def get_engine(db: AsyncSession) -> Engine:
         if _engine is not None and _engine_key == key:
             return _engine
         if _engine is not None:
-            import contextlib
-            with contextlib.suppress(Exception):
-                await _engine.provider.close()  # type: ignore[attr-defined]
+            # retire, don't close: an in-flight _deploy/abort still holds
+            # this provider — aclose() here kills it mid-request
+            # (session 40 died on "client has been closed" after a
+            # settings patch rebuilt the engine mid-deploy)
+            _retired.append(_engine.provider)
+            if len(_retired) > 3:
+                await _close_retired()
         _engine = await _build(db)
         _engine_key = key
         await log.ainfo("engine built", mode=_engine.mode)
@@ -85,3 +101,22 @@ async def rebuild(db: AsyncSession) -> Engine:
     global _engine_key
     _engine_key = None
     return await get_engine(db)
+
+
+async def _close_retired() -> None:
+    import contextlib
+    for p in _retired:
+        with contextlib.suppress(Exception):
+            await p.close()
+    _retired.clear()
+
+
+async def shutdown() -> None:
+    """App lifespan teardown — close the live engine AND retired providers."""
+    global _engine, _engine_key
+    if _engine is not None:
+        import contextlib
+        with contextlib.suppress(Exception):
+            await _engine.provider.close()  # type: ignore[attr-defined]
+    _engine, _engine_key = None, None
+    await _close_retired()

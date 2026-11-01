@@ -34,7 +34,7 @@ from ..services import hoststats as hoststats_svc
 from ..services import packs as packs_svc
 from ..services import settings as settings_svc
 from ..services import telemetry as telemetry_svc
-from ..services.engine import get_engine, rebuild
+from ..services.engine import CLIENT_KEYS, get_engine, rebuild
 from ..services.events import publish_session
 from .deps import check_password, get_current_user, hash_password, make_token, require_coach
 
@@ -97,7 +97,10 @@ async def patch_settings(body: SettingsPatch, db: AsyncSession = Depends(get_db)
         await settings_svc.patch_settings(db, body.updates)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    if any(k.startswith(("engine.", "pve", "ludus")) for k in body.updates):
+    # only client-construction keys force an engine rebuild — patching e.g.
+    # kali_wan_bridge must not touch the shared provider at all, and a
+    # rebuild must never happen under an in-flight deploy
+    if any(k in CLIENT_KEYS for k in body.updates):
         await rebuild(db)
     return await settings_svc.all_settings(db)
 

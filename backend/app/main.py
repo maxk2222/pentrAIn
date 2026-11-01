@@ -48,11 +48,9 @@ async def lifespan(app: FastAPI):
     from .services import terminal as terminal_svc
     terminal_svc.start()
     yield
-    # shutdown: close engine http clients so no connections leak
+    # shutdown: close engine http clients (live + retired) so none leak
     from .services import engine as engine_svc
-    if engine_svc._engine is not None:
-        with contextlib.suppress(Exception):
-            await engine_svc._engine.provider.close()
+    await engine_svc.shutdown()
 
 
 def create_app() -> FastAPI:
