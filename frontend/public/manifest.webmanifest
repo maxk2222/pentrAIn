@@ -1,0 +1,14 @@
+{
+  "name": "pentrAIn",
+  "short_name": "pentrAIn",
+  "description": "Self-hosted pentest training platform — quests, a live AI coach, and a browser-based Kali on your own Proxmox.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b101a",
+  "theme_color": "#0b101a",
+  "icons": [
+    { "src": "/favicon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/favicon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

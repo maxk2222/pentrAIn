@@ -1,22 +1,29 @@
 # Ops runbook
 
-Day-2 operations for the pentrain-app stack (backend, coach, frontend, SQLite).
+Day-2 operations for the pentrain-app stack (backend, coach, frontend,
+SQLite). For symptom→fix lookup see [troubleshooting.md](troubleshooting.md).
 
 ## CLI
 
-`cli/pentrain` — thin wrapper, run from the repo checkout on the app host:
+`cli/pentrain` — thin wrapper, run from a repo checkout on the app host:
 
+```text
+doctor         full environment diagnostic — start here
+up|down|logs   docker compose lifecycle (engine/docker-compose.yml)
+build          rebuild images
+engine-status  provider health + resource caps
+pack-lint      scripts/lint_packs.py
+new-quest      scaffold a quest (+ --role)
+sync-packs     re-import content/packs into the DB
+install        run the Ansible installer
 ```
-pentrain doctor          # environment diagnostic — start here
-pentrain up|down|logs    # docker compose lifecycle (engine/docker-compose.yml)
-pentrain sync-packs      # re-import content/packs into the DB
-pentrain engine-status   # provider health + resource caps
-pentrain pack-lint       # scripts/lint_packs.py
-```
+
+`engine-status` and `sync-packs` send `PENTRAIN_TOKEN` when set — required
+once an admin password is configured.
 
 ## Logs
 
-```
+```bash
 docker compose -f engine/docker-compose.yml logs -f backend
 docker compose -f engine/docker-compose.yml logs -f coach
 ```
@@ -26,99 +33,102 @@ Useful signals: `coach attached`, `deploy finished`, `packs synced`,
 
 ## Stats page (`/stats`)
 
+![Stats](assets/screenshots/11-stats.png)
+
 Three panels:
 
-- **Engine host** — CPU/RAM/network/load time series, proxied live from PVE
+- **Engine host** — CPU/RAM/network/load time series proxied live from PVE
   `GET /nodes/{node}/rrddata` (`GET /api/engine/metrics?timeframe=hour|day|week|month`).
-  Mock engine → panel degrades to "unavailable", nothing is stored locally.
+  Mock engine → panel degrades to "unavailable"; nothing is stored locally.
 - **Session VMs** — live per-VM gauges (cpu, ram, balloon target) via
-  `GET /api/sessions/{id}/metrics` → `qemu/{vmid}/status/current`, 15s refresh.
+  `GET /api/sessions/{id}/metrics` → `qemu/{vmid}/status/current`, 15 s refresh.
 - **Coach LLM usage** — the coach posts a fire-and-forget row per request to
-  `POST /api/coach/llm-usage` (service token); `GET /api/llm/usage?days=N`
-  aggregates tokens/requests/latency per day plus the daily-budget fill level.
-  Rows live in the `llm_usage` table (~200B each, no retention job needed).
+  `POST /api/coach/llm-usage`; `GET /api/llm/usage?days=N` aggregates
+  tokens/requests/latency per day plus the daily-budget fill level. Rows live
+  in `llm_usage` (~200 B each, no retention job needed).
+- **Hoststats** — CPU temps/GPU/fans when `engine.hoststats_url` (or the
+  `:9100` default derived from `pve_url`) answers.
 
-Reasoning effort: the Settings dropdown is probed from the endpoint
-(`POST /api/llm/reasoning-efforts` sends an invalid effort and parses the
-"Supported values: …" reply — LM Studio/Qwen report `none,minimal,low,
-medium,high,xhigh`). Endpoints that ignore the field get the union fallback,
-marked "· defaults" in the UI.
+> [!TIP]
+> The reasoning-effort dropdown is probed from the endpoint:
+> `POST /api/llm/reasoning-efforts` sends an invalid effort and parses the
+> "Supported values: …" reply. Endpoints that ignore the field get the union
+> fallback, marked "· defaults" in the UI.
 
-## Common problems
+## Kali template builder
 
-**Coach is silent.**
-Check in order:
-1. `coach.enabled` in Settings, plus the session's coach toggle.
-2. `llm.base_url` / `llm.api_key` / `llm.model` — `llm call failed` in the
-   coach log means the endpoint is unreachable or rejected the request.
-3. Daily token budget (`llm.daily_token_budget`) — the coach announces once
-   in chat, then pauses.
-4. By design the coach does not comment on commands — it speaks on chat
-   messages, flags, checkpoints, and when the policy detects stuck/idle.
-   Silence during normal work is intended behavior.
+Settings → *Kali workspace* → **Template builder** — the guided way to bake a
+custom Kali:
 
-**Deploy hangs / fails.**
-Deploy logs stream into the session's Log tab. On a real engine check the
-Ludus API (`ludus` service + templates present, `ludus templates list`) —
-pentrAIn only orchestrates it. Mock mode always completes.
+```mermaid
+flowchart LR
+    A["pick base template"] --> B["build → full clone<br/>'pentrain-kali-builder'<br/>net0 on WAN bridge"]
+    B --> C["customize via web console<br/>tools · dotfiles · scripts"]
+    C --> D["finalize → VM → template"]
+    D --> E["engine.kali_template set<br/>future sessions use it"]
+    B -. "abandon → delete builder" .-> X([done])
+```
 
-**Console black / disconnected.**
-The console proxies Proxmox noVNC for the session's Kali VMID. If it dies
-after a reset, it reconnects automatically (new `ready_at` remounts the
-view); the ⟳ button forces a new ticket. Persistent failure → engine creds
-or the VMID changed under you (hard reset allocates a fresh range).
+- One builder VM at a time, tracked by `kali.builder_vmid`.
+- The builder VM lands on `engine.kali_wan_bridge` (default `vmbr0`) so it
+  has real internet for `apt`/tools — it is *not* in a range.
+- Console opens via the admin pipe (`/api/console/vm/{vmid}`).
+- Finalize converts to template and writes `engine.kali_template` — from
+  then on every new session's Kali clones *your* box instead of the
+  per-quest default.
 
-**No telemetry / checkpoints dead.**
-`pentrain-telemetried.service` on the Kali VM must be running
-(`systemctl status pentrain-telemetried`). The shell hook (`hook.sh`) logs
-commands; the daemon ships them to `/api/telemetry` with the session token.
+> [!WARNING]
+> Finalizing changes the template **all future sessions** inherit. Verify the
+> custom Kali once end-to-end (deploy → telemetry → console) before calling
+> it done. `abandon` is the clean rollback — it deletes the builder VM.
 
-**Coach replies arrive whole, not streamed.**
-`PENTRAIN_LLM_STREAM=false` or the LLM endpoint lacks SSE — the code falls
-back automatically; only perceived latency changes.
+## Kali internet toggle mechanics
 
-## Installer
+Session toolbar 📶 → `POST /api/sessions/{id}/internet`:
 
-- Full ansible output lands in `installer/logs/install.log` regardless of the
-  live status board. Re-run `./install.sh --verbose` for raw task dumps.
-- The installer is idempotent — re-running the same command resumes past
-  already-done tasks.
-- Non-interactive shells (CI, pipes) get plain output automatically; force it
-  with `PENTRAIN_UI=plain` or `NO_COLOR=1`.
+```mermaid
+sequenceDiagram
+    participant BE as Backend
+    participant PVE as Engine PVE
+    participant K as Session Kali
+    BE->>PVE: hot-plug net1 → kali_wan_bridge
+    BE->>PVE: QGA write /tmp/pentrain-netup.sh (ASCII only)
+    BE->>PVE: QGA exec "timeout 55 sh /tmp/pentrain-netup.sh"
+    Note over K: DHCP on net1 · drop range default route<br/>DNS via LAN · managed /etc/hosts for targets
+    BE-->>UI: {enabled:true, ip:LAN-IP}
+```
 
-## Windows / Active Directory quests
-
-The `ad-t*` quests need Windows templates that are **not** built by default:
-
-- Re-run the installer with `--with-templates`, or trigger the Ludus template
-  build manually — `win2022-server-x64-template` (and `win11-22h2-x64-template`
-  for `ad-t2`+ workstations). First build takes hours and tens of GB.
-- Deploy times are long: `est_deploy_min` on AD quests is honest (25–60 min).
-- Flag injection needs the **qemu guest agent** inside the Windows template —
-  stock Ludus Windows templates ship it. A failed inject shows up as
-  `flag <id> inject FAILED` in the session deploy log.
-- Windows quests only use `kind: file` flags (`C:\flags\*.txt`) — `kind:
-  command` checks run a POSIX shell and are rejected by the pack linter.
-- AD t3 (`ad-t3-kill-chain`) wants ~48G RAM — check the admin resource budget
-  or `check_unlock` keeps it locked.
+- Only **Kali** gets the uplink — target VMs stay on the isolated range /24.
+- Scripts go through the QGA **file-write API** (long inline exec payloads
+  wedge the virtio channel; non-ASCII content crashes pvedaemon's REST path).
+- On remove: `net1` detaches first, NetworkManager settles, then route/DNS/
+  hosts cleanup runs inside the guest.
+- `lan.scope_cidr` bounds what the coach may touch on your LAN (home-lab).
 
 ## Resets
 
-- **Soft reset** — Ludus snapshot rollback; fast; flags re-randomize
-  (`ExpectedFlag` rows are replaced, old values stop working).
-- **Hard reset** — range destroyed and redeployed; new VMIDs, new networks.
+| | Soft reset | Hard reset |
+|---|---|---|
+| Mechanism | Ludus snapshot rollback, all range VMs | Destroy + redeploy |
+| Flags | Re-randomized — `ExpectedFlag` rows replaced, old values dead | Re-randomized |
+| Identity | Same VMIDs/networks | Fresh range, new VMIDs |
+| Use | You broke a target | Range wedged / clean slate |
 
 ## Backup
 
-All platform state is `pentrain-data` volume → `/data/pentrain.db` (SQLite).
-Stop the stack, copy the file. User progress, scores, settings and chat
-history live there; ranges are disposable by design.
+All platform state is the `pentrain-data` volume → `/data/pentrain.db`
+(SQLite). Stop the stack, copy the file. User progress, scores, settings and
+chat history live there; ranges are disposable by design.
 
-## Upgrading content
+> [!IMPORTANT]
+> Back up `PENTRAIN_APP_SECRET` alongside the DB — it seeds all flag HMAC
+> derivations. Losing it invalidates flag validation for in-flight sessions.
 
-Edit packs → `pentrain pack-lint` → `pentrain sync-packs` (or the Settings
-"Sync packs" button). Changed `quest.yaml` applies to *new* sessions only —
-running sessions keep their deploy-time snapshot of the definition.
+## Upgrading
+
+Pull → `pentrain build` → `pentrain up`. DB migrations run at backend start.
+Changed `quest.yaml` applies to *new* sessions only — running sessions keep
+their deploy-time snapshot.
 
 ## Rolling out new quests
 
@@ -129,10 +139,10 @@ New quests ship two artifacts that must land in different places:
    `pentrain sync-packs`. New quests appear in the library immediately;
    progression/exam gates are enforced at session start.
 2. **Roles** — `content/ansible-roles/` live on the **PVE host**, not the
-   app VM. Ludus only knows roles that were registered with it:
+   app VM. Ludus only knows roles registered with it:
 
    ```bash
-   # on the PVE host (e.g. ssh root@192.168.3.95)
+   # on the PVE host
    rsync -a content/ansible-roles/pentrain_<name>/ /opt/pentrain/ansible-roles/pentrain_<name>/
    for r in /opt/pentrain/ansible-roles/pentrain_*/; do
      ludus ansible role add -d "$r" -g
@@ -140,41 +150,58 @@ New quests ship two artifacts that must land in different places:
    ludus ansible roles list | grep pentrain    # verify registration
    ```
 
-   The installer does exactly this on each run — re-running the installer
-   (or just this loop) is the supported resync path. Every role needs
-   `tasks/main.yml` + `meta/main.yml` or Ludus refuses it; the pack linter
-   fails early when a referenced role dir is missing.
-3. Smoke-test one new quest end-to-end before announcing it (deploy →
-   flag inject → submit → soft reset). Deploy logs land in the session's
-   Log tab.
+   The installer does exactly this on each run — re-running it (or just the
+   loop) is the supported resync path. Every role needs `tasks/main.yml` +
+   `meta/main.yml` or Ludus refuses it; the pack linter fails early when a
+   referenced role dir is missing.
+3. Smoke-test one new quest end-to-end before announcing it (deploy → flag
+   inject → submit → soft reset). Deploy logs land in the session's Log tab.
 
 ### Exam quests
 
-`meta.exam: true` quests appear in the library with an **EXAM** badge and
-unlock only after *all* teaching quests of that track+tier are solved.
-Nothing extra to deploy — the gate is backend logic. AD exams
-(`ad-t1-exam` … `ad-t3-exam`) reuse the teaching roles plus small
-`pentrain_ad_tN_exam*` roles — same template requirements as the
-corresponding tier (see "Windows / Active Directory quests" above).
+`meta.exam: true` quests render an **EXAM** badge and unlock only after *all*
+teaching quests of that track+tier are solved. Nothing extra to deploy — the
+gate is backend logic. AD exams reuse the teaching roles plus small
+`pentrain_ad_tN_exam*` roles — same template requirements as their tier.
+
+## Windows / Active Directory quests
+
+The `ad-*` quests need Windows templates that are **not** built by default:
+
+- Re-run the installer with `--with-templates`, or trigger the Ludus template
+  build manually — `win2022-server-x64-template` (and
+  `win11-22h2-x64-template` for `ad-t2`+ workstations). First build takes
+  hours and tens of GB.
+- Deploy times are long: `est_deploy_min` on AD quests is honest (25–60 min).
+- Flag injection needs the **QEMU guest agent** inside the Windows template —
+  stock Ludus Windows templates ship it. A failed inject shows up as
+  `flag <id> inject FAILED` in the deploy log.
+- Windows quests only use `kind: file` flags (`C:\flags\*.txt`) —
+  `kind: command` checks run a POSIX shell and are rejected by the linter.
+- AD t3 (`ad-t3-kill-chain`) wants ~48 G RAM — check the resource budget or
+  `check_unlock` keeps it locked.
 
 ## Wireless (hwsim) labs
 
-The `wifi-*` quests simulate 802.11 **inside the target VM** using the
-kernel's `mac80211_hwsim` module — no physical radios, no cross-VM
-wireless (hwsim phys are kernel-local). Layout per quest:
+The `wifi-*` quests simulate 802.11 **inside the target VM** via
+`mac80211_hwsim` — no physical radios, no cross-VM wireless (hwsim phys are
+kernel-local). Layout:
 
 - `pentrain_wifi_lab` (dependency of every wifi role) loads
-  `mac80211_hwsim` at boot via `/etc/modules-load.d` + modprobe, installs
-  `hostapd`/`aircrack-ng`/`hcxdumptool`/`hashcat`/`iw`, and drops lab
-  users + wordlists under `/opt/wifi`.
+  `mac80211_hwsim` at boot, installs `hostapd`/`aircrack-ng`/`hcxdumptool`/
+  `hashcat`/`iw`, and drops lab users + wordlists under `/opt/wifi`.
 - Quest roles spawn hostapd/wpa_supplicant pairs on the virtual phys —
   `wlan0`+ run the networks, `wlan1` is the trainee's attack interface.
 - Trainees reach the lab by SSH from Kali (`wifi` user, creds in the
   briefing); attack tooling lives on the lab VM itself.
 - Packaged captures (`files/*.cap`) are REAL hwsim-generated handshakes —
-  regenerate with `scripts/make_wifi_handshake.sh <ssid> <psk> <out>`
-  on a host that has hwsim + the wireless tools (PVE host works); validate
-  with `aircrack-ng` before committing.
-- Cleanup: ranges are destroyed whole, but if you run the generator on a
-  shared host, kill leftover `hostapd`/`wpa_supplicant`/`airodump-ng` and
-  `modprobe -r mac80211_hwsim` afterwards.
+  regenerate with `scripts/make_wifi_handshake.sh <ssid> <psk> <out>` on a
+  host with hwsim + wireless tools; validate with `aircrack-ng` before
+  committing.
+- Cleanup: ranges are destroyed whole, but on a shared host kill leftover
+  `hostapd`/`wpa_supplicant`/`airodump-ng` and `modprobe -r mac80211_hwsim`.
+
+## Common problems
+
+See [troubleshooting.md](troubleshooting.md) — coach silence, deploy hangs,
+console issues, telemetry gaps, installer quirks.

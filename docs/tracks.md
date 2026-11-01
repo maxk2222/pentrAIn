@@ -1,0 +1,184 @@
+# Tracks & quests
+
+**55 quests across 8 tracks**, organized in tiers 1–3. Every quest ships a
+briefing, coach checkpoints, staged hints and a `defense.md` (what broke, how
+to detect it, how to fix it).
+
+![Quest library](assets/screenshots/04-library.png)
+
+## Progression rules
+
+```mermaid
+flowchart TD
+    T1["tier 1 quests — always open"] -->|"solve ANY one"| T2["tier 2 quests"]
+    T2 -->|"solve ANY one"| T3["tier 3 quests"]
+    T1all["ALL tier-1 quests solved"] --> E1["tier-1 EXAM"]
+    T2all["ALL tier-2 quests solved"] --> E2["tier-2 EXAM"]
+    T3all["ALL tier-3 quests solved"] --> E3["tier-3 EXAM"]
+    E1 -.->|"never counts as predecessor"| T2
+```
+
+- **Tier N quest** unlocks when **any** non-exam quest of tier N−1 in the same
+  track is solved.
+- **Exam** (`meta.exam: true`, **EXAM** badge) unlocks when **every** teaching
+  quest of its track+tier is solved — the capstone for that tier.
+- Exams never count as tier predecessors — solving the T1 exam alone does not
+  open T2.
+- A **resource budget** (Settings → `resources.max_*`) additionally locks
+  quests your engine can't fit.
+
+## The tracks
+
+### 🐧 Linux Fundamentals — `linux-fundamentals` (8)
+
+Host services, misconfigurations, privilege escalation — guided basics to
+multi-host chains.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| First Foothold | 1 | Weak SSH creds → sudo misconfiguration |
+| Sticky Bits | 1 | SUID binary reads any file as root |
+| **Exam: The Onboarding Box** | 1 | Loot → shell → one SUID climb, no walkthrough |
+| Privilege Chains | 2 | Leaked creds, GTFOBins sudo, writable cron — pick a route |
+| Wildcard | 2 | `tar *` in root's cron — filenames are arguments |
+| **Exam: The Maintenance Window** | 2 | Two privesc paths, find at least one |
+| The Pivot | 3 | Web host is the only path to the DB — pivot through |
+| **Exam: Supply Chain** | 3 | Three hosts deep, creds leak at every hop |
+
+### 🌐 Web AppSec — `web-appsec` (11)
+
+OWASP vulnerability classes from basics to chained auth-bypass.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Damn Vulnerable | 1 | DVWA: LFI + uploads |
+| Trusting Query | 1 | SQLi login bypass → data extraction |
+| Committed | 1 | `.git` deployed to prod, "removed" credentials |
+| **Exam: The Leaky Portal** | 1 | Source disclosure → shell |
+| Juice Heist | 2 | Juice Shop recon + ftp easter egg + admin section |
+| Gallery | 2 | Upload blacklist + MIME trust → www-data → root |
+| Pressing Matters | 2 | WordPress + wpscan → theme editor → flag |
+| **Exam: The Intranet** | 2 | Login bypass + upload bypass + shell in one app |
+| Broken Trust | 3 | SSRF into an internal API |
+| Signed & Confused | 3 | JWT secret → IDOR → admin |
+| **Exam: The Reporting API** | 3 | JWT + IDOR + API → root shell |
+
+### 📡 Network & Recon — `network-recon` (8)
+
+Discovery, enumeration, segmentation, pivoting across routed networks.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| The Perimeter | 1 | Five open services, creds follow from enumeration |
+| Open Shares | 1 | Guest SMB share → runbook full of creds |
+| **Exam: Neighborhood Watch** | 1 | Enumerate everything → leaked creds → root |
+| Zone Out | 2 | AXFR giveaway, factory SNMP, anonymous TFTP |
+| Behind the Firewall | 2 | Second host only trusts the first — pivot |
+| **Exam: Perimeter Audit** | 2 | Edge box gossips; the target only listens to it |
+| Three Hops Deep | 3 | DMZ → app tier → data tier, chained pivots |
+| **Exam: Three Doors Down** | 3 | Every protocol from the tier pays off |
+
+### 🏢 Active Directory — `active-directory` (7)
+
+Domain attacks from a single DC to multi-forest corporate networks.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Domain Join | 1 | One DC, one roastable service account |
+| No Preauth | 1 | AS-REP roast without any credential |
+| **Exam: First Contact** | 1 | Kerberoast + AS-REP + SYSVOL loot |
+| Lateral Pressure | 2 | File server → workstation → DC, creds walk |
+| **Exam: The Corp Lan** | 2 | Full corp chain + a surprise roastable |
+| Enterprise | 3 | Flagship: 2 DCs, 2 workstations, nothing → Enterprise Admin |
+| **Exam: Domain Takeover** | 3 | The complete kill chain, timed |
+
+> [!WARNING]
+> AD quests need **Windows templates** (`win2022-server-x64-template`,
+> `win11-22h2-x64-template`) — built via `install.sh --with-templates` or a
+> manual Ludus template build (hours, tens of GB). T3 wants ~48 GB RAM.
+> Details: [ops.md — Windows / AD quests](ops.md#windows--active-directory-quests).
+
+### 🔍 Forensics — `forensics` (7)
+
+Log triage, disk artifacts, intrusion timelines on attacked ranges.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| The Break-In | 1 | Logs → intruder's stash → prove persistence |
+| Wiretap | 1 | Replay credentials straight out of a NIDS capture |
+| **Exam: Black Box** | 1 | One capture + one host → the trail |
+| Post Mortem | 2 | SQLi in access.log → webshell → exfil archive |
+| **Exam: Full Report** | 2 | The implant the attacker never mentioned |
+| Correlated | 3 | Three-host intrusion: edge → app → DB exfil |
+| **Exam: The Whole Incident** | 3 | Correlate web02 pop with the quiet db02 touch |
+
+### 💻 Scripting & Automation — `scripting` (7)
+
+Bash and Python glue code — the output artifact itself is often the flag
+(`vm: kali` command flags verify files *you* produced).
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Recon.sh | 1 | First recon script → machine-readable report |
+| **Exam: Report Generator** | 1 | One script, three data sources, one report |
+| Nonce Grinder | 2 | Proof-of-work token API — brute-force the PIN |
+| **Exam: Evidence Pipeline** | 2 | Pull capture → crack creds → land proof → flag |
+| Blind Pipe | 3 | Command injection in a diagnostics CGI — scripted |
+| Hands-Free Pivot | 3 | One script: upload bypass + cred theft + SSH pivot |
+| **Exam: Zero-Touch Vault** | 3 | The whole kill chain, zero clicks |
+
+### 📶 Wireless — `wifi` (6)
+
+802.11 labs simulated **inside the target VM** with `mac80211_hwsim` — no
+physical radios. You SSH from Kali into the lab VM (`wifi` user, creds in the
+briefing); attack tooling lives on the VM itself.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Captured Keys | 1 | Crack a packaged WPA handshake → AP admin |
+| **Exam: Backup Channel** | 1 | Second capture + site survey mismatch |
+| Live Air | 2 | Deauth a live client → handshake → crack PSK |
+| **Exam: Ops Channel** | 2 | Live WPA2 + encrypted config backup |
+| No Client Needed | 3 | PMKID leak + a rogue AP that shouldn't exist |
+| **Exam: Dual Band** | 3 | Two networks: PMKID + full handshake cycle |
+
+Packaged captures (`files/*.cap`) are real hwsim-generated handshakes —
+regeneration: [ops.md — wireless labs](ops.md#wireless-hwsim-labs).
+
+### 🏠 Home Lab — `home-lab` (1)
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Home Field Advantage | 1 | Point Kali at **your own LAN**: discovery → enumeration → read-only access checks → evidence → assessment report |
+
+> [!CAUTION]
+> This track attacks your real network over the Kali `net1` uplink. The coach
+> enforces `lan.scope_cidr` (default: auto-detected /24 from the DHCP lease),
+> read-only probes, and a shared action budget — but the ROE is on you:
+> only devices you own, no DoS, no aggressive brute force.
+
+## Scoring
+
+```mermaid
+flowchart LR
+    B["base score<br/>scoring.base"] --> S
+    TB["+ time bonus<br/>(under par_s, decays to 0 at 2×par)"] --> S
+    F["+ flag points"] --> S
+    H["− hint costs"] --> S
+    T["− takeover_cost<br/>per L4 coach action"] --> S
+    S["final score → quest leaderboard"]
+```
+
+- **Base + flag points** — every flag carries `points`, the quest carries
+  `scoring.base`.
+- **Time bonus** — finishing under `par_s` adds up to `time_bonus_max`,
+  decaying linearly to zero at 2×par.
+- **Hint costs** — shown up front per hint (−25, −50, …).
+- **Takeover cost** — every coach-executed action at autonomy 4 costs
+  `takeover_cost` points.
+- **Solve style** — the leaderboard shows per-attempt aid chips:
+  `sheet`, `panel`, `coach`, `tips`, `hint`, `takeover`. Solving with no
+  assistance earns the `solo` badge.
+
+Per-quest and global leaderboards: **Leaderboard** page and
+`GET /api/quests/{id}/leaderboard`.

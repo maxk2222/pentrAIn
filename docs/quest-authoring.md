@@ -2,32 +2,40 @@
 
 A quest is a directory under `content/packs/<track>/<quest-id>/`:
 
-```
-linux-t1-first-foothold/
-├── quest.yaml        # the whole contract — topology, flags, hints, coach, scoring
-├── briefing.md       # shown in the UI before/during the quest (GFM)
-├── defense.md        # what broke, how to detect it, how to fix it
-├── cheatsheet.md     # optional — quick reference shown in the session side panel
-└── coach_context.md  # private briefing for the coach (never shown to the trainee)
+```mermaid
+flowchart TD
+    subgraph qdir["content/packs/linux-fundamentals/linux-t1-first-foothold/"]
+        Q["quest.yaml<br/><i>the contract — topology, flags,<br/>hints, coach, scoring</i>"]
+        B["briefing.md<br/><i>shown in UI — the mission</i>"]
+        D["defense.md<br/><i>what broke · detect · fix (mandatory)</i>"]
+        C["cheatsheet.md<br/><i>optional — session side panel</i>"]
+        CX["coach_context.md<br/><i>private coach briefing — never shown</i>"]
+        F["files/<br/><i>optional artifacts (pcaps, loot)</i>"]
+    end
+    subgraph roles["content/ansible-roles/"]
+        R["pentrain_*<br/><i>vulnerability setup, applied by Ludus</i>"]
+    end
+    Q -->|"roles: [pentrain_…]"| R
+    Q --> B & D & C & CX
 ```
 
 A track may also carry `content/packs/<track>/cheatsheet.md` — a shared
-reference card (tool syntax for the discipline) that the in-session panel
-renders under "Track reference" for every quest in the track.
+reference card rendered under "Track reference" for every quest in the track.
 
-Validate with `python scripts/lint_packs.py` — CI runs it on every push.
+Validate with `python scripts/lint_packs.py content/packs` — CI runs it.
 Missing `cheatsheet.md` is a warning, not an error.
 
 ## Cheatsheet conventions
 
-The cheatsheet panel sits next to the console and the coach — it is
-**reference, not hint**: tool syntax, host inventory, concepts worth
-remembering. Spoiler policy:
+The sheet panel sits next to the console and the coach — it is **reference,
+not hint**: tool syntax, host inventory, concepts worth remembering.
 
-- **Allowed**: commands with placeholders (`ssh -J user@<hop>`), which tools
-  apply, non-secret host descriptions, "watch for X" nudges.
-- **Not allowed**: flag paths, credentials, the actual vulnerable parameter,
-  anything `hints:` would charge points for.
+| ✅ Allowed | ❌ Not allowed |
+|---|---|
+| Commands with placeholders (`ssh -J user@<hop>`) | Flag paths |
+| Which tools apply | Credentials |
+| Non-secret host descriptions | The actual vulnerable parameter |
+| "Watch for X" nudges | Anything `hints:` would charge points for |
 
 ## quest.yaml
 
@@ -44,7 +52,7 @@ meta:
 display:
   tagline: "SSH in with weak creds, escalate via a sudo misconfiguration."
 requirements:
-  min_ram_gb: 12                  # rejected at session start if under the resource cap
+  min_ram_gb: 12                  # rejected at session start if over the resource cap
   min_vcpus: 6
   min_disk_gb: 80
   est_deploy_min: 8               # honest estimate — deploys take minutes
@@ -70,16 +78,15 @@ topology:
 ```
 
 The Kali VM is implicit per session — add every other box under `vms`.
-`ip_last_octet` gives deterministic addresses for briefings and checkpoints.
-`ram_gb` is the ballooning ceiling and `ram_min_gb` the floor Proxmox may shrink
-to under pressure; `requirements.min_ram_gb` should cover the sum of `ram_gb`
-plus ~2G for the implicit router.
+`ip_last_octet` gives deterministic addresses for briefings and checkpoints;
+`.254` is the range router (linted). `requirements.min_ram_gb` should cover
+the sum of `ram_gb` plus ~2 G for the implicit router.
 
 ### Flags
 
 ```yaml
 flags:
-  - id: user-flag               # stable key — flag secrets derive from (session, id)
+  - id: user-flag               # stable key — secrets derive from (session, id)
     name: "User flag — read user.txt"
     kind: file                  # file | command
     points: 100
@@ -88,22 +95,23 @@ flags:
 ```
 
 Flag values are randomized per session (HMAC over the session's `flag_seed`).
-The platform injects them **after** deploy via the qemu guest agent
-(`flags_svc.inject_flags` → `pve.agent_write_file`); the backend verifies
-submissions. Roles must therefore **never** write `pentrAIn{...}` files —
-only create the vulnerability and any directory the flag file lands in.
+The platform injects them **after** deploy via the QEMU guest agent
+(`flags_svc.inject_flags` → file-write API); the backend verifies
+submissions.
 
-- `kind: file` — backend writes `{secret}` to `file_path` on `vm`. With
-  `container: <name>` it goes through `docker exec` into that container.
-- `kind: command` — backend runs `command.cmd` on `command.vm` and compares
-  stdout to the flag (substring `expect` or exitcode). The check runs a
-  **POSIX shell** — not valid on `windows:`/`linux: false` VMs (linted).
-- `vm: kali` — special target resolved to the session's Kali VM (not listed
-  in `topology.vms`). Use it when the trainee proves work *on Kali*
-  (scripting artifacts, decoded loot, report files), e.g.
-  `command: { vm: kali, cmd: "test -f /root/script.sh" }`. Requires the Kali
-  template to run the qemu guest agent.
-- Windows VMs: use `kind: file` only; the guest agent handles `C:\...` paths.
+> [!IMPORTANT]
+> Roles must **never** write `pentrAIn{...}` files — only create the
+> vulnerability and any directory the flag file lands in. Planted flags are
+> dead on arrival: the real secret doesn't exist until the session deploys.
+
+| Kind | Mechanism |
+|---|---|
+| `file` | Backend writes `{secret}` to `file_path` on `vm`. With `container: <name>` it goes through `docker exec` into that container |
+| `command` | Backend runs `command.cmd` on `command.vm`, compares stdout (`expect` substring or exitcode). POSIX shell — rejected on `windows:`/`linux: false` VMs |
+| `vm: kali` | Resolved to the session's Kali — proves work *on Kali* (script artifacts, loot, reports), e.g. `command: {vm: kali, cmd: "test -f /root/script.sh"}`. Needs QGA in the Kali template |
+
+Windows VMs: `kind: file` only; paths are Windows-style
+(`file_path: "C:\\flags\\domain-admin.txt"`).
 
 ### Hints
 
@@ -134,14 +142,17 @@ coach:
 ```
 
 Checkpoints let the coach see *progress* without an LLM call: the command
-stream is matched silently, and a hit produces a cheap template ack. Write
+stream is matched silently and a hit produces a cheap template ack. Write
 patterns that match intent (`nmap|ss |netstat`) rather than exact syntax —
 trainees type many equivalent commands.
 
 `coach_context.md` is the coach's private knowledge: intended solve path,
-common dead ends, which hints map to which stage. It is **not** shown in the
-UI — but assume a sufficiently capable trainee could extract it from the
-model, so keep real flag values out of it anyway.
+common dead ends, which hints map to which stage.
+
+> [!WARNING]
+> `coach_context.md` is never rendered in the UI — but assume a sufficiently
+> capable trainee could extract it from the model. Keep real flag values and
+> secrets out of it anyway.
 
 ### Scoring
 
@@ -155,31 +166,32 @@ scoring:
 
 ## Progression and exam quests
 
-Quests unlock per track:
+```mermaid
+flowchart LR
+    T1["tier N−1<br/>any non-exam solved"] -->|"unlocks"| T2["tier N quests"]
+    ALL["tier N<br/>ALL non-exam solved"] -->|"unlocks"| E["tier N EXAM"]
+    E -.->|"never a predecessor"| T3["tier N+1"]
+```
 
-- **Tier 1** is always open.
-- A **normal tier N quest** unlocks when **any** non-exam quest of tier N−1
-  in the same track is solved (`any-solved` — multiple quests per tier are
-  supported; you only need one).
-- An **exam quest** (`meta.exam: true`) unlocks only when **every** non-exam
-  quest of its own track+tier is solved (`all-solved`). It is the capstone
-  for that tier — design it to combine *all* skills the tier's teaching
-  quests covered.
-- Exam quests **never** count as tier predecessors. Solving the T1 exam
-  alone does not open T2 — a real T1 quest must be solved.
+- **Tier N quest** unlocks when **any** non-exam quest of tier N−1 in the
+  same track is solved (`any-solved` — multiple quests per tier are fine).
+- **Exam** (`meta.exam: true`) unlocks when **every** non-exam quest of its
+  own track+tier is solved (`all-solved`). Design it to combine *all* skills
+  the tier's teaching quests covered.
+- Exams **never** count as tier predecessors.
 
 Exam conventions:
 
 - Naming: `<track>-t<N>-exam`, title `"Exam: <name>"`.
 - The library renders an **EXAM** badge and sorts exams after the teaching
-  quests of the same tier (API ordering, not client-side).
+  quests of the same tier (API ordering).
 - `coach_context.md` should state the exam posture explicitly: confirm
-  stages rather than hand out answers, and redirect stuck trainees to the
+  stages rather than hand out answers; redirect stuck trainees to the
   matching teaching quest.
-- Same flag/role rules apply — exams may reuse teaching roles as building
-  blocks plus a dedicated `pentrain_*_exam` role for the extra surface.
-- AD exams exist for all three tiers (`needs_windows: true`) and inherit
-  the same template/resource caveats as the teaching quests (see ops.md).
+- Exams may reuse teaching roles as building blocks plus a dedicated
+  `pentrain_*_exam` role for the extra surface.
+- AD exams exist for all three tiers and inherit the template/resource
+  caveats of their tier — see [ops.md](ops.md#windows--active-directory-quests).
 
 ## Ansible roles
 
@@ -187,55 +199,50 @@ Per-quest vulnerability setup lives in `content/ansible-roles/pentrain_*/`.
 Ludus applies `roles: [...]` to each VM during deploy. Conventions:
 
 - Role name in `quest.yaml` must match the role directory.
-- Idempotent tasks — ranges get soft-reset (snapshot rollback), but roles may
-  also re-run after hard resets.
-- Do **not** plant flag content — the platform injects `pentrAIn{...}`
-  secrets post-deploy via the guest agent. Roles may `file: state=directory`
-  the flag's parent dir so a restricted path still resolves.
+- Idempotent tasks — ranges get soft-reset (snapshot rollback), and roles may
+  re-run after hard resets.
+- Do **not** plant flag content — the platform injects secrets post-deploy.
+  Roles may `file: state=directory` the flag's parent dir so a restricted
+  path still resolves.
 - The Kali box always gets `pentrain_kali_agent` (telemetry sidecar + shell
-  hook). Do not remove it — checkpoints and the coach die silently without it.
-  Its files mirror `telemetry-agent/`; the linter fails on drift.
+  hook). Do not remove it — checkpoints and the coach die silently without
+  it. Its files mirror `telemetry-agent/`; the linter fails on drift.
 
 ### Windows / Active Directory quests
 
-- `topology.vms[].linux: false` + `windows: {...}` + `domain: {...}` are
-  passed through to Ludus verbatim — use `win2022-server-x64-template` /
-  `win11-22h2-x64-template` (needs a `--with-templates` build; see ops.md).
-- Ludus domain schema (verified):
-  `domain: {fqdn: corp.pentrain.local, role: primary-dc|alt-dc|member}` —
-  `primary-dc` promotes the forest root, `alt-dc` adds a replica,
-  `member` joins a workstation.
+- `topology.vms[].linux: false` + `windows: {...}` + `domain: {...}` pass
+  through to Ludus verbatim — use `win2022-server-x64-template` /
+  `win11-22h2-x64-template` (needs a `--with-templates` build).
+- Ludus domain schema: `domain: {fqdn: corp.pentrain.local, role:
+  primary-dc|alt-dc|member}` — `primary-dc` promotes the forest root,
+  `alt-dc` adds a replica, `member` joins a workstation.
 - `windows:` subkeys: `sysprep: true`, `install_additional_tools`,
-  `gpos: [name]` — or top-level `gpos: [...]` on the VM, which the compiler
-  folds into `windows.gpos` (linted: linux VMs can't take gpos).
-- Only `kind: file` flags — `kind: command` runs a POSIX shell and will
-  never execute on Windows (the pack linter rejects the combination).
-- Flag paths are Windows-style: `file_path: "C:\\flags\\domain-admin.txt"`.
-- `ip_last_octet: 254` is reserved for the range router (linted).
-- Users, OUs and misconfig belong in the quest's `pentrain_ad_*` roles
+  `gpos: [name]` — or top-level `gpos: [...]` on the VM, folded into
+  `windows.gpos` by the compiler (linted: linux VMs can't take gpos).
+- Only `kind: file` flags — `kind: command` is POSIX-shell only (linted).
+- Users, OUs and misconfig belong in `pentrain_ad_*` roles
   (`community.windows.*` / `ansible.windows.*` modules over winrm).
 
-### Checklist before committing a quest
+## Checklist before committing a quest
 
-- [ ] `python scripts/lint_packs.py` — 0 errors
+- [ ] `python scripts/lint_packs.py content/packs` — 0 errors
 - [ ] Roles are idempotent and use `validate:` on config writes
-- [ ] Every flag's `vm` exists in `topology.vms`; `file_path` parent dirs
-      are created by a role (or default to `/root`, `C:\flags`)
+- [ ] Every flag's `vm` exists in `topology.vms` (or is `kali`); `file_path`
+      parent dirs are created by a role (or default to `/root`, `C:\flags`)
 - [ ] Checkpoint regexes match *real* commands a trainee would type
-- [ ] `requirements` reflect the sum of VM RAM/CPUs + kali — `check_unlock`
-      hard-blocks quests that exceed the admin-configured budget
+- [ ] `requirements` reflect VM RAM/CPUs + kali + router — `check_unlock`
+      hard-blocks quests over the admin's budget
 - [ ] `briefing.md` states the goal without leaking the path;
       `defense.md` has detect+fix+verify for every vulnerability;
-      `cheatsheet.md` stays spoiler-free (syntax/concepts only)
+      `cheatsheet.md` stays spoiler-free
 - [ ] `coach_context.md` lists the intended path and common wrong turns
 
 ## Testing a pack
 
-0. `python scripts/new_quest.py <track> <quest-id> --tier N --role` — scaffolds
-   the quest dir + optional role skeleton and validates immediately.
-1. `python scripts/lint_packs.py` — schema + agent-sync check.
-2. `docker compose -f engine/docker-compose.dev.yml up` — MockProvider
-   accepts every topology; the full UI flow (deploy → flags → reset) is
-   exercisable without a hypervisor.
+0. `python scripts/new_quest.py <track> <quest-id> --tier N --role` —
+   scaffolds the quest dir + optional role skeleton and validates immediately.
+1. `python scripts/lint_packs.py content/packs` — schema + agent-sync check.
+2. `make dev` — MockProvider accepts every topology; the full UI flow
+   (deploy → flags → reset) is exercisable without a hypervisor.
 3. Real validation needs a Ludus host: deploy the quest, verify the role
    converges, flags submit, checkpoints fire on the right commands.
