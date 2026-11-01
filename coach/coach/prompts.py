@@ -167,7 +167,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "REAL devices, not lab VMs — fingerprints stay gentle.")]
           if q.get("scope") else []),
         f"BRIEF: {q.get('briefing', '')[:1200]}",
-        f"COACH_NOTES: {q.get('coach_context', '')[:800]}",
+        # ground truth + flag mechanics + templates must ALWAYS fit — a 800c
+        # cap truncated exactly those lines on the home-lab quest and the
+        # model looped re-enumerating instead of writing the report
+        f"COACH_NOTES: {q.get('coach_context', '')[:3000]}",
         # reference cards: tool syntax + methodology for THIS track/quest —
         # authored spoiler-free for trainees, doubles as the coach's
         # knowledge base (stops smbclient-interactive and --ssl-mode drift)

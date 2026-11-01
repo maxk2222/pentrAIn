@@ -42,6 +42,12 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - Non-interactive beats interactive: `smbclient -N -L //host/` and
   `smbclient //host/share -U user%pass -c 'get file'` > entering the
   smb> shell; `ftp` reads a heredoc (`ftp -n host <<EOF\nuser anonymous x\nls\nEOF`).
+- enum4linux-NG ≠ enum4linux: the NG rewrite dropped `-a` — use `enum4linux-ng -A <ip>`
+  (A = all simple checks). Old tutorials still say -a; it errors out.
+- Report/deliverable flags: when FLAGS names a file (`*-report.md`, `*.txt`),
+  write it EARLY from the evidence you have and refine — don't keep
+  re-enumerating a network you already mapped. A template may sit in ~ —
+  `ls ~ | grep -i template` before writing from scratch.
 - sshpass present → `sshpass -p 'pass' ssh -o StrictHostKeyChecking=no
   user@host 'cmd'` runs remote commands in ONE exec (no interactive pane
   dance). Alternative without sshpass: SSH_ASKPASS trick (see prompt).
