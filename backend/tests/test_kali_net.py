@@ -185,3 +185,71 @@ def test_compile_topology_template_override():
     assert cfg["ludus"][0]["template"] == "mine"
     cfg = compile_topology(SimpleNamespace(topology={}))
     assert cfg["ludus"][0]["template"] == "kali-x64-desktop-template"
+
+
+class _TmuxPve:
+    """Simulates the pentrain-coach tmux marker flow — enough fidelity to
+    count how many guest calls one visible exec needs."""
+    def __init__(self):
+        self.calls: list[str] = []
+        self.marker = ""
+        self.cmd = ""
+
+    async def agent_exec_sh(self, vmid, cmd, timeout_s=120):
+        self.calls.append(cmd)
+        if "@@OK:" in cmd:                       # batched probe
+            return {"out": "@@OK@@\nzsh\n@@SEP@@\n$ ",
+                    "err": "", "exitcode": 0}
+        if "send-keys" in cmd and "echo PTN" in cmd:
+            # send-batch: echo-marker + command in one call — parse the nonce
+            import re as _re
+            m = _re.search(r"echo (PTN\w+)A", cmd)
+            self.marker = m.group(1) if m else ""
+            self.cmd = cmd
+            return {"out": "", "err": "", "exitcode": 0}
+        if "capture-pane" in cmd:
+            # realistic pane: A-marker, typed cmd, output, typed B-echo,
+            # B-marker output line (as zsh would render it)
+            return {"out": (f"{self.marker}A\nid\nhello-out\n"
+                            f"echo {self.marker}B:$?\n{self.marker}B:0\n"),
+                    "err": "", "exitcode": 0}
+        return {"out": "", "err": "", "exitcode": 0}
+
+
+async def test_visible_exec_batched_guest_calls():
+    """One exec_in_kali used to cost ~12 sequential QGA calls; the batched
+    probe/send design must stay near ~4 so chained turns run at LLM pace."""
+    from app.services.coach_bridge import exec_visible_in_kali
+    from types import SimpleNamespace
+    pve = _TmuxPve()
+    engine = SimpleNamespace(pve=pve)
+    res = await exec_visible_in_kali(engine, 100, "id", timeout_s=10)
+    assert res["exitcode"] == 0 and "hello-out" in res["out"]
+    # probe(1) + send-batch(1) + poll capture(1) + B-marker send(0 or 1)
+    assert len(pve.calls) <= 5, pve.calls
+    # the probe ran exactly once — has-session/fg/tail rode in one call
+    assert sum("@@OK:" in c for c in pve.calls) == 1
+
+
+async def test_type_in_pane_batched_guest_calls(db):
+    """type_in_pane used 4 guest calls + a 1.2s blind wait; batched it must
+    be 2 calls with a short settle."""
+    from types import SimpleNamespace
+    from app.services import coach_bridge
+    s = Session(quest_id="q", state="ready", kali_vmid=100)
+    s.autonomy_level = 4
+    db.add(s)
+    await db.commit()
+    pve = _TmuxPve()
+    engine = SimpleNamespace(pve=pve)
+
+    async def _engine(_db):
+        return engine
+    orig = coach_bridge.get_engine
+    coach_bridge.get_engine = _engine
+    try:
+        res = await coach_bridge.type_in_pane(db, s.id, "password123")
+    finally:
+        coach_bridge.get_engine = orig
+    assert res["visible"]
+    assert len(pve.calls) <= 3, pve.calls       # probe+type+enter, capture+fg

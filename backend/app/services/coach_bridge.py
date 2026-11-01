@@ -269,32 +269,33 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
         # echoes at history_size + cursor_y, and the input's EFFECT is
         # everything after it. Returning only that slice matters: a raw
         # 50-line tail shows stale scrollback ("No such file" from an old
-        # attempt looks identical to a fresh failure).
+        # attempt looks identical to a fresh failure). One guest call does
+        # the probe + both key sends (they queue in order; `send-keys -l`
+        # keeps passwords/special chars literal, Enter stays a real key).
         pre = await engine.pve.agent_exec_sh(
             session.kali_vmid,
             f"tmux display-message -p -t {COACH_TMUX} "
-            "'#{history_size} #{cursor_y}'", timeout_s=10)
+            "'#{history_size} #{cursor_y}'; "
+            f"tmux send-keys -t {COACH_TMUX} -l {shlex.quote(text)}; "
+            f"tmux send-keys -t {COACH_TMUX} Enter", timeout_s=10)
         try:
             h0, cy0 = (int(x) for x in (pre.get("out") or "").split()[:2])
         except (ValueError, IndexError):
             h0, cy0 = -1, 0
-        # `send-keys -l` sends literal characters — passwords and special
-        # chars must never be parsed as tmux key names. Enter is a real
-        # key, sent in a second call so -l doesn't literalize it.
-        await engine.pve.agent_exec_sh(
-            session.kali_vmid,
-            f"tmux send-keys -t {COACH_TMUX} -l {shlex.quote(text)}",
-            timeout_s=10)
-        await engine.pve.agent_exec_sh(
-            session.kali_vmid,
-            f"tmux send-keys -t {COACH_TMUX} Enter", timeout_s=10)
-        # give the foreground program a beat to react, then capture
-        await asyncio.sleep(1.2)
+        # give the foreground program a beat to react, then capture + read
+        # the resulting foreground command in ONE guest call
+        await asyncio.sleep(0.6)
+        nonce = secrets.token_hex(5)
         pane = await engine.pve.agent_exec_sh(
             session.kali_vmid,
-            f"tmux capture-pane -pJ -t {COACH_TMUX} -S - 2>/dev/null",
-            timeout_s=10)
-        lines = (pane.get("out") or "").splitlines()
+            f"tmux capture-pane -pJ -t {COACH_TMUX} -S - 2>/dev/null; "
+            f"echo @@FG:{nonce}@@; "
+            f"tmux display-message -p -t {COACH_TMUX} "
+            "'#{pane_current_command}'", timeout_s=10)
+        p_out = pane.get("out") or ""
+        body, _, cur_part = p_out.rpartition(f"@@FG:{nonce}@@")
+        lines = body.rstrip("\n").splitlines()
+        cur = cur_part.strip()
         if h0 >= 0 and h0 + cy0 < len(lines):
             # echo of our input + everything it produced + the new prompt
             out = "\n".join(lines[h0 + cy0:])[-3000:]
@@ -304,11 +305,6 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
         # ftp) or did our input return it to the shell? The coach's
         # interactive fast-path keys off this: still-busy means the next
         # input should follow at LLM cadence, not the ~90s reflect tick.
-        cc_r = await engine.pve.agent_exec_sh(
-            session.kali_vmid,
-            f"tmux display-message -p -t {COACH_TMUX} "
-            "'#{pane_current_command}'", timeout_s=10)
-        cur = (cc_r.get("out") or "").strip()
         busy = bool(cur) and cur not in ("zsh", "bash", "sh", "fish", "tmux")
         await record_action(db, session_id, "type_in_pane", {"text": text[:80]},
                             {"out": out[-600:]}, status="ok")
@@ -378,17 +374,36 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     With session_id set, each poll also relays the live output tail as a
     coach_activity event — the chat shows the command's progress in real time.
     """
+    marker = f"PTN{secrets.token_hex(5)}"
+    shells = ("bash", "zsh", "sh", "dash", "ksh", "fish")
+    # ONE guest call for all three probes — session check, foreground command
+    # and last pane line ride in a single QGA round-trip (was 3 sequential
+    # calls ≈ +2 HTTP+agent latencies per exec)
     probe = await engine.pve.agent_exec_sh(
-        kali_vmid, f"tmux has-session -t {COACH_TMUX}", timeout_s=10)
-    if probe.get("exitcode", 1) != 0:
-        # no desktop session (autologin pending / headless boot) — create the
-        # channel detached; a later xfce login attaches to the same session
+        kali_vmid,
+        f"if tmux has-session -t {COACH_TMUX} 2>/dev/null; then "
+        f"echo @@OK:{marker}@@; "
+        f"tmux display-message -p -t {COACH_TMUX} '#{{pane_current_command}}'; "
+        f"echo @@SEP:{marker}@@; "
+        f"tmux capture-pane -pt {COACH_TMUX} 2>/dev/null | grep -v '^$' "
+        "| tail -1; "
+        f"else echo @@NOSESSION:{marker}@@; fi", timeout_s=10)
+    p_out = probe.get("out") or ""
+    if f"@@OK:{marker}@@" not in p_out:
+        # no desktop session (autologin pending / headless boot / headless
+        # provider) — create the channel detached; a later xfce login
+        # attaches to the same session
         await engine.pve.agent_exec_sh(
             kali_vmid, f"tmux new-session -d -s {COACH_TMUX}", timeout_s=10)
         probe = await engine.pve.agent_exec_sh(
             kali_vmid, f"tmux has-session -t {COACH_TMUX}", timeout_s=10)
-    if probe.get("exitcode", 1) != 0:
-        return await engine.pve.agent_exec_sh(kali_vmid, command, timeout_s=timeout_s)
+        if probe.get("exitcode", 1) != 0:
+            return await engine.pve.agent_exec_sh(kali_vmid, command, timeout_s=timeout_s)
+        fg_cmd, last = "", ""   # fresh detached session — shell at prompt
+    else:
+        parts = p_out.split(f"@@SEP:{marker}@@")
+        fg_cmd = parts[0].split(f"@@OK:{marker}@@")[-1].strip()
+        last = parts[-1].strip() if len(parts) > 1 else ""
 
     # ctrl-key passthrough — "C-c"/"C-d"/"C-z" must reach the pane as real
     # keys, not typed text, so a wedged foreground process can be freed.
@@ -398,14 +413,13 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
         await engine.pve.agent_exec_sh(
             kali_vmid,
             f"tmux send-keys -t {COACH_TMUX} {command.strip()}", timeout_s=10)
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(0.4)
         fg = await engine.pve.agent_exec_sh(
             kali_vmid,
             f"tmux display-message -p -t {COACH_TMUX} "
             "'#{pane_current_command}'", timeout_s=10)
         now = (fg.get("out") or "").strip()
-        state = (f"pane free — shell '{now}' at prompt" if now in
-                 ("bash", "zsh", "sh", "dash", "ksh", "fish")
+        state = (f"pane free — shell '{now}' at prompt" if now in shells
                  else f"still busy — foreground: '{now}'")
         return {"out": f"(sent {command.strip()} — {state})", "err": "",
                 "exitcode": 0, "visible": True}
@@ -415,22 +429,12 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     # Two checks: (a) a non-shell foreground command, (b) a continuation
     # prompt (heredoc/quote) — pane_current_command stays 'zsh' while the
     # shell waits for a delimiter, so typed lines land as heredoc input.
-    fg = await engine.pve.agent_exec_sh(
-        kali_vmid,
-        f"tmux display-message -p -t {COACH_TMUX} '#{{pane_current_command}}'",
-        timeout_s=10)
-    fg_cmd = (fg.get("out") or "").strip()
-    if fg_cmd and fg_cmd not in ("bash", "zsh", "sh", "dash", "ksh", "fish"):
+    if fg_cmd and fg_cmd not in shells:
         return {"out": "", "visible": True, "busy": True, "exitcode": None,
                 "err": (f"pane busy: '{fg_cmd}' is running interactively — "
                         "use type_in_pane to send input lines into it (e.g. "
                         "passwords, menu choices), or send 'C-c' via "
                         "exec_in_kali to interrupt it")}
-    tail = await engine.pve.agent_exec_sh(
-        kali_vmid,
-        f"tmux capture-pane -pt {COACH_TMUX} 2>/dev/null | grep -v '^$' "
-        "| tail -1", timeout_s=10)
-    last = (tail.get("out") or "").strip()
     if re.search(r"(heredoc|dquote|quote|pipe)?>\s*$", last) and last != ">":
         return {"out": "", "visible": True, "busy": True, "exitcode": None,
                 "err": (f"pane busy: shell awaits more input ({last[-40:]!r} "
@@ -438,20 +442,18 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                         "send the missing line/delimiter, or 'C-c' via "
                         "exec_in_kali to reset the prompt")}
 
-    marker = f"PTN{secrets.token_hex(5)}"
-    # three SEPARATE key sends — appending `; echo …` to the command line broke
-    # heredocs (a `EOF ; echo` line isn't a valid delimiter) and swallowed the
-    # output slice. The B end-marker is sent only AFTER the pane returns to a
-    # shell: typed while the command still runs, it buffers into the process's
-    # stdin — programs that read keystrokes (nmap interactive keys, less, top,
-    # ssh, vi) EAT the marker line and completion is never detected.
+    # two SEPARATE key sends in ONE guest call — appending `; echo …` to the
+    # command line broke heredocs (a `EOF ; echo` line isn't a valid
+    # delimiter) and swallowed the output slice; separate send-keys queue in
+    # order, so heredocs stay intact. The B end-marker is sent only AFTER the
+    # pane returns to a shell: typed while the command still runs, it buffers
+    # into the process's stdin — programs that read keystrokes (nmap
+    # interactive keys, less, top, ssh, vi) EAT the marker line and
+    # completion is never detected.
     n_cmd_lines = command.count("\n") + 1
     await engine.pve.agent_exec_sh(
         kali_vmid,
-        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(f'echo {marker}A')} Enter",
-        timeout_s=10)
-    await engine.pve.agent_exec_sh(
-        kali_vmid,
+        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(f'echo {marker}A')} Enter; "
         f"tmux send-keys -t {COACH_TMUX} {shlex.quote(command)} Enter",
         timeout_s=10)
 
@@ -466,7 +468,6 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     end = re.compile(rf"{re.escape(marker)}B:(\d+)\s*$")
     cont_re = re.compile(r"(heredoc|dquote|quote|pipe)?>\s*$")
     cmd_tail = command.split("\n")[-1][-60:].rstrip()
-    shells = ("bash", "zsh", "sh", "dash", "ksh", "fish")
     deadline = time.monotonic() + timeout_s
     last_tail = ""
     b_sent = False
@@ -533,7 +534,7 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                         f"{shlex.quote(f'echo {marker}B:$?')} Enter",
                         timeout_s=10)
                     b_sent = True
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.35)
     # timed out but still typed — the partial pane tail beats a dead end
     return {"out": last_tail
             or "(still running — visible in the pentrain-coach tmux window)",

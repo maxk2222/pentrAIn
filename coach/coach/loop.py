@@ -33,6 +33,11 @@ HISTORY_CAP = 14           # user/assistant messages kept in-context
 CHAT_DEBOUNCE_S = 1.5      # coalesce rapid trainee messages into one turn
 LLM_TURN_BUDGET_S = 300    # hard bound for one LLM turn incl. action dispatch;
                          # a wedged call gets cancelled, releasing the lock
+# tool types that keep an in-turn chain alive — they have server-side effects
+# whose results the model should see immediately (send_chat/offer_hint/none
+# end the chain: the model only wanted to talk or pause)
+_CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
+                "mark_checkpoint", "capture_screen", "suggest_command"}
 
 
 def _iso_to_epoch(iso: str | None) -> float:
@@ -114,6 +119,7 @@ class SessionCoach:
             nudge_s=int(coach_cfg.get("nudge_after_s", 480)),
             hint_s=int(coach_cfg.get("hint_after_s", 900)),
             verbosity=coach_cfg.get("verbosity", "normal"),
+            takeover_pace_s=int(coach_cfg.get("takeover_pace_s", 10)),
         )
         llm = self.cfg.get("llm", {})
         self.llm = LlmClient(
@@ -245,6 +251,7 @@ class SessionCoach:
             nudge_s=int(cc.get("nudge_after_s", 480)),
             hint_s=int(cc.get("hint_after_s", 900)),
             verbosity=cc.get("verbosity", "normal"),
+            takeover_pace_s=int(cc.get("takeover_pace_s", 10)),
         )
         global_on = bool(cc.get("enabled", True))
         s = self.ctx.get("session", {})
@@ -328,15 +335,7 @@ class SessionCoach:
                 ev = await asyncio.wait_for(self._queue.get(), timeout=timeout)
                 await self._handle_event(ev)
                 # drain burst — but never starve the reflection timer
-                drained = 0
-                while True:
-                    try:
-                        await self._handle_event(self._queue.get_nowait())
-                        drained += 1
-                        if drained % 64 == 0 and time.monotonic() >= self._next_reflect:
-                            await self._reflect_tick(reflect)
-                    except asyncio.QueueEmpty:
-                        break
+                await self._drain_queue(reflect)
                 if time.monotonic() >= self._next_reflect:
                     await self._reflect_tick(reflect)
             except TimeoutError:
@@ -350,6 +349,19 @@ class SessionCoach:
                 raise
             except Exception as e:
                 await log.aexception("coach event error", error=str(e))
+
+    async def _drain_queue(self, reflect_s: float = 60.0, cap: int = 128) -> None:
+        """Process queued events without blocking — keeps telemetry, state
+        transitions and pending chat fresh while a turn chain is running."""
+        drained = 0
+        while drained < cap:
+            try:
+                await self._handle_event(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+            drained += 1
+            if drained % 64 == 0 and time.monotonic() >= self._next_reflect:
+                await self._reflect_tick(reflect_s)
 
     async def _handle_event(self, ev: dict) -> None:
         etype = ev.get("type")
@@ -394,6 +406,30 @@ class SessionCoach:
                     await self._on_solved()
                 elif data.get("state") == "ready":
                     await self._maybe_welcome()
+                elif (data.get("state") == "active"
+                        and self.state.autonomy_level >= 4):
+                    # session just activated at takeover — start the agent
+                    # loop now, not at the next reflect tick
+                    self._next_reflect = min(self._next_reflect,
+                                             time.monotonic() + 1)
+            elif etype == "autonomy":
+                # live level switch (/autonomy in chat or the UI toggle) —
+                # resync-only would leave the coach on the old level until a
+                # WS reconnect; tools_for_level + policy read this field
+                prev = self.state.autonomy_level
+                try:
+                    level = int(data.get("level") or prev)
+                except (TypeError, ValueError):
+                    level = prev
+                self.state.autonomy_level = level
+                if "session" in self.ctx:
+                    self.ctx["session"]["autonomy_level"] = level
+                if (level >= 4 > prev
+                        and self.state.state == "active"):
+                    # switched INTO takeover while the session runs — the
+                    # agent should start working almost immediately
+                    self._next_reflect = min(self._next_reflect,
+                                             time.monotonic() + 1)
             elif etype == "flag":
                 if data.get("correct"):
                     self.state.progress()
@@ -525,6 +561,13 @@ class SessionCoach:
                                           action_budget=budget),
                         proactive=True),
                     timeout=left)
+            # continuous agent loop: the last chain DID work — keep the
+            # pipeline flowing at takeover pace instead of the reflect
+            # interval, so an L4 run doesn't stall ~60s between chains
+            if (self.state.autonomy_level >= 4
+                    and self.state.proactive_streak == 0):
+                self._next_reflect = time.monotonic() + float(
+                    self.cfg.get("coach", {}).get("takeover_pace_s", 10))
         except TimeoutError:
             await log.aexception("reflect turn exceeded budget — cancelled",
                                  session=self.sid, budget_s=LLM_TURN_BUDGET_S)
@@ -611,58 +654,114 @@ class SessionCoach:
                 await self.client.stream_draft(
                     self.sid, draft_id, cum, reasoning=reasoning, kind=kind)
 
-            tools = (tools_for_level(self.state.autonomy_level)
-                     if tools_active else None)
-            try:
-                resp = await self.llm.chat(messages, on_delta=on_delta,
-                                           tools=tools)
-            except (LlmError, httpx.HTTPError) as e:
-                # one quiet retry — a slow/flaky endpoint shouldn't kill the
-                # turn outright; the turn budget keeps worst-case bounded
-                await log.awarning("llm call failed, retrying once",
-                                   error=str(e))
-                try:
-                    resp = await self.llm.chat(messages, tools=tools)
-                except (LlmError, httpx.HTTPError) as e2:
-                    await log.awarning("llm call failed", error=str(e2))
-                    if pushed:
-                        await self.client.stream_draft(
-                            self.sid, draft_id, "", done=True)
-                    self._active_draft = None
-                    return False
-            self._turn_reasoning = (resp.get("reasoning") or "").strip()
-            usage = (resp.get("raw") or {}).get("usage") or {}
-            self.usage["tokens"] += int(usage.get("total_tokens", 0))
-            await log.ainfo("llm turn", session=self.sid,
-                            tools=tools_active,
-                            via_tool_calls=bool(resp.get("tool_calls")),
-                            compat=sorted(getattr(self.llm, "_compat", ())),)
-            # fire-and-forget usage row for the stats page — never block the turn
-            asyncio.create_task(self.client.report_llm_usage(
-                self.sid, self.llm.model, "reflect" if proactive else "chat",
-                resp.get("usage"), resp.get("latency_ms")))
             spoke = False
             worked = False
-            call_results: dict[str, str] = {}
-            await log.ainfo("llm actions", session=self.sid,
-                            proactive=proactive,
-                            actions=[a.get("type") for a in resp["actions"]])
-            try:
-                for a in resp["actions"]:
-                    # model "reasoning notes" become working memory for later turns
-                    if a.get("type") == "none" and a.get("reason"):
-                        self.state.notes.append(str(a["reason"])[:300])
-                        self.state.notes = self.state.notes[-8:]
-                    did, res = await self._dispatch(a, proactive=proactive)
-                    spoke |= did
-                    if cid := a.get("_call_id"):
-                        call_results[cid] = res
-                    if did and a.get("type") in ("exec_in_kali", "type_in_pane",
-                                                 "submit_flag", "check_flag"):
-                        worked = True
-            finally:
-                # whatever happened mid-dispatch — no stale 'working' chip
-                await self.client.send_activity(self.sid, active=False)
+            t0 = time.monotonic()
+            chain_max = int(self.cfg.get("coach", {}).get(
+                "takeover_chain_max", 12))
+            chain_len = 0
+            while True:
+                pushed = False
+                last_push = 0.0   # each sub-response streams its own draft
+                # rebuilt per sub-call: an autonomy switch mid-chain (drained
+                # between calls) narrows/widens the toolset immediately
+                tools = (tools_for_level(self.state.autonomy_level)
+                         if tools_active else None)
+                try:
+                    resp = await self.llm.chat(messages, on_delta=on_delta,
+                                               tools=tools)
+                except (LlmError, httpx.HTTPError) as e:
+                    # one quiet retry — a slow/flaky endpoint shouldn't kill
+                    # the turn outright; the turn budget keeps worst-case
+                    # bounded
+                    await log.awarning("llm call failed, retrying once",
+                                       error=str(e))
+                    try:
+                        resp = await self.llm.chat(messages, tools=tools)
+                    except (LlmError, httpx.HTTPError) as e2:
+                        await log.awarning("llm call failed", error=str(e2))
+                        if pushed:
+                            await self.client.stream_draft(
+                                self.sid, draft_id, "", done=True)
+                        self._active_draft = None
+                        return False
+                chain_len += 1
+                self._turn_reasoning = (resp.get("reasoning") or "").strip()
+                usage = (resp.get("raw") or {}).get("usage") or {}
+                self.usage["tokens"] += int(usage.get("total_tokens", 0))
+                await log.ainfo("llm turn", session=self.sid,
+                                tools=tools_active,
+                                via_tool_calls=bool(resp.get("tool_calls")),
+                                compat=sorted(getattr(self.llm, "_compat", ())),)
+                # fire-and-forget usage row for the stats page — never block
+                # the turn
+                asyncio.create_task(self.client.report_llm_usage(
+                    self.sid, self.llm.model, "reflect" if proactive else "chat",
+                    resp.get("usage"), resp.get("latency_ms")))
+                call_results: dict[str, str] = {}
+                await log.ainfo("llm actions", session=self.sid,
+                                proactive=proactive,
+                                actions=[a.get("type") for a in resp["actions"]])
+                try:
+                    for a in resp["actions"]:
+                        # model "reasoning notes" become working memory for
+                        # later turns
+                        if a.get("type") == "none" and a.get("reason"):
+                            self.state.notes.append(str(a["reason"])[:300])
+                            self.state.notes = self.state.notes[-8:]
+                        did, res = await self._dispatch(a, proactive=proactive)
+                        spoke |= did
+                        if cid := a.get("_call_id"):
+                            call_results[cid] = res
+                        if did and a.get("type") in ("exec_in_kali", "type_in_pane",
+                                                     "submit_flag", "check_flag"):
+                            worked = True
+                finally:
+                    # whatever happened mid-dispatch — no stale 'working' chip
+                    await self.client.send_activity(self.sid, active=False)
+                calls = resp.get("tool_calls") or []
+                if calls:
+                    # replay the exchange faithfully: the model sees its own
+                    # tool calls plus EVERY call's result (pairing rule —
+                    # strict templates reject a tool_call left without its
+                    # tool reply). Fed back via `messages` for the next
+                    # sub-call AND persisted in _history for later turns.
+                    chat_text = "\n".join(
+                        a.get("content", "")[:900] for a in resp["actions"]
+                        if a.get("type") in ("send_chat", "offer_hint",
+                                             "suggest_command") and a.get("content"))
+                    messages.append({
+                        "role": "assistant",
+                        "content": chat_text or None,
+                        "tool_calls": calls,
+                    })
+                    self._history.append(dict(messages[-1]))
+                    for i, call in enumerate(calls):
+                        cid = call.get("id") or f"call_{i}"
+                        tool_msg = {
+                            "role": "tool", "tool_call_id": cid,
+                            "content": call_results.get(
+                                cid, "error: invalid or dropped arguments")[:2000],
+                        }
+                        messages.append(tool_msg)
+                        self._history.append(dict(tool_msg))
+                    self._history = trim_history(self._history, HISTORY_CAP)
+                # agentic chain: the model issued calls with real effects —
+                # feed their results straight back so act→observe→act runs
+                # at LLM cadence instead of waiting for the next reflect tick
+                if not calls or not any(
+                        a.get("type") in _CHAIN_TOOLS for a in resp["actions"]):
+                    break  # model chose to talk/pause — normal exit
+                if (chain_len >= chain_max
+                        or time.monotonic() - t0 > LLM_TURN_BUDGET_S - 30
+                        or self._budget_exceeded()
+                        or (proactive and self.state.state != "active")):
+                    break
+                # pull queued telemetry/state/chat BEFORE the next sub-call —
+                # keeps command memory fresh and lets trainee chat preempt
+                await self._drain_queue()
+                if self.state.pending_chat:
+                    break  # operator message wins — release the llm lock
             if worked:
                 # real work happened — this turn is progress, not an
                 # unanswered nudge; don't let it feed the backoff streak
@@ -682,28 +781,9 @@ class SessionCoach:
                 # replaces it; done is the failsafe for turns with no chat
                 await self.client.stream_draft(self.sid, draft_id, "", done=True)
             self._active_draft = None
-            calls = resp.get("tool_calls") or []
-            if calls:
-                # replay the exchange faithfully: the model sees its own tool
-                # calls plus EVERY call's result (pairing rule — strict
-                # templates reject a tool_call left without its tool reply)
-                chat_text = "\n".join(
-                    a.get("content", "")[:900] for a in resp["actions"]
-                    if a.get("type") in ("send_chat", "offer_hint",
-                                         "suggest_command") and a.get("content"))
-                self._history.append({
-                    "role": "assistant",
-                    "content": chat_text or None,
-                    "tool_calls": calls,
-                })
-                for i, call in enumerate(calls):
-                    cid = call.get("id") or f"call_{i}"
-                    self._history.append({
-                        "role": "tool", "tool_call_id": cid,
-                        "content": call_results.get(
-                            cid, "error: invalid or dropped arguments")[:2000],
-                    })
-                self._history = trim_history(self._history, HISTORY_CAP)
+            if chain_len > 1:
+                await log.ainfo("llm turn done", session=self.sid,
+                                chain_len=chain_len)
             return spoke
 
     def _record_reply(self, text: str) -> None:

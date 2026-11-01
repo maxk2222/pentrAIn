@@ -939,3 +939,133 @@ async def test_context_operator_directive_at_l4():
     st.operator_directive_ts = time.time() - 700
     msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
     assert "OPERATOR_DIRECTIVE" not in msg
+
+
+# ---------- in-turn agentic chain (act→observe→act) ----------
+
+def _call(i: int, name: str, args: str = "{}") -> dict:
+    return {"id": f"c{i}", "type": "function",
+            "function": {"name": name, "arguments": args}}
+
+
+class ScriptLlm(FakeLlm):
+    """Returns a scripted sequence of responses — one per llm.chat call."""
+    def __init__(self, resps):
+        super().__init__()
+        self.resps = list(resps)
+
+    async def chat(self, messages, **kw):
+        self.calls.append(messages)
+        r = self.resps.pop(0) if self.resps else {
+            "content": "", "actions": [{"type": "none"}], "tool_calls": []}
+        r.setdefault("raw", {"usage": {"total_tokens": 5}})
+        return r
+
+
+async def test_inturn_chain_feeds_tool_results_back():
+    """A tool_call's result must go straight back into the SAME turn — the
+    next llm.chat sees the exec output instead of waiting ~90s for the
+    next reflect tick."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = ScriptLlm([
+        {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+         "actions": [{"type": "exec_in_kali", "command": "id",
+                      "_call_id": "c1"}]},
+        {"content": "done", "tool_calls": [_call(2, "send_chat")],
+         "actions": [{"type": "send_chat", "content": "done",
+                      "_call_id": "c2"}]},
+    ])
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 2          # both calls inside ONE turn
+    # second call's message list carries the tool reply pairing for c1
+    second = coach.llm.calls[1]
+    tools = [m for m in second if m.get("role") == "tool"]
+    assert any(t.get("tool_call_id") == "c1" and "ok" in t["content"]
+               for t in tools)
+    # pairing rule intact: assistant message carries the raw tool_calls
+    assert any(m.get("role") == "assistant" and m.get("tool_calls")
+               for m in second)
+
+
+async def test_chain_stops_on_no_work_calls():
+    """send_chat/none-only responses end the chain — the model decided to
+    talk, not to act; forcing another call would burn tokens for prose."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = ScriptLlm([
+        {"content": "", "tool_calls": [_call(1, "none")],
+         "actions": [{"type": "none", "reason": "waiting",
+                      "_call_id": "c1"}]},
+    ])
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 1
+
+
+async def test_chain_respects_chain_max():
+    coach, c = _coach({"coach": {"takeover_chain_max": 3}, "llm": {}})
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    exec_resp = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+                 "actions": [{"type": "exec_in_kali", "command": "id",
+                              "_call_id": "c1"}]}
+    coach.llm = ScriptLlm([dict(exec_resp) for _ in range(10)])
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 3          # capped — not 10
+
+
+async def test_chain_preempted_by_pending_chat():
+    """A buffered trainee message must release the llm lock after the
+    current sub-call — chat answers can't queue behind a 12-call chain."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    exec_resp = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+                 "actions": [{"type": "exec_in_kali", "command": "id",
+                              "_call_id": "c1"}]}
+    coach.llm = ScriptLlm([dict(exec_resp) for _ in range(10)])
+    coach.state.pending_chat = ["stop and explain"]   # arrived mid-turn
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 1          # broke after the first sub-call
+
+
+async def test_autonomy_event_switches_level_live():
+    """The /autonomy chat command and UI toggle broadcast a session.* event —
+    the running coach must apply it immediately, not on the next resync."""
+    coach, _ = _coach()
+    coach._next_reflect = time.monotonic() + 9999
+    await coach._handle_event({"type": "autonomy", "topic": "session.1",
+                               "data": {"session_id": 1, "level": 4}})
+    assert coach.state.autonomy_level == 4
+    assert coach.ctx["session"]["autonomy_level"] == 4
+    # takeover switch while active → reflect pulled to ~now
+    assert coach._next_reflect < time.monotonic() + 60
+
+
+async def test_autonomy_event_downgrade_does_not_nudge():
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach._next_reflect = time.monotonic() + 9999
+    await coach._handle_event({"type": "autonomy", "topic": "session.1",
+                               "data": {"session_id": 1, "level": 2}})
+    assert coach.state.autonomy_level == 2
+    assert coach._next_reflect > time.monotonic() + 60  # untouched
+
+
+async def test_policy_takeover_pace_gates_new_chains():
+    """Between work chains the model still gets a short settle — the pace
+    setting, not the 90s trainee cooldown, paces L4 chain starts."""
+    from coach.policy import Policy
+    from coach.state import SessionState
+    st = SessionState(session_id=1)
+    st.state = "active"
+    st.coach_enabled = True
+    st.autonomy_level = 4
+    st.last_progress_ts = time.time()
+    p = Policy({}, nudge_s=480, hint_s=900, takeover_pace_s=10)
+    st.last_nudge_ts = time.time() - 5
+    assert not p.evaluate(st).may_proactive      # inside the 10s settle
+    st.last_nudge_ts = time.time() - 15
+    assert p.evaluate(st).may_proactive          # past it → next chain fires

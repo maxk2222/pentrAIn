@@ -686,6 +686,8 @@ async def coach_config(db: AsyncSession = Depends(get_db)):
             "nudge_after_s": await settings_svc.get_setting(db, "coach.nudge_after_s", 480),
             "hint_after_s": await settings_svc.get_setting(db, "coach.hint_after_s", 900),
             "action_budget": await settings_svc.get_setting(db, "coach.action_budget", 50),
+            "takeover_pace_s": await settings_svc.get_setting(db, "coach.takeover_pace_s", 10),
+            "takeover_chain_max": await settings_svc.get_setting(db, "coach.takeover_chain_max", 12),
         },
     }
 

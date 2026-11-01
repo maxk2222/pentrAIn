@@ -189,7 +189,7 @@ class PveClient:
                 out = _b64(st.get("out-data")) or str(st.get("out") or "")
                 err = _b64(st.get("err-data")) or str(st.get("err") or "")
                 return {"out": out, "err": err, "exitcode": st.get("exitcode", 0)}
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
         raise PveError(f"agent/exec timed out after {timeout_s}s (vmid={vmid})")
 
     async def agent_exec_sh(self, vmid: int, shell_cmd: str, *, timeout_s: int = 120) -> dict:

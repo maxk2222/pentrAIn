@@ -45,6 +45,8 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.nudge_after_s": (480, False),
     "coach.hint_after_s": (900, False),
     "coach.action_budget": (50, False),
+    "coach.takeover_pace_s": (10, False),        # min gap between L4 chains
+    "coach.takeover_chain_max": (12, False),     # max LLM calls per L4 turn
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

@@ -98,6 +98,14 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
       ["coach.nudge_after_s", { label: "Nudge after idle (s)", type: "int", min: 60, max: 3600, step: 60 }],
       ["coach.hint_after_s", { label: "Hint after stuck (s)", type: "int", min: 120, max: 7200, step: 60 }],
       ["coach.action_budget", { label: "Coach action budget / session", type: "int", min: 0, max: 500, step: 10 }],
+      ["coach.takeover_pace_s", {
+        label: "Takeover pace (s)", type: "int", min: 0, max: 120, step: 5,
+        help: "Minimum gap between autonomous work chains at autonomy 4 — lower = snappier agent.",
+      }],
+      ["coach.takeover_chain_max", {
+        label: "Takeover chain max", type: "int", min: 1, max: 40, step: 1,
+        help: "Max LLM calls inside one agent turn — the act→observe→act loop stops here.",
+      }],
     ],
   },
   {

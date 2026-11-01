@@ -27,13 +27,14 @@ class PolicyDecision:
 
 class Policy:
     def __init__(self, escalation: dict, *, nudge_s: int, hint_s: int,
-                 verbosity: str = "normal"):
+                 verbosity: str = "normal", takeover_pace_s: int = 10):
         self.gap_factor = VERBOSITY_GAP.get(verbosity, 1.0)
         # verbosity scales the stuck thresholds too — terse coaches tolerate
         # longer silence before speaking at all
         self.observe_grace_s = int(escalation.get("observe_grace_s", 180))
         self.nudge_s = int(escalation.get("nudge_s", nudge_s) * self.gap_factor)
         self.hint_s = int(escalation.get("hint_s", hint_s) * self.gap_factor)
+        self.takeover_pace_s = takeover_pace_s
 
     def evaluate(self, st: SessionState, now: float | None = None) -> PolicyDecision:
         now = now or time.time()
@@ -64,10 +65,11 @@ class Policy:
 
         # never spam: minimum gap between proactive messages (verbosity-scaled)
         min_gap = max(self.observe_grace_s, 300) * self.gap_factor
-        # takeover is an agent loop — the coach IS the worker; a 5-min gap
-        # between every action makes autonomous solves needlessly slow
+        # takeover is an agent loop — the coach IS the worker; the in-turn
+        # chain carries the actual work, so the gap only paces how quickly a
+        # NEW chain may start after the model paused (~10s settle, not 90s)
         if st.autonomy_level >= 4:
-            min_gap = min(min_gap, 90)
+            min_gap = min(min_gap, self.takeover_pace_s)
         if since_nudge < min_gap:
             return PolicyDecision(False, f"nudge cooldown ({int(min_gap - since_nudge)}s left)")
 
