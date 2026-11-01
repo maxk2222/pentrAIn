@@ -75,6 +75,13 @@ async def _broadcast(session_id: int, type_: str, data: dict | None = None) -> N
         "type": type_, "session_id": session_id, "data": data or {}})
 
 
+async def _broadcast_solved(session_id: int, attempt: Attempt) -> None:
+    await _broadcast(session_id, "solved", {
+        "score": attempt.score, "attempt_id": attempt.id,
+        "duration_s": attempt.duration_s,
+        "breakdown": attempt.breakdown or {}})
+
+
 async def _set_state(db: AsyncSession, session: Session, state: SessionState,
                      **fields) -> None:
     session.state = state.value
@@ -528,7 +535,7 @@ async def submit_flag(db: AsyncSession, session_id: int, value: str) -> dict:
         await _set_state(db, session, SessionState.SOLVED,
                          ended_at=datetime.now(UTC).replace(tzinfo=None))
         attempt = await scoring_svc.finalize_attempt(db, session)
-        await _broadcast(session_id, "solved", {"score": attempt.score, "attempt_id": attempt.id})
+        await _broadcast_solved(session_id, attempt)
     return result
 
 
@@ -545,7 +552,7 @@ async def check_flag(db: AsyncSession, session_id: int, flag_key: str) -> dict:
         await _set_state(db, session, SessionState.SOLVED,
                          ended_at=datetime.now(UTC).replace(tzinfo=None))
         attempt = await scoring_svc.finalize_attempt(db, session)
-        await _broadcast(session_id, "solved", {"score": attempt.score, "attempt_id": attempt.id})
+        await _broadcast_solved(session_id, attempt)
     return result
 
 

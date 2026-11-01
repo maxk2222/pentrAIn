@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Select } from "@/components/ui";
 import { AID_CHIPS, AssistBadges } from "@/components/assist";
 import { EmptyState } from "@/components/emptystate";
-import { fmtDuration } from "@/lib/utils";
+import { fmtDuration, scoreTitle } from "@/lib/utils";
 
 // same legacy fallbacks as AssistBadges — pre-assistance attempts only carry
 // hints_used/coach_interventions, so filter and badges must agree
@@ -94,6 +94,7 @@ export function LeaderboardPage() {
               <thead>
                 <tr className="border-b border-border text-left text-muted">
                   <th className="px-4 py-3">Quest</th><th className="px-4 py-3">Best score</th>
+                  <th className="px-4 py-3">Time</th>
                   <th className="px-4 py-3">Aids used</th><th className="px-4 py-3">Attempts</th>
                 </tr>
               </thead>
@@ -105,13 +106,18 @@ export function LeaderboardPage() {
                         {questTitle(r.quest_id)}
                       </Link>
                     </td>
-                    <td className="px-4 py-2.5 font-medium text-accent">{r.best_score}</td>
+                    <td className="px-4 py-2.5 font-medium text-accent" title={scoreTitle(r.breakdown)}>
+                      {r.best_score}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {r.duration_s != null ? fmtDuration(r.duration_s) : "—"}
+                    </td>
                     <td className="px-4 py-2.5"><AssistBadges attempt={r} /></td>
                     <td className="px-4 py-2.5">{r.attempts}</td>
                   </tr>
                 ))}
                 {!global?.length && (
-                  <tr><td colSpan={4} className="px-4 py-10 text-center text-muted">
+                  <tr><td colSpan={5} className="px-4 py-10 text-center text-muted">
                     No completions yet — finish a quest to claim the top spot.
                   </td></tr>
                 )}
@@ -142,7 +148,9 @@ export function LeaderboardPage() {
                 {historyRows.map((a, i) => (
                   <tr key={a.id} className="border-b border-border/50">
                     <td className="px-4 py-2.5">{i === 0 && !aids.size ? <Trophy className="h-4 w-4 text-warning" /> : i + 1}</td>
-                    <td className="px-4 py-2.5 font-medium text-accent">{a.score}</td>
+                    <td className="px-4 py-2.5 font-medium text-accent" title={scoreTitle(a.breakdown)}>
+                      {a.score}
+                    </td>
                     <td className="px-4 py-2.5">{a.flags_found}/{a.flags_total}</td>
                     <td className="px-4 py-2.5">{fmtDuration(a.duration_s)}</td>
                     <td className="px-4 py-2.5"><AssistBadges attempt={a} /></td>

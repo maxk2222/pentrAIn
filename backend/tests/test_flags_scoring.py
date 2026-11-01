@@ -48,6 +48,8 @@ async def test_finalize_attempt_math(db_with_packs):
     assert att.score == 375, att.score
     assert att.flags_found == 2 and att.flags_total == 2
     assert att.hints_used == 1
+    assert att.breakdown == {"flags": 300, "time_bonus": 100, "hint_cost": 25,
+                           "takeover_penalty": 0, "par_s": 900}
 
 
 async def test_takeover_penalty_applied(db_with_packs):
@@ -62,6 +64,8 @@ async def test_takeover_penalty_applied(db_with_packs):
     att = await scoring_svc.finalize_attempt(db, s)
     assert att.score == 50   # 150 time bonus − 100 takeover_cost (linux-t1 cfg)
     assert att.coach_interventions == 1
+    assert att.breakdown["time_bonus"] == 150
+    assert att.breakdown["takeover_penalty"] == 100
 
 
 async def test_assistance_snapshot(db_with_packs):
@@ -85,6 +89,34 @@ async def test_assistance_snapshot(db_with_packs):
         "hints": 1, "coach_msgs": 1, "coach_nudges": 1,
         "takeovers": 0, "sheet": 1, "chat": 0,
     }
+
+
+async def test_leaderboard_ranks_by_score(db_with_packs):
+    """history is a ranking (score desc, duration asc), not a chronological
+    list — the UI puts the trophy on row 1. The global row exposes the
+    best run's duration + score breakdown."""
+    db = db_with_packs
+    for score, dur in [(300, 900), (500, 1200)]:
+        s = Session(quest_id="linux-t1-first-foothold", state="solved")
+        db.add(s)
+        await db.flush()
+        db.add(scoring_svc.Attempt(
+            quest_id=s.quest_id, session_id=s.id, score=score,
+            duration_s=dur,
+            breakdown={"flags": score, "time_bonus": 0, "hint_cost": 0,
+                       "takeover_penalty": 0, "par_s": 900}))
+    await db.commit()
+
+    board = await scoring_svc.quest_leaderboard(db, "linux-t1-first-foothold")
+    assert [a["score"] for a in board["history"]] == [500, 300]
+    assert board["best"]["score"] == 500
+
+    glob = await scoring_svc.global_leaderboard(db)
+    row = next(r for r in glob
+               if r["quest_id"] == "linux-t1-first-foothold")
+    assert row["best_score"] == 500
+    assert row["duration_s"] == 1200
+    assert row["breakdown"]["flags"] == 500
 
 
 async def test_expected_flags_unique_per_session(db_with_packs):

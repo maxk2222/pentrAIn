@@ -8,7 +8,7 @@ import { useAppStore } from "@/lib/store";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Tabs } from "@/components/ui";
 import { AssistBadges } from "@/components/assist";
 import { DifficultyBadge } from "./Library";
-import { fmtDuration } from "@/lib/utils";
+import { fmtDuration, scoreTitle } from "@/lib/utils";
 import { useState } from "react";
 
 export function QuestDetailPage() {
@@ -172,7 +172,9 @@ export function QuestDetailPage() {
             <div className="flex items-center gap-3 border-b border-border px-4 py-3 text-sm">
               <Trophy className="h-4 w-4 text-warning" />
               <span className="font-medium">Personal best:</span>
-              <span className="text-accent">{board.best.score} pts</span>
+              <span className="text-accent" title={scoreTitle(board.best.breakdown)}>
+                {board.best.score} pts
+              </span>
               <span className="text-muted">in {fmtDuration(board.best.duration_s)}</span>
               <AssistBadges attempt={board.best} />
             </div>
@@ -191,7 +193,9 @@ export function QuestDetailPage() {
                 {(board?.history ?? []).map((a, i) => (
                   <tr key={a.id} className="border-b border-border/50">
                     <td className="px-4 py-2.5">{i + 1}</td>
-                    <td className="px-4 py-2.5 font-medium text-accent">{a.score}</td>
+                    <td className="px-4 py-2.5 font-medium text-accent" title={scoreTitle(a.breakdown)}>
+                      {a.score}
+                    </td>
                     <td className="px-4 py-2.5">{a.flags_found}/{a.flags_total}</td>
                     <td className="px-4 py-2.5">{fmtDuration(a.duration_s)}</td>
                     <td className="px-4 py-2.5"><AssistBadges attempt={a} /></td>

@@ -113,16 +113,24 @@ export interface Assistance {
   takeovers?: number; sheet?: number; chat?: number;
 }
 
+/** Score decomposition persisted on the attempt — how time weighed in. */
+export interface ScoreBreakdown {
+  flags?: number; time_bonus?: number; hint_cost?: number;
+  takeover_penalty?: number; par_s?: number;
+}
+
 export interface Attempt {
   id: number; quest_id: string; session_id: number; score: number;
   flags_found: number; flags_total: number; hints_used: number;
   coach_interventions: number; assistance?: Assistance;
+  breakdown?: ScoreBreakdown;
   duration_s: number; created_at: string | null;
 }
 
 export interface QuestLeaderboard { best: Attempt | null; history: Attempt[] }
 export interface GlobalBoardRow {
   quest_id: string; best_score: number; attempts: number; assistance?: Assistance;
+  duration_s?: number | null; breakdown?: ScoreBreakdown;
 }
 
 export interface ChatMessage {

@@ -6,7 +6,7 @@ import {
   PanelTop, Play, Plus, RotateCcw, RotateCw, Square, TerminalSquare,
   Wifi, X,
 } from "lucide-react";
-import { api, wsUrl, type Session, type WsEvent } from "@/lib/api";
+import { api, wsUrl, type QuestLeaderboard, type Session, type WsEvent } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, IconButton, Tabs } from "@/components/ui";
 import { ResizeHandle } from "@/components/resizable";
@@ -19,7 +19,7 @@ import { NotesPanel } from "@/components/notes";
 import { LazyModal } from "@/components/lazymodal";
 import { LiveStatsOverlay } from "@/components/livestats";
 import { DeployLog } from "@/components/deploylog";
-import { cn } from "@/lib/utils";
+import { cn, fmtDuration } from "@/lib/utils";
 
 const TERMINAL = new Set(["solved", "aborted", "failed"]);
 const PANELS_KEY = "pentrain-panels";
@@ -131,6 +131,14 @@ export function SessionPage() {
     queryFn: () => api.get<Session>(`/api/sessions/${sessionId}`),
     refetchInterval: (q) => (q.state.data && TERMINAL.has(q.state.data.state) ? false : 8000),
   });
+
+  // solved → pull this session's attempt for the score breakdown incl. time
+  const { data: board } = useQuery({
+    queryKey: ["leaderboard", session?.quest_id],
+    queryFn: () => api.get<QuestLeaderboard>(`/api/quests/${session?.quest_id}/leaderboard`),
+    enabled: session?.state === "solved" && Boolean(session?.quest_id),
+  });
+  const attempt = board?.history.find((a) => a.session_id === sessionId);
 
   // restored-open assistance panels carry over from older sessions — the aid
   // still counts toward THIS session's solve style, so record it once on mount
@@ -517,10 +525,32 @@ export function SessionPage() {
               <DeployLog lines={logLines} state={state} />
             ) : (
               <div className="grid h-full place-items-center text-sm text-muted">
-                Session is {state ?? "unknown"}.
-                {state === "solved" && (
-                  <span className="mt-2 text-accent">Quest solved — check the leaderboard.</span>
-                )}
+                <div className="text-center">
+                  <div>Session is {state ?? "unknown"}.</div>
+                  {state === "solved" && (
+                    <div className="mt-3">
+                      <div className="text-base font-semibold text-accent">Quest solved</div>
+                      {attempt ? (
+                        <div className="mt-1 text-xs">
+                          {attempt.score} pts · {fmtDuration(attempt.duration_s)}
+                          {attempt.breakdown?.flags != null && (
+                            <div className="mt-1 text-muted">
+                              flags {attempt.breakdown.flags}
+                              {attempt.breakdown.time_bonus
+                                ? `  +  time ${attempt.breakdown.time_bonus}` : ""}
+                              {attempt.breakdown.hint_cost
+                                ? `  −  hints ${attempt.breakdown.hint_cost}` : ""}
+                              {attempt.breakdown.takeover_penalty
+                                ? `  −  takeover ${attempt.breakdown.takeover_penalty}` : ""}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs">check the leaderboard for your score</div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

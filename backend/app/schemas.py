@@ -138,6 +138,7 @@ class AttemptOut(BaseModel):
     hints_used: int
     coach_interventions: int
     assistance: dict = Field(default_factory=dict)
+    breakdown: dict = Field(default_factory=dict)
     duration_s: int
     created_at: str | None
 
