@@ -99,7 +99,7 @@ ip -4 -o addr show "$iface" | grep -q "inet " || \\
   (timeout 15 dhclient -1 "$iface" 2>/dev/null || timeout 15 dhcpcd "$iface" 2>/dev/null || true)
 OLDGW=$(ip -4 route show default dev eth0 2>/dev/null | awk '{{print $3; exit}}')
 ip route del default dev eth0 2>/dev/null || true
-# platform API lives on the ludus WAN bridge behind the range router — pin a
+# platform API lives on the ludus WAN bridge behind the range router - pin a
 # /32 via the range gateway so telemetry/terminal keep working while the
 # LAN default route owns all other egress
 [ -n "$API_HOST" ] && [ -n "$RDNS" ] && \\
@@ -188,8 +188,9 @@ async def apply_kali_internet(engine, vmid: int, wan_bridge: str = "vmbr0",
             f"{WAN_NET} attach {'landed in pending — template hotplug off, reboot needed' if pend else 'did not stick'}")
     # Long scripts as exec-args wedge the virtio QGA channel on this host —
     # write the script via guest-file-write, then exec a tiny command.
-    await pve.agent_file_write(vmid, "/tmp/pentrain-netup.sh",
-                               _guest_bringup(mac, target_names or [], api_host))
+    script = _guest_bringup(mac, target_names or [], api_host)
+    script.encode("ascii")   # guest-file-write dies on wide chars (opaque 500)
+    await pve.agent_file_write(vmid, "/tmp/pentrain-netup.sh", script)
     r = await pve.agent_exec_sh(vmid, "timeout 55 sh /tmp/pentrain-netup.sh",
                               timeout_s=70)
     out = r.get("out") or ""
@@ -220,8 +221,9 @@ async def remove_kali_internet(engine, vmid: int,
     await pve.vm_config_set(vmid, delete=WAN_NET)
     await asyncio.sleep(3.0)              # let the unplug + NM rewrite settle
     try:
-        await pve.agent_file_write(vmid, "/tmp/pentrain-netdown.sh",
-                                   _guest_release(mac, api_host))
+        script = _guest_release(mac, api_host)
+        script.encode("ascii")
+        await pve.agent_file_write(vmid, "/tmp/pentrain-netdown.sh", script)
         await pve.agent_exec_sh(vmid, "timeout 12 sh /tmp/pentrain-netdown.sh",
                                 timeout_s=18)
     except Exception as e:  # guest agent down → config is already clean anyway

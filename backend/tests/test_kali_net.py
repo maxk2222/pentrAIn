@@ -337,3 +337,12 @@ def test_guest_scripts_pin_api_route():
     # without an api host the guards stay inert (empty var, [ -n ] skips)
     b2 = _guest_bringup("aa:bb:cc:dd:ee:ff", [])
     assert "API_HOST=''" in b2
+
+
+def test_guest_scripts_pure_ascii():
+    # qemu guest-file-write 500s on wide chars — assert the invariant
+    from app.services.kali_net import _guest_bringup, _guest_release
+    _guest_bringup("bc:24:11:22:33:44", ["pentrain-x:21", "x:21"],
+                   "192.0.2.10").encode("ascii")
+    _guest_bringup("bc:24:11:22:33:44", [], None).encode("ascii")
+    _guest_release("bc:24:11:22:33:44", "192.0.2.10").encode("ascii")
