@@ -158,7 +158,7 @@ class FileFact:
 READ_CMD = re.compile(
     r"(?:^|['\";|&]\s*)(?:sudo\s+)?(?:cat|less|more|head|tail|grep|egrep|"
     r"fgrep|awk|sed|cut|sort|uniq|wc|strings|file|ls|ll|xxd|od|diff)\b")
-_ABS_PATH = re.compile(r"(?<![\w.-])/(?:[\w.+-]+/)*[\w.+-]+")
+_ABS_PATH = re.compile(r"(?<![\w.:/-])/(?:[\w.+-]+/)*[\w.+-]+")
 
 
 def read_target(cmd: str) -> str | None:

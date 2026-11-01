@@ -246,3 +246,25 @@ def test_valid_on_marks_working_credential():
         "Access denied for user 'u'@'db'", 0)
     c3 = next(c for c in f3.creds if c.secret == "Bad")
     assert not c3.valid_on
+
+
+def test_read_target_ignores_url_paths():
+    """curl|head must not count http://host:port/… as a file read —
+    live s46 false-positive blocked API curls as 'read /172.20.1.2'."""
+    from coach.facts import read_target, FactsDB
+    assert read_target(
+        "curl -s http://172.20.1.2:8080/ 2>&1 | head -50") is None
+    assert read_target(
+        "curl -s http://172.20.1.2:8080/api/export?format=json") is None
+    # curl itself never counts (not a read cmd) — identical URL fetches
+    # are caught by the _out_sigs dedup, not the file-read guard
+    assert read_target(
+        "curl -s 'http://h:8080/export?path=/etc/passwd'") is None
+    # real reads unaffected
+    assert read_target("cat /tmp/x | head") == "/tmp/x"
+    assert read_target(
+        "sshpass -p x ssh u@h 'cat /var/log/y'") == "/var/log/y"
+    f = FactsDB()
+    f.observe_output(
+        "curl -s http://172.20.1.2:8080/api 2>&1 | head -50", "{}", 0)
+    assert not any(p.startswith("/172.20.1.2") for p in f.files)
