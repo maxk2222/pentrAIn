@@ -468,7 +468,7 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-sm font-medium">
-        <span>Coach <span className="ml-1 text-xs font-normal text-muted">adaptive hints</span></span>
+        <span>Elliot <span className="ml-1 text-xs font-normal text-muted">samsepi0l · adaptive hints</span></span>
         <span className="flex items-center gap-2">
           {autonomy !== undefined && onAutonomy && (
             <AutonomyToggle autonomy={autonomy} onAutonomy={onAutonomy} />
@@ -527,7 +527,7 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
             )}
             {!visible.length && !thinking && (
               <p className="p-2 text-sm text-muted">
-                The coach will chime in as you work. Ask questions anytime — it renders
+                Elliot will chime in as you work. Ask questions anytime — he renders
                 Markdown, code blocks and diagrams.
               </p>
             )}
@@ -549,7 +549,7 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
       <div className="border-t border-border">
         {Object.keys(agents).length > 0 && (
           <div className="flex items-center gap-1 overflow-x-auto px-2 pt-1.5">
-            <AgentChip label="coach" title="main agent — you are chatting with this one"
+            <AgentChip label="elliot" title="samsepi0l — main agent, you are chatting with this one"
               selected={selAgent === "main"}
               working={!!activity || Object.keys(drafts).length > 0}
               unseen={selAgent === "main" ? 0 : mainUnseen}
@@ -586,7 +586,7 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
             }}
-            placeholder="Ask the coach… (Shift+Enter for newline)"
+            placeholder="Ask Elliot… (Shift+Enter for newline)"
             maxLength={8000}
             className="max-h-[120px] min-w-0 flex-1 resize-none rounded-md border border-border bg-surface-2 px-3 py-2 text-sm outline-none placeholder:text-muted focus:border-primary/60" />
           {text.length > 7200 && (
@@ -723,7 +723,7 @@ function AgentChip({ label, title, status, selected, working, unseen, onClick }:
 
 const KIND_STYLE: Record<string, { label: string; cls: string; iconCls: string }> = {
   suggestion: { label: "suggested command", cls: "border border-accent/40 bg-accent/10", iconCls: "bg-accent/15 text-accent" },
-  action_report: { label: "coach action", cls: "border border-warning/40 bg-warning/10", iconCls: "bg-warning/15 text-warning" },
+  action_report: { label: "elliot action", cls: "border border-warning/40 bg-warning/10", iconCls: "bg-warning/15 text-warning" },
   hint: { label: "hint", cls: "border border-accent/40 bg-accent/5", iconCls: "bg-accent/15 text-accent" },
   nudge: { label: "", cls: "bg-surface-2", iconCls: "bg-primary/20 text-primary" },
 };

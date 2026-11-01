@@ -87,10 +87,10 @@ export function DashboardPage() {
 
       <Card>
         <CardHeader className="flex-row items-center gap-2">
-          <BrainCircuit className="h-4 w-4 text-primary" /><CardTitle className="text-base">Coach</CardTitle>
+          <BrainCircuit className="h-4 w-4 text-primary" /><CardTitle className="text-base">Elliot</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted">
-          Your AI coach watches your command stream during sessions and adapts hints to your level.
+          Elliot — your AI coach (samsepi0l) — watches your command stream during sessions and adapts hints to your level.
           Set autonomy and verbosity in <Link to="/settings" className="text-primary hover:underline">Settings</Link>.
         </CardContent>
       </Card>

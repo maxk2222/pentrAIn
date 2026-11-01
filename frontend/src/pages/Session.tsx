@@ -416,7 +416,7 @@ export function SessionPage() {
               active={panels.sheet} onClick={() => togglePanel("sheet")} />
             <IconButton icon={NotebookPen} label="Notes"
               active={panels.notes} onClick={() => togglePanel("notes")} />
-            <IconButton icon={Bot} label="Coach panel"
+            <IconButton icon={Bot} label="Elliot panel"
               active={panels.chat} badgeDot={unread > 0} onClick={() => togglePanel("chat")} />
             {consoleReady && (
               <IconButton icon={Wifi} label={netBusy ? "Kali internet: switching…"
@@ -636,7 +636,7 @@ export function SessionPage() {
             </div>
           </>
         ) : (
-          <CollapsedStrip icon={Bot} label="Coach" unread={unread}
+          <CollapsedStrip icon={Bot} label="Elliot" unread={unread}
             onClick={() => togglePanel("chat")} />
         )}
       </div>

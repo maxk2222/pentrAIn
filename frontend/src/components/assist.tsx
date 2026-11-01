@@ -4,12 +4,12 @@ import type { Assistance } from "@/lib/api";
 import { Badge } from "@/components/ui";
 
 export const AID_CHIPS = [
-  { key: "takeovers", icon: Zap, label: "takeover", title: "Coach executed commands in Kali" },
+  { key: "takeovers", icon: Zap, label: "takeover", title: "Elliot executed commands in Kali" },
   { key: "hints", icon: Lightbulb, label: "hint", title: "Paid hints revealed" },
-  { key: "coach_msgs", icon: MessageSquare, label: "coach", title: "Messages sent to the coach" },
-  { key: "coach_nudges", icon: Sparkles, label: "tips", title: "Coach-initiated hints/nudges" },
+  { key: "coach_msgs", icon: MessageSquare, label: "coach", title: "Messages sent to Elliot" },
+  { key: "coach_nudges", icon: Sparkles, label: "tips", title: "Elliot-initiated hints/nudges" },
   { key: "sheet", icon: BookOpen, label: "sheet", title: "Reference sheet opened" },
-  { key: "chat", icon: Bot, label: "panel", title: "Coach panel opened" },
+  { key: "chat", icon: Bot, label: "panel", title: "Elliot panel opened" },
 ] as const;
 
 export function AssistBadges({ attempt: a }: {
