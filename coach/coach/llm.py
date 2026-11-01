@@ -24,6 +24,7 @@ ALLOWED_ACTIONS = {
     "send_chat", "offer_hint", "suggest_command", "exec_in_kali", "type_in_pane",
     "submit_flag", "check_flag", "mark_checkpoint", "capture_screen", "none",
     "spawn_agent", "collect_agent", "agent_status", "kill_agent", "wait",
+    "update_plan",
 }
 
 

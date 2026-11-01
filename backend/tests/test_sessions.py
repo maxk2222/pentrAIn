@@ -767,3 +767,36 @@ async def test_session_context_returns_flag_submits_and_worker_reports(db_with_p
     assert len(reports) == 1 and reports[0]["agent"] == "w1"
     assert "w1 done" in reports[0]["content"]
     await _abort_done(db, s.id)
+
+
+async def test_session_context_returns_plan_and_coach_notes(db_with_packs):
+    """plan + coach_notes — the resync seeds that keep the agent's own
+    roadmap and private notes alive across coach restarts."""
+    from app.services import coach_bridge
+    from app.models.domain import CoachAction
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    db.add(CoachAction(session_id=s.id, tool="update_plan",
+                       args={"items": [{"t": "stale step", "s": "todo"}],
+                             "agent": "main"}))
+    db.add(CoachAction(session_id=s.id, tool="update_plan",
+                       args={"items": [{"t": "worker step", "s": "doing"}],
+                             "agent": "w1"}))
+    db.add(CoachAction(session_id=s.id, tool="update_plan",
+                       args={"items": [{"t": "fresh step", "s": "doing"}],
+                             "agent": "main"}))
+    db.add(CoachAction(session_id=s.id, tool="note",
+                       args={"text": "pivot via deploy@shop01", "agent": "main"}))
+    db.add(CoachAction(session_id=s.id, tool="note",
+                       args={"text": "[w1] api needs bearer", "agent": "w1"}))
+    db.add(CoachAction(session_id=s.id, tool="exec_in_kali",
+                       args={"command": "id"}, result={"out": "uid=0"}))
+    await db.commit()
+    ctx = await coach_bridge.session_context(db, s.id)
+    # latest MAIN snapshot only — worker rows and stale snapshots excluded
+    assert ctx["plan"] == [{"t": "fresh step", "s": "doing"}]
+    # chronological, both agents' notes
+    assert ctx["coach_notes"] == ["pivot via deploy@shop01",
+                                  "[w1] api needs bearer"]
+    await _abort_done(db, s.id)

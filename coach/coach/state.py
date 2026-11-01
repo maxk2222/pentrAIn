@@ -5,6 +5,36 @@ import re
 import time
 from dataclasses import dataclass, field
 
+PLAN_MAX_ITEMS = 10
+PLAN_TEXT_MAX = 110
+_STATUS = {"done": "done", "complete": "done", "completed": "done",
+           "x": "done", "finished": "done",
+           "doing": "doing", "current": "doing", "wip": "doing",
+           "active": "doing", "in_progress": "doing"}
+
+
+def normalize_plan(items) -> list[dict]:
+    """LLM-supplied plan → bounded [{"t","s"}]. Bare strings count as todo;
+    unknown statuses fall back to todo. Atomic full-replace input — the
+    caller replaces the whole plan each call so a truncated rewrite can't
+    leave zombie steps behind."""
+    out: list[dict] = []
+    for it in items or []:
+        if len(out) >= PLAN_MAX_ITEMS:
+            break
+        if isinstance(it, str):
+            t, s = it, "todo"
+        elif isinstance(it, dict):
+            t, s = str(it.get("t") or it.get("text") or it.get("step") or ""), \
+                _STATUS.get(str(it.get("s") or it.get("status") or "")
+                            .strip().lower(), "todo")
+        else:
+            continue
+        t = t.strip()[:PLAN_TEXT_MAX]
+        if t:
+            out.append({"t": t, "s": s})
+    return out
+
 
 @dataclass
 class CommandRec:
@@ -38,6 +68,10 @@ class SessionState:
     # latest screenshot description produced by the vision model
     screen_desc: str = ""
     notes: list[str] = field(default_factory=list)               # coach-side observations
+    # self-maintained roadmap (update_plan) — intent, not evidence: FACTS
+    # says what IS, the plan says what COMES NEXT. Persisted via
+    # log_action so it survives restarts; workers keep their own on _Worker
+    plan: list[dict] = field(default_factory=list)
     # rolling summary — what trim_history dropped, distilled to one line per
     # item so long-horizon runs keep a trace of their early turns
     earlier: list[str] = field(default_factory=list)

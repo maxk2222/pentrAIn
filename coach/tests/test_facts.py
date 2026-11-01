@@ -268,3 +268,22 @@ def test_read_target_ignores_url_paths():
     f.observe_output(
         "curl -s http://172.20.1.2:8080/api 2>&1 | head -50", "{}", 0)
     assert not any(p.startswith("/172.20.1.2") for p in f.files)
+
+
+def test_normalize_plan_edges():
+    from coach.state import normalize_plan
+    # bare strings → todo; status aliases; caps
+    items = normalize_plan(
+        ["first", {"t": "second", "s": "WIP"}, {"t": "x", "s": "weird"},
+         {"t": "done-thing", "s": "finished"}, {"text": "alt key"},
+         42, {"t": ""}] + [{"t": f"s{i}"} for i in range(20)])
+    assert items[0] == {"t": "first", "s": "todo"}
+    assert items[1]["s"] == "doing"          # WIP alias
+    assert items[2]["s"] == "todo"           # unknown → todo
+    assert items[3]["s"] == "done"           # finished alias
+    assert items[4]["t"] == "alt key"        # text/step fallback keys
+    assert len(items) == 10                  # PLAN_MAX_ITEMS
+    assert all(i["t"] for i in items)
+    # long text is cut, not dropped
+    long = normalize_plan([{"t": "x" * 200}])
+    assert len(long[0]["t"]) == 110

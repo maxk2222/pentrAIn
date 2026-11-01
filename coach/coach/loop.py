@@ -17,7 +17,7 @@ import hashlib
 import ipaddress
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 import structlog
@@ -30,8 +30,8 @@ from .facts import FLAG_RE, WRITE_RE, FactsDB
 from . import facts as facts_mod
 from .llm import LlmClient, LlmError
 from .policy import Policy
-from .prompts import build_context_msg, chat_prompt, render_worker_prompt, system_prompt
-from .state import CheckpointMatcher, SessionState
+from .prompts import build_context_msg, chat_prompt, plan_render, render_worker_prompt, system_prompt
+from .state import CheckpointMatcher, SessionState, normalize_plan
 from .tools import WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
 
 log = structlog.get_logger(__name__)
@@ -62,6 +62,10 @@ class _Worker:
     turns: int = 0
     started: float = 0.0
     merged: bool = False    # report already flowed into FactsDB
+    # worker's own roadmap — update_plan under this window writes here,
+    # never the parent's state.plan; audit-only persistence (workers die
+    # on restart)
+    plan: list[dict] = field(default_factory=list)
     task_obj: asyncio.Task | None = None
 
 
@@ -312,6 +316,12 @@ class SessionCoach:
                 self.facts.apply_delta(
                     percept.parse_output("", content),
                     source=str(wr.get("agent") or "w?"))
+        # intent memory: the agent's own roadmap + private notes survive
+        # restarts via coach_actions — without this the model re-derives
+        # its multi-step plan from scattered evidence after every restart
+        self.state.plan = normalize_plan(self.ctx.get("plan") or [])
+        self.state.notes = [str(n)[:300]
+                            for n in self.ctx.get("coach_notes") or []][-8:]
         # stuck/idle clocks seed from the most RECENT liveness signal —
         # not blindly from started_at (a session parked in 'ready' for hours
         # then activated must not look stuck-since-forever)
@@ -880,8 +890,14 @@ class SessionCoach:
                         # model "reasoning notes" become working memory for
                         # later turns
                         if a.get("type") == "none" and a.get("reason"):
-                            self.state.notes.append(str(a["reason"])[:300])
+                            note_txt = str(a["reason"])[:300]
+                            self.state.notes.append(note_txt)
                             self.state.notes = self.state.notes[-8:]
+                            # persist — notes are working memory that must
+                            # survive a coach restart like everything else
+                            asyncio.create_task(self.client.log_action(
+                                self.sid, "note",
+                                {"text": note_txt, "agent": "main"}, {}))
                         did, res = await self._dispatch(a, proactive=proactive)
                         spoke |= did
                         if cid := a.get("_call_id"):
@@ -1650,6 +1666,31 @@ class SessionCoach:
                         result += (f" NOTE: {streak} consecutive waits — if "
                                    "the condition still isn't met, reconsider "
                                    "the approach instead of waiting longer")
+        elif t == "update_plan":
+            # self-maintained roadmap — atomic full-replace so a truncated
+            # rewrite can't leave zombie steps. A worker's plan lives on
+            # its _Worker, never the parent's.
+            items = normalize_plan(a.get("items") or a.get("plan") or [])
+            target = (self._workers[window].plan
+                      if window and window in self._workers
+                      else self.state.plan)
+            target.clear()
+            target.extend(items)
+            open_n = sum(1 for i in items if i["s"] != "done")
+            result = (f"plan saved — {len(items)} steps "
+                      f"({open_n} open): "
+                      + " | ".join(f"[{'x' if i['s'] == 'done' else '>' if i['s'] == 'doing' else ' '}] {i['t']}"
+                                  for i in items)[:600])
+            asyncio.create_task(self.client.log_action(
+                self.sid, "update_plan",
+                {"items": items, "agent": window or "main"},
+                {"open": open_n}))
+            rep = (f"{'[' + window + '] ' if window else ''}"
+                   f"**Plan:** {open_n} open / {len(items)} steps")
+            await self.client.send_chat(self.sid, rep, kind="action_report",
+                                        meta=self._msg_meta(window))
+            self._record_reply(rep)
+            spoke = True
         # "none" or unknown → silence (reason captured above as working memory)
         if t == "none":
             result = "noted"
@@ -1757,6 +1798,13 @@ class SessionCoach:
             w = self._workers[wid]
             lines.append(f"{w.id} {w.status} — {w.actions} actions, "
                          f"{int(now - w.started)}s — \"{w.task[:70]}\"")
+            if w.plan:
+                doing = next((i["t"] for i in w.plan if i["s"] == "doing"),
+                             next((i["t"] for i in w.plan
+                                   if i["s"] == "todo"), ""))
+                open_n = sum(1 for i in w.plan if i["s"] != "done")
+                lines.append(f"   plan: {open_n} open"
+                             + (f" — next: {doing[:70]}" if doing else ""))
         return "workers:\n" + "\n".join(lines)
 
     def _kill_agent(self, a: dict) -> str:
@@ -1820,7 +1868,9 @@ class SessionCoach:
         call/result pairing), shared guards/budgets via _dispatch(window)."""
         msgs = [{"role": "system",
                  "content": render_worker_prompt(
-                     self.ctx, w, self.facts.render(500, compact=True))},
+                     self.ctx, w, self.facts.render(500, compact=True),
+                     plan_render(self.state.plan, cap=350,
+                                 title="OPERATOR_PLAN"))},
                 {"role": "user", "content": w.task}]
         cc = self.cfg.get("coach", {})
         turn_cap = int(cc.get("worker_turn_cap", 10))
@@ -1850,9 +1900,12 @@ class SessionCoach:
                              and a.get("type") != "none"]
                 for a in resp["actions"]:
                     if a.get("type") == "none" and a.get("reason"):
-                        self.state.notes.append(
-                            f"[{w.id}] {a['reason']}"[:300])
+                        note_txt = f"[{w.id}] {a['reason']}"[:300]
+                        self.state.notes.append(note_txt)
                         self.state.notes = self.state.notes[-8:]
+                        asyncio.create_task(self.client.log_action(
+                            self.sid, "note",
+                            {"text": note_txt, "agent": w.id}, {}))
                     did, res = await self._dispatch(a, proactive=True,
                                                   window=w.id)
                     if did:

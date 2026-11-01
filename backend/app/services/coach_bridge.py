@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 import secrets
 import shlex
@@ -84,6 +85,32 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                 func.json_extract(CoachMessage.meta, "$.agent").is_not(None))
             .order_by(CoachMessage.id.desc()).limit(6))).all()
         if r[0]]
+    # the agent's own roadmap (update_plan writes it, restarts must not
+    # lose it) — full-replace semantics → the latest main-agent snapshot
+    # IS the plan; worker plan rows are audit-only (workers die on restart)
+    plan_raw = (await db.execute(
+        select(func.json_extract(CoachAction.args, "$.items")).where(
+            CoachAction.session_id == session_id,
+            CoachAction.tool == "update_plan",
+            func.coalesce(
+                func.json_extract(CoachAction.args, "$.agent"), "main")
+            == "main")
+        .order_by(CoachAction.id.desc()).limit(1))).scalar()
+    # json_extract yields a JSON string for arrays — back to a list
+    try:
+        plan = json.loads(plan_raw) if isinstance(plan_raw, str) else (plan_raw or [])
+    except (TypeError, ValueError):
+        plan = []
+    if not isinstance(plan, list):
+        plan = []
+    # private none-reason notes — the coach's working memory; last 10 in
+    # chronological order for the reseed (cap 8 applies coach-side)
+    coach_notes = [r[0] for r in (await db.execute(
+        select(func.json_extract(CoachAction.args, "$.text")).where(
+            CoachAction.session_id == session_id,
+            CoachAction.tool == "note")
+        .order_by(CoachAction.id.desc()).limit(10))).all() if r[0]]
+    coach_notes.reverse()
     telem = (await db.execute(
         select(TelemetryEvent).where(TelemetryEvent.session_id == session_id)
         .order_by(TelemetryEvent.id.desc()).limit(60))).scalars().all()
@@ -209,6 +236,8 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         "flag_outs": flag_outs,
         "flag_submits": flag_submits,
         "worker_reports": worker_reports,
+        "plan": plan,
+        "coach_notes": coach_notes,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},
     }

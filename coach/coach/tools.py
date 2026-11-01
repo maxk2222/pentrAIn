@@ -56,6 +56,19 @@ TOOLS: list[dict] = [
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
+    _fn("update_plan",
+        "Replace your working plan (max 10 steps) — your roadmap across "
+        "restarts and context trims. Update on every phase change: mark "
+        "steps done once proven, keep exactly one 'doing'. Persisted; "
+        "bookkeeping only — costs no action budget.",
+        {"items": {"type": "array",
+                   "items": {"type": "object",
+                             "properties": {
+                                 "t": _str("step, <=110 chars"),
+                                 "s": {"type": "string",
+                                       "enum": ["todo", "doing", "done"]}},
+                             "required": ["t"]}}},
+        ["items"]),
     _fn("wait",
         "Wait N seconds without acting — for time-dependent state changes "
         "(cron jobs, service startup, lockout/cooldown timers). Touches "
@@ -88,7 +101,8 @@ TOOLS: list[dict] = [
 
 # tools a spawned worker may call — exec-only: no chat, flags, checkpoints
 # or nested spawns; completion stays with the parent coach.
-WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none"}
+WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none",
+                     "update_plan"}
 SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
                        "kill_agent"}
 
@@ -98,13 +112,14 @@ TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 # pick an action the gate will refuse anyway, and on takeover don't offer
 # suggest_command at all (its confirm-chip can never be clicked in auto mode)
 _LEVEL_TOOLS = {
-    1: {"send_chat", "offer_hint", "capture_screen", "none"},
-    2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen", "none"},
+    1: {"send_chat", "offer_hint", "capture_screen", "update_plan", "none"},
+    2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen",
+        "update_plan", "none"},
     3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
-        "capture_screen", "none"},
+        "capture_screen", "update_plan", "none"},
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
-        "wait", "none"},
+        "wait", "update_plan", "none"},
 }
 
 

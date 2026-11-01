@@ -37,6 +37,11 @@ class FakeClient:
     async def send_activity(self, sid, text="", *, active=True, agent="main"):
         pass
 
+    async def log_action(self, sid, tool, args, result, status="ok"):
+        self.logged = getattr(self, "logged", [])
+        self.logged.append({"tool": tool, "args": args})
+        return {}
+
 
 def _coach(autonomy: int, action_budget: int = 50) -> tuple[SessionCoach, FakeClient]:
     c = FakeClient()
@@ -211,3 +216,55 @@ async def test_worker_wait_uses_own_deadline():
     assert card["meta"]["agent"] == "w1"
     assert coach._wait_streak["w1"] == 1
     assert coach._wait_streak.get("main", 0) == 0
+
+
+async def test_update_plan_stores_normalizes_and_reports():
+    coach, c = _coach(4)
+    spoke, res = await coach._dispatch({"type": "update_plan", "items": [
+        {"t": "loot creds from tarball", "s": "done"},
+        {"t": "mysql LOAD_FILE via shop_ro", "s": "doing"},
+        {"t": "read /root flags"}]})
+    assert spoke
+    assert coach.state.plan == [
+        {"t": "loot creds from tarball", "s": "done"},
+        {"t": "mysql LOAD_FILE via shop_ro", "s": "doing"},
+        {"t": "read /root flags", "s": "todo"}]
+    assert "2 open" in res and "[x]" in res and "[>]" in res
+    # persistence + feed report
+    await asyncio.sleep(0)
+    assert any(l["tool"] == "update_plan" and l["args"]["agent"] == "main"
+               for l in c.logged)
+    card = next(k for k in c.chats if k["kind"] == "action_report"
+                and "Plan" in k["content"])
+    assert "2 open / 3 steps" in card["content"]
+
+
+async def test_update_plan_all_levels_and_atomic_replace():
+    coach, c = _coach(1)          # bookkeeping — allowed everywhere
+    await coach._dispatch({"type": "update_plan",
+                           "items": [{"t": "nudge next", "s": "doing"}]})
+    assert len(coach.state.plan) == 1
+    # full-replace: second call replaces, never appends zombie steps
+    await coach._dispatch({"type": "update_plan",
+                           "items": [{"t": "only step left", "s": "done"}]})
+    assert coach.state.plan == [{"t": "only step left", "s": "done"}]
+
+
+async def test_update_plan_worker_owns_its_plan():
+    from coach.loop import _Worker
+    coach, c = _coach(4)
+    coach.state.plan = [{"t": "parent phase", "s": "doing"}]
+    coach._workers["w1"] = _Worker(id="w1", task="enum",
+                                   started=time.monotonic())
+    spoke, res = await coach._dispatch(
+        {"type": "update_plan",
+         "items": [{"t": "w step", "s": "doing"}]}, window="w1")
+    assert spoke
+    assert coach._workers["w1"].plan == [{"t": "w step", "s": "doing"}]
+    assert coach.state.plan == [{"t": "parent phase", "s": "doing"}]
+    await asyncio.sleep(0)
+    assert any(l["args"]["agent"] == "w1" for l in c.logged
+               if l["tool"] == "update_plan")
+    # parent sees worker intent via agent_status
+    _s, st = await coach._dispatch({"type": "agent_status"})
+    assert "w step" in st

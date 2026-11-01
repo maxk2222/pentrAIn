@@ -136,10 +136,12 @@ Answer format — JSON only:
             {"type":"submit_flag","value":"<flag value seen in output>"},
             {"type":"check_flag","flag_key":"<key from FLAGS>"},
             {"type":"mark_checkpoint","checkpoint_id":"<id from CHECKPOINTS_OPEN>"},
+            {"type":"update_plan","items":[{"t":"<step>","s":"doing"}]},
             {"type":"capture_screen"},
             {"type":"none","reason":"<short private note>"}]}
 Mark a checkpoint only when telemetry shows the trainee actually did the \
-corresponding step. "none" reasons are remembered as your private notes.
+corresponding step. "none" reasons are remembered as your private notes. \
+`update_plan` replaces your persistent roadmap — keep it current.
 """
 
 # kept for imports that predate the split — JSON contract is the fallback
@@ -149,6 +151,22 @@ SYSTEM = SYSTEM_BASE + FORMAT_JSON
 def system_prompt(tools_active: bool) -> str:
     return SYSTEM_BASE + (FORMAT_TOOLS if tools_active else FORMAT_JSON) + (
         "\n\n" + _knowledge() if _knowledge() else "")
+
+
+def plan_render(plan: list[dict] | None, cap: int = 400,
+                title: str = "PLAN") -> str:
+    """Self-maintained roadmap → compact context block. [x]=done, [>]=doing,
+    [ ]=todo. Rendered next to CURRENT_OBJECTIVE — deterministic suggestion
+    vs model intent stay complementary (objective can't hold phases)."""
+    items = [i for i in (plan or []) if i.get("t")]
+    if not items:
+        return ""
+    lines = [f"{title} (yours — update via update_plan as phases change):"]
+    for i in items:
+        mark = {"done": "x", "doing": ">"}.get(i.get("s"), " ")
+        lines.append(f" [{mark}] {i['t'][:110]}")
+    out = "\n".join(lines)
+    return out[:cap]
 
 
 def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
@@ -199,6 +217,9 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         # action from open work, so long-horizon runs don't lose the thread
         *([obj_txt] if (obj_txt := (objective_render(ctx, facts, st)
                                    if facts else "")) else []),
+        # the model's own roadmap — intent next to the deterministic
+        # suggestion; update_plan rewrites it, restarts keep it
+        *([plan_txt] if (plan_txt := plan_render(st.plan)) else []),
         f"CHECKPOINTS_HIT: {sorted(st.checkpoints_hit)}",
         f"CHECKPOINTS_OPEN: {[c.get('name') or c.get('id') for c in q.get('checkpoints', []) if c.get('id') not in st.checkpoints_hit]}",
         f"ACTION_BUDGET: {st.exec_count}/{action_budget} execs used",
@@ -291,7 +312,8 @@ def chat_prompt(question: str) -> str:
         "action first — talking about it doesn't count.")
 
 
-def render_worker_prompt(ctx: dict, w, facts_txt: str = "") -> str:
+def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
+                         plan_txt: str = "") -> str:
     """System prompt for a spawned worker agent — scoped to its task,
     exec-only toolset, last message is the report to the parent."""
     q = ctx.get("quest", {})
@@ -320,11 +342,20 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "") -> str:
              "targets may need a pivot: reach them THROUGH a compromised "
              "host (sshpass … 'cmd'), not directly from Kali."),
         ]
+    if plan_txt:
+        lines += [
+            "",
+            plan_txt,
+            ("^ the operator's plan at spawn time (read-only orientation — "
+             "your task is one piece of it)."),
+        ]
     lines += [
         "RULES:",
-        ("- You only have exec_in_kali, type_in_pane, wait and none — every "
-         "exec lands on YOUR window automatically. `wait` pauses cleanly "
-         "for cron/startup delays instead of polling."),
+        ("- You only have exec_in_kali, type_in_pane, wait, update_plan "
+         "and none — every exec lands on YOUR window automatically. `wait` "
+         "pauses cleanly for cron/startup delays instead of polling. "
+         "Maintain your own plan via update_plan — it's yours alone; its "
+         "echo stays in your history."),
         ("- exec_in_kali bounces while a foreground program holds the pane → "
          "use type_in_pane for interactive input (passwords, menus, remote "
          "shell lines), or 'C-c' via exec_in_kali to free it."),

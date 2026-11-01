@@ -1644,3 +1644,52 @@ async def test_reread_guard_uses_persistent_fact_reads():
         {"type": "exec_in_kali", "command": "cat /etc/creds.txt"})
     assert res.startswith("denied:") and "already read 3x" in res
     await coach.stop()
+
+
+async def test_reseed_plan_and_notes():
+    """plan + coach_notes in ctx → agent intent survives restart."""
+    coach, c = _l4_coach()
+    c.ctx["plan"] = [{"t": "cron privesc via backup.sh", "s": "done"},
+                     {"t": "LOAD_FILE flag via shop_ro", "s": "doing"},
+                     {"t": "bogus", "s": "not-a-status"}]
+    c.ctx["coach_notes"] = ["ssh pivot via deploy@shop01 works",
+                            "api token nm-api-9f3d77c1"]
+    await coach.start()
+    assert coach.state.plan[0]["s"] == "done"
+    assert coach.state.plan[1]["s"] == "doing"
+    assert coach.state.plan[2]["s"] == "todo"      # normalized on reseed
+    assert coach.state.notes == ["ssh pivot via deploy@shop01 works",
+                                 "api token nm-api-9f3d77c1"]
+    await coach.stop()
+
+
+async def test_plan_renders_in_context():
+    from coach.prompts import build_context_msg
+    coach, c = _l4_coach()
+    coach.ctx = c.ctx
+    coach.state.plan = [{"t": "loot init.sql", "s": "done"},
+                        {"t": "mysql LOAD_FILE", "s": "doing"}]
+    msg = build_context_msg(coach.ctx, coach.state, "t", stage=0,
+                            facts=coach.facts)
+    assert "PLAN" in msg and "[x] loot init.sql" in msg
+    assert "[>] mysql LOAD_FILE" in msg
+    # empty plan renders nothing — context stays lean
+    coach.state.plan = []
+    msg = build_context_msg(coach.ctx, coach.state, "t", stage=0,
+                            facts=coach.facts)
+    assert "PLAN" not in msg
+
+
+async def test_worker_prompt_carries_operator_plan():
+    from coach.prompts import render_worker_prompt
+    coach, c = _l4_coach()
+    coach.ctx = c.ctx
+    coach.state.plan = [{"t": "parent next step", "s": "doing"}]
+    from coach.loop import _Worker
+    w = _Worker(id="w1", task="t")
+    from coach.prompts import plan_render
+    p = render_worker_prompt(coach.ctx, w, "FACTS-x",
+                             plan_render(coach.state.plan,
+                                         title="OPERATOR_PLAN"))
+    assert "OPERATOR_PLAN" in p and "parent next step" in p
+    assert "update_plan" in p        # worker rule line present

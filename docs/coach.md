@@ -52,6 +52,7 @@ never even *see* an action it isn't allowed:
 | `type_in_pane` | 4 | Types into a *busy* pane — passwords, ssh/ftp logins, menus (exec bounces while a foreground program holds the pane) |
 | `submit_flag` / `check_flag` | 4 | Submits a `pentrAIn{...}` it saw in output / verifies state-kind flags |
 | `wait` | 4 + workers | Blocks N seconds (≤`wait_max_s`) without touching the pane — for cron/startup/cooldown delays; no budget cost; operator chat aborts it early |
+| `update_plan` | all + workers | Replaces the agent's own ≤10-step roadmap (`todo`/`doing`/`done`) — persisted, survives restarts; each worker keeps its own plan, the parent's shows as `OPERATOR_PLAN` in worker prompts |
 | `capture_screen` | 1+ | Screenshot of the Kali desktop → vision model (when `llm.vision_model` is set) |
 | `spawn_agent` etc. | 4 + `Sub` | Parallel workers — next section |
 | `none` | all | Stay silent, keep a private working note |
@@ -205,6 +206,14 @@ call):
 - **Worker reports** — `collect_agent` expects a closing JSON report
   (`findings`/`creds`/`hosts`/`next`) and merges it into FactsDB; prose
   reports still yield facts via the generic parser.
+- **`PLAN:` (self-maintained roadmap)** — `update_plan` replaces the
+  agent's ≤10-step intent (`todo`/`doing`/`done`), rendered next to
+  `CURRENT_OBJECTIVE:` (deterministic suggestion vs model intent). Logged
+  as `coach_actions` rows and reseeded from the latest snapshot on
+  re-attach, so the roadmap survives restarts. Workers keep their own plan
+  (`agent` field on the row); the parent's shows as read-only
+  `OPERATOR_PLAN` in worker prompts. `none`-reason notes persist the same
+  way (`tool="note"` → `YOUR_NOTES` reseed).
 - **Rolling summary** — history is capped; whatever `trim_history` drops is
   distilled into a bounded `EARLIER:` line list instead of vanishing.
 - **Trajectories** — every LLM sub-turn appends a JSONL record
