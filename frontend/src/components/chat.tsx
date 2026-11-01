@@ -8,7 +8,58 @@ import { cn } from "@/lib/utils";
 
 type Resolved = "confirmed" | "rejected" | "error" | string;
 
-interface Draft { text: string; reasoning: string; kind: string; done: boolean }
+interface Draft { text: string; reasoning: string; kind: string; done: boolean;
+                  updated: number }
+
+/** Roster entry pushed via coach_agents — drives a worker's chip. */
+interface AgentInfo {
+  id: string; task: string; status: string; actions: number; elapsed: number;
+}
+interface AgentActivity { text: string; output?: string; since: number }
+/** Everything the UI knows about one subagent — roster info, its live
+ * indicator, its streaming drafts, plus a per-chip unread counter. */
+interface AgentFeed {
+  info?: AgentInfo;
+  drafts: Record<string, Draft>;
+  activity: AgentActivity | null;
+  unseen: number;
+}
+
+/** Merge defaults → previous → patch into one agent's feed record. */
+function patchFeed(all: Record<string, AgentFeed>, id: string,
+                   patch: Partial<AgentFeed>): Record<string, AgentFeed> {
+  const prev = all[id];
+  return { ...all, [id]: {
+    info: patch.info ?? prev?.info,
+    drafts: patch.drafts ?? prev?.drafts ?? {},
+    activity: patch.activity !== undefined ? patch.activity
+                                           : (prev?.activity ?? null),
+    unseen: patch.unseen ?? prev?.unseen ?? 0,
+  } };
+}
+
+const AGENT_TERMINAL = new Set(["done", "timeout", "failed", "killed"]);
+
+/** Open drafts older than this with no live activity are ghosts — their
+ * turn died (cancel/restart/dropped 'done'); drop the bubble. */
+const DRAFT_STALE_MS = 90_000;
+
+function pruneStaleOpenDrafts(ds: Record<string, Draft>, now: number) {
+  const stale = Object.keys(ds).filter(
+    (k) => !ds[k].done && now - ds[k].updated > DRAFT_STALE_MS);
+  if (!stale.length) return null;
+  const n = { ...ds };
+  for (const k of stale) delete n[k];
+  return n;
+}
+
+const AGENT_STATUS_DOT: Record<string, string> = {
+  running: "bg-primary animate-pulse",
+  done: "bg-success",
+  timeout: "bg-warning",
+  failed: "bg-danger",
+  killed: "bg-muted",
+};
 
 /** Model chain-of-thought — muted block above the answer. Open while the
  * draft streams, a collapsed <details> once the real message lands. */
@@ -107,8 +158,10 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
   const [thinking, setThinking] = useState(false);
   const [sendError, setSendError] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [activity, setActivity] = useState<
-    { text: string; output?: string; since: number } | null>(null);
+  const [activity, setActivity] = useState<AgentActivity | null>(null);
+  // parallel subagent feeds — w1..wN keyed by agent id; "main" is the coach
+  const [agents, setAgents] = useState<Record<string, AgentFeed>>({});
+  const [selAgent, setSelAgent] = useState("main");
   const [now, setNow] = useState(0);
   const [atBottom, setAtBottom] = useState(true);
   const [unseen, setUnseen] = useState(0);
@@ -118,6 +171,7 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
   const actOutRef = useRef<HTMLPreElement>(null);
   const draftTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const lastEv = useRef<WsEvent | null>(null);
 
   const removeDraft = useCallback((id: string) => {
     clearTimeout(draftTimers.current.get(id));
@@ -125,88 +179,232 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
     setDrafts((d) => { const n = { ...d }; delete n[id]; return n; });
   }, []);
 
+  const [mainUnseen, setMainUnseen] = useState(0);
+
+  const removeAgentDraft = useCallback((agent: string, id: string) => {
+    clearTimeout(draftTimers.current.get(id));
+    draftTimers.current.delete(id);
+    setAgents((a) => {
+      const f = a[agent];
+      if (!f || !(id in f.drafts)) return a;
+      const drafts = { ...f.drafts };
+      delete drafts[id];
+      return { ...a, [agent]: { ...f, drafts } };
+    });
+  }, []);
+
+  const selectAgent = useCallback((id: string) => {
+    setSelAgent(id);
+    setAtBottom(true);
+    setUnseen(0);
+    if (id !== "main") {
+      setAgents((a) => a[id] ? { ...a, [id]: { ...a[id], unseen: 0 } } : a);
+    } else {
+      setMainUnseen(0);
+    }
+  }, []);
+
   useEffect(() => () => {
     clearTimeout(thinkTimer.current);
     draftTimers.current.forEach(clearTimeout);
   }, []);
+
+  // session switch — don't leak the other session's feeds/drafts/chips
+  useEffect(() => {
+    setAgents({});
+    setSelAgent("main");
+    setDrafts({});
+    setActivity(null);
+    setMainUnseen(0);
+    lastEv.current = null;
+  }, [sessionId]);
 
   const { data: messages } = useQuery({
     queryKey: ["chat", sessionId],
     queryFn: () => api.get<ChatMessage[]>(`/api/sessions/${sessionId}/chat`),
   });
 
-  // live events: coach messages arrive over the session WS
+  // worker chips must also appear from history alone — the sticky roster
+  // push expires after 120s while persisted worker messages live on, so a
+  // late reload derives the agents from the messages' own agent tags
   useEffect(() => {
-    const ev = events[events.length - 1];
-    if (!ev) return;
-    if (ev.type === "coach_message" && ev.data) {
-      const msg = ev.data as ChatMessage;
-      qc.setQueryData<ChatMessage[]>(["chat", sessionId], (old) => {
-        if (old?.some((m) => m.id === msg.id)) return old;
-        return [...(old ?? []), { ...msg, ts: msg.ts ?? new Date().toISOString() }];
-      });
-      if (msg.role === "coach") setThinking(false);
-      // the persisted message replaces its streaming draft atomically
-      const did = msg.meta?.draft_id;
-      if (typeof did === "string") removeDraft(did);
+    if (!messages) return;
+    const ids = new Set<string>();
+    for (const m of messages) {
+      const a = m.meta?.agent;
+      if (typeof a === "string" && a && a !== "main") ids.add(a);
     }
-    // streaming drafts: cumulative content relayed while the LLM generates
-    if (ev.type === "coach_stream" && ev.data?.draft_id) {
-      const { draft_id, content = "", reasoning = "", kind = "chat", done } = ev.data as {
-        draft_id: string; content?: string; reasoning?: string;
-        kind?: string; done?: boolean;
-      };
-      setDrafts((d) => ({ ...d, [draft_id]: { text: content, reasoning, kind, done: !!done } }));
-      if (done) {
-        // the real message may arrive a beat later — grace period, then drop
-        clearTimeout(draftTimers.current.get(draft_id));
-        draftTimers.current.set(draft_id, setTimeout(() => removeDraft(draft_id), 2500));
+    if (!ids.size) return;
+    setAgents((a) => {
+      let changed = false;
+      const next = { ...a };
+      for (const id of ids) {
+        if (!next[id]) {
+          next[id] = { drafts: {}, activity: null, unseen: 0 };
+          changed = true;
+        }
       }
-    }
-    // 'coach working' status — emitted while slow actions (exec, screen
-    // analysis, flag checks) are in flight; cleared by active:false
-    if (ev.type === "coach_activity" && ev.data) {
-      const { active, text, output } = ev.data as
-        { active: boolean; text?: string; output?: string };
-      // events are mergeable — an output-only tick keeps the label, a
-      // label-only tick keeps the accumulated output
-      setActivity((prev) => active
-        ? { text: text || prev?.text || "working…",
-            output: output ?? prev?.output,
-            since: prev?.since ?? Date.now() }
-        : null);
-    }
-    // suggestion confirm/reject → mark the matching suggestion message resolved
-    if (ev.type === "coach_action" && ev.data?.status && ev.data.id) {
-      const { id, status } = ev.data as { id: number; status: string };
-      if (status === "confirmed" || status === "rejected" || status === "error") {
-        markResolved(id, status);
+      return changed ? next : a;
+    });
+  }, [messages]);
+
+  // live events: coach messages arrive over the session WS. Process EVERY
+  // fresh event — replay sends several per frame and React batches renders,
+  // so last-element-only would silently drop roster/activity frames.
+  useEffect(() => {
+    let idx = lastEv.current ? events.lastIndexOf(lastEv.current) + 1 : 0;
+    if (idx < 0) idx = 0;           // trimmed out of the capped window
+    const fresh = events.slice(idx);
+    if (!fresh.length) return;
+    lastEv.current = events[events.length - 1];
+    for (const ev of fresh) {
+      if (!ev.data) continue;
+      const agent = (ev.data.agent as string | undefined) ?? "main";
+      if (ev.type === "coach_message") {
+        const msg = ev.data as ChatMessage;
+        qc.setQueryData<ChatMessage[]>(["chat", sessionId], (old) => {
+          if (old?.some((m) => m.id === msg.id)) return old;
+          return [...(old ?? []), { ...msg, ts: msg.ts ?? new Date().toISOString() }];
+        });
+        const ma = msg.meta?.agent as string | undefined;
+        // a worker's report must not clear the spinner for the parent's
+        // in-flight reply — only main-feed coach messages count
+        if (msg.role === "coach" && (!ma || ma === "main")) setThinking(false);
+        // worker messages bump that chip's unread dot, not the panel's;
+        // main messages bump the coach chip while a feed is open
+        if ((!ma || ma === "main") && selAgent !== "main" && msg.role === "coach") {
+          setMainUnseen((n) => n + 1);
+        }
+        if (ma && ma !== "main") {
+          setAgents((a) => patchFeed(a, ma, {
+            unseen: selAgent === ma ? 0 : (a[ma]?.unseen ?? 0) + 1 }));
+        }
+        // the persisted message replaces its streaming draft atomically
+        const did = msg.meta?.draft_id;
+        if (typeof did === "string") removeDraft(did);
+      }
+      // streaming drafts: cumulative content relayed while the LLM generates
+      if (ev.type === "coach_stream" && ev.data.draft_id) {
+        const { draft_id, content = "", reasoning = "", kind = "chat", done } = ev.data as {
+          draft_id: string; content?: string; reasoning?: string;
+          kind?: string; done?: boolean;
+        };
+        // ev.ts = backend publish time — a replayed stale draft is already
+        // old, so the GC drops it quickly instead of re-ghosting for 90s
+        const updated = typeof ev.ts === "number" ? ev.ts * 1000 : Date.now();
+        const d: Draft = { text: content, reasoning, kind, done: !!done,
+                           updated };
+        if (agent === "main") {
+          setDrafts((ds) => ({ ...ds, [draft_id]: d }));
+        } else {
+          setAgents((a) => patchFeed(a, agent, {
+            drafts: { ...(a[agent]?.drafts ?? {}), [draft_id]: d },
+            unseen: selAgent === agent ? (a[agent]?.unseen ?? 0)
+                                       : (a[agent]?.unseen ?? 0) + 1 }));
+        }
+        if (done) {
+          // the real message may arrive a beat later — grace period, then drop
+          clearTimeout(draftTimers.current.get(draft_id));
+          draftTimers.current.set(draft_id, setTimeout(
+            () => agent === "main" ? removeDraft(draft_id)
+                                   : removeAgentDraft(agent, draft_id), 2500));
+        }
+      }
+      // 'coach working' status — emitted while slow actions (exec, screen
+      // analysis, flag checks) are in flight; per-agent so workers update
+      // their own chip, never the parent's
+      if (ev.type === "coach_activity") {
+        const { active, text, output } = ev.data as
+          { active: boolean; text?: string; output?: string };
+        // events are mergeable — an output-only tick keeps the label, a
+        // label-only tick keeps the accumulated output
+        const merge = (prev: AgentActivity | null): AgentActivity | null =>
+          active
+            ? { text: text || prev?.text || "working…",
+                output: output ?? prev?.output,
+                since: prev?.since ?? Date.now() }
+            : null;
+        if (agent === "main") {
+          setActivity(merge);
+        } else {
+          setAgents((a) => patchFeed(a, agent, {
+            activity: merge(a[agent]?.activity ?? null) }));
+        }
+      }
+      // worker roster snapshot — chip labels/status; feed data is preserved
+      if (ev.type === "coach_agents") {
+        const list = (ev.data.agents ?? []) as AgentInfo[];
+        setAgents((a) => {
+          let next = a;
+          for (const info of list) {
+            next = patchFeed(next, info.id, { info });
+          }
+          return next;
+        });
+      }
+      // suggestion confirm/reject → mark the matching suggestion message resolved
+      if (ev.type === "coach_action" && ev.data.status && ev.data.id) {
+        const { id, status } = ev.data as { id: number; status: string };
+        if (status === "confirmed" || status === "rejected" || status === "error") {
+          markResolved(id, status);
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, sessionId, qc, removeDraft]);
+  }, [events, sessionId, qc, removeDraft, removeAgentDraft, selAgent]);
 
-  // tick the elapsed counter once a second while the coach is working;
-  // 5min staleness cap covers a coach dying mid-action
+  // tick the elapsed counter once a second while any agent is working;
+  // 5min staleness cap covers a coach dying mid-action. The same tick runs
+  // the ghost-draft GC — an open draft needs deltas every DRAFT_STALE_MS or
+  // a live activity line, otherwise its turn died silently upstream
+  const selFeed = selAgent !== "main" ? agents[selAgent] : undefined;
+  const anyAgentLive = Object.values(agents).some(
+    (a) => a.activity || a.info?.status === "running");
+  const anyDrafts = Object.keys(drafts).length > 0
+    || Object.values(agents).some((f) => Object.keys(f.drafts).length > 0);
   useEffect(() => {
-    if (!activity) return;
+    if (!activity && !anyAgentLive && !anyDrafts) return;
     actOutRef.current?.scrollTo({ top: actOutRef.current.scrollHeight });
     setNow(Date.now());
     const iv = setInterval(() => {
       const n = Date.now();
       setNow(n);
-      if (n - activity.since > 300_000) setActivity(null);
+      setActivity((prev) => (prev && n - prev.since > 300_000 ? null : prev));
+      // ghost-draft GC: a live exec pauses deltas legitimately (activity is
+      // set then) — only prune when nothing at all is happening
+      if (!activity) {
+        setDrafts((ds) => pruneStaleOpenDrafts(ds, n) ?? ds);
+      }
+      setAgents((a) => {
+        let next: Record<string, AgentFeed> | null = null;
+        for (const [id, f] of Object.entries(a)) {
+          const pruned = f.activity ? null
+                                    : pruneStaleOpenDrafts(f.drafts, n);
+          if (pruned) {
+            next ??= { ...a };
+            next[id] = { ...f, drafts: pruned };
+          }
+        }
+        return next ?? a;
+      });
     }, 1000);
     return () => clearInterval(iv);
-  }, [activity]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity, anyAgentLive, anyDrafts]);
 
   // smart autoscroll: follow the tail only while the user is already at the bottom
-  const draftSize = Object.values(drafts).reduce((a, d) => a + d.text.length, 0);
+  const agentDrafts = selFeed?.drafts ?? {};
+  const draftSize = Object.values(drafts).reduce((a, d) => a + d.text.length, 0)
+    + Object.values(agentDrafts).reduce((a, d) => a + d.text.length, 0);
+  const visible = (messages ?? []).filter((m) =>
+    selAgent === "main"
+      ? !m.meta?.agent || m.meta.agent === "main"
+      : m.meta?.agent === selAgent);
   useEffect(() => {
     if (atBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     else setUnseen((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages?.length, draftSize]);
+  }, [visible.length, draftSize, selAgent]);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -224,6 +422,9 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
   async function send() {
     const content = text.trim();
     if (!content) return;
+    // the composer always addresses the main coach — jump to its feed so
+    // the sent message (and the reply) is visible where the user expects it
+    if (selAgent !== "main") selectAgent("main");
     setText("");
     if (composerRef.current) composerRef.current.style.height = "auto";
     setThinking(true);
@@ -283,60 +484,58 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
         </span>
       </div>
       <div ref={scrollRef} onScroll={onScroll} className="flex-1 space-y-3 overflow-auto p-3">
-        {(messages ?? []).map((m) => (
-          <Message key={m.id} m={m} onConfirm={confirmAction} />
-        ))}
-        {Object.entries(drafts).map(([id, d]) => (
-          <div key={id} className="flex gap-2">
-            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
-              <Bot className="h-3.5 w-3.5" />
-            </div>
-            <div className="max-w-[85%] rounded-lg bg-surface-2 px-3 py-2 text-sm leading-relaxed">
-              <ThinkingBlock text={d.reasoning} open={!d.done} />
-              {d.text ? <MarkdownView>{d.text}</MarkdownView> : null}
-              {!d.done && (
-                <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[1px] bg-primary align-text-bottom" />
-              )}
-            </div>
-          </div>
-        ))}
-        {activity && (
-          <div className="flex items-center gap-2 px-1 text-xs text-muted">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-            <span className="min-w-0 flex-1 truncate font-mono">
-              {activity.text || "working…"}
-            </span>
-            <span className="shrink-0 tabular-nums">
-              {Math.floor((now - activity.since) / 1000)}s
-            </span>
-          </div>
-        )}
-        {activity?.output && (
-          <pre ref={actOutRef}
-            className="ml-6 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-black/50 p-2 font-mono text-[11px] leading-snug text-muted">
-            {activity.output}
-          </pre>
-        )}
-        {thinking && (
-          <div className="flex gap-2">
-            <div className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-primary">
-              <Bot className="h-3.5 w-3.5" />
-            </div>
-            <div className="rounded-lg bg-surface-2 px-3 py-2">
-              <span className="flex gap-1">
-                {[0, 1, 2].map((i) => (
-                  <span key={i} className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted"
-                    style={{ animationDelay: `${i * 150}ms` }} />
-                ))}
-              </span>
-            </div>
-          </div>
-        )}
-        {!messages?.length && !thinking && (
-          <p className="p-2 text-sm text-muted">
-            The coach will chime in as you work. Ask questions anytime — it renders
-            Markdown, code blocks and diagrams.
-          </p>
+        {selAgent === "main" ? (
+          <>
+            {visible.map((m) => (
+              <Message key={m.id} m={m} onConfirm={confirmAction}
+                onSelectAgent={selectAgent} />
+            ))}
+            {Object.entries(drafts).map(([id, d]) => (
+              <DraftBubble key={id} d={d} />
+            ))}
+            {activity && (
+              <div className="flex items-center gap-2 px-1 text-xs text-muted">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span className="min-w-0 flex-1 truncate font-mono">
+                  {activity.text || "working…"}
+                </span>
+                <span className="shrink-0 tabular-nums">
+                  {Math.floor((now - activity.since) / 1000)}s
+                </span>
+              </div>
+            )}
+            {activity?.output && (
+              <pre ref={actOutRef}
+                className="ml-6 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-black/50 p-2 font-mono text-[11px] leading-snug text-muted">
+                {activity.output}
+              </pre>
+            )}
+            {thinking && (
+              <div className="flex gap-2">
+                <div className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-primary">
+                  <Bot className="h-3.5 w-3.5" />
+                </div>
+                <div className="rounded-lg bg-surface-2 px-3 py-2">
+                  <span className="flex gap-1">
+                    {[0, 1, 2].map((i) => (
+                      <span key={i} className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted"
+                        style={{ animationDelay: `${i * 150}ms` }} />
+                    ))}
+                  </span>
+                </div>
+              </div>
+            )}
+            {!visible.length && !thinking && (
+              <p className="p-2 text-sm text-muted">
+                The coach will chime in as you work. Ask questions anytime — it renders
+                Markdown, code blocks and diagrams.
+              </p>
+            )}
+          </>
+        ) : (
+          <WorkerFeed agent={selAgent} feed={selFeed} messages={visible}
+            onConfirm={confirmAction} onSelectAgent={selectAgent}
+            now={now} actOutRef={actOutRef} />
         )}
         <div ref={bottomRef} />
       </div>
@@ -348,6 +547,27 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
         </button>
       )}
       <div className="border-t border-border">
+        {Object.keys(agents).length > 0 && (
+          <div className="flex items-center gap-1 overflow-x-auto px-2 pt-1.5">
+            <AgentChip label="coach" title="main agent — you are chatting with this one"
+              selected={selAgent === "main"}
+              working={!!activity || Object.keys(drafts).length > 0}
+              unseen={selAgent === "main" ? 0 : mainUnseen}
+              onClick={() => selectAgent("main")} />
+            {Object.keys(agents).sort().map((id) => {
+              const f = agents[id];
+              return (
+                <AgentChip key={id} label={id}
+                  title={f.info?.task || `worker ${id}`}
+                  status={f.info?.status}
+                  selected={selAgent === id}
+                  working={!!f.activity}
+                  unseen={selAgent === id ? 0 : f.unseen}
+                  onClick={() => selectAgent(id)} />
+              );
+            })}
+          </div>
+        )}
         {sendError && (
           <div className="px-3 pt-2 text-xs text-danger">
             Failed to send — your message was restored to the editor.
@@ -382,6 +602,125 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
   );
 }
 
+/** Streaming draft bubble — shared by the main transcript and agent feeds. */
+function DraftBubble({ d }: { d: Draft }) {
+  return (
+    <div className="flex gap-2">
+      <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
+        <Bot className="h-3.5 w-3.5" />
+      </div>
+      <div className="max-w-[85%] rounded-lg bg-surface-2 px-3 py-2 text-sm leading-relaxed">
+        <ThinkingBlock text={d.reasoning} open={!d.done} />
+        {d.text ? <MarkdownView>{d.text}</MarkdownView> : null}
+        {!d.done && (
+          <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[1px] bg-primary align-text-bottom" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Live 'working on X' line + accumulating pane output — per agent. */
+function ActivityBlock({ activity, now, outRef }: {
+  activity: AgentActivity; now: number;
+  outRef?: React.RefObject<HTMLPreElement | null>;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-2 px-1 text-xs text-muted">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        <span className="min-w-0 flex-1 truncate font-mono">
+          {activity.text || "working…"}
+        </span>
+        <span className="shrink-0 tabular-nums">
+          {Math.floor((now - activity.since) / 1000)}s
+        </span>
+      </div>
+      {activity.output && (
+        <pre ref={outRef}
+          className="ml-6 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-black/50 p-2 font-mono text-[11px] leading-snug text-muted">
+          {activity.output}
+        </pre>
+      )}
+    </>
+  );
+}
+
+/** One subagent's feed: roster header, its persisted messages (exec/type
+ * reports with thinking blocks, final report), live drafts + activity. */
+function WorkerFeed({ agent, feed, messages, onConfirm, onSelectAgent, now,
+                      actOutRef }: {
+  agent: string; feed?: AgentFeed; messages: ChatMessage[];
+  onConfirm: (actionId: number, accept: boolean) => void;
+  onSelectAgent: (id: string) => void;
+  now: number; actOutRef: React.RefObject<HTMLPreElement | null>;
+}) {
+  const info = feed?.info;
+  // no roster info (sticky push expired, chip derived from history) →
+  // status unknown: show a muted dot and no fake "running" label
+  const status = info?.status;
+  const feedDrafts = Object.entries(feed?.drafts ?? {});
+  return (
+    <>
+      <div className="rounded-md border border-border bg-surface-2 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <span className={cn("h-2 w-2 rounded-full",
+            status ? (AGENT_STATUS_DOT[status] ?? "bg-muted")
+                   : "bg-muted")} />
+          <span className="text-xs font-semibold">{agent}</span>
+          <span className="text-[10px] uppercase tracking-wide text-muted">
+            {status ?? "worker"}
+            {info ? ` · ${info.actions} actions` : ""}
+            {info && status !== "running"
+              ? ` · ${Math.round(info.elapsed)}s` : ""}
+          </span>
+        </div>
+        {info?.task && (
+          <div className="mt-1 text-xs leading-snug text-muted">{info.task}</div>
+        )}
+      </div>
+      {messages.map((m) => (
+        <Message key={m.id} m={m} onConfirm={onConfirm}
+          onSelectAgent={onSelectAgent} />
+      ))}
+      {feedDrafts.map(([id, d]) => <DraftBubble key={id} d={d} />)}
+      {feed?.activity && (
+        <ActivityBlock activity={feed.activity} now={now} outRef={actOutRef} />
+      )}
+      {!messages.length && !feedDrafts.length && !feed?.activity && (
+        <p className="p-2 text-sm text-muted">No output from {agent} yet.</p>
+      )}
+    </>
+  );
+}
+
+/** Clickable live tag above the composer — status dot, label, unseen count. */
+function AgentChip({ label, title, status, selected, working, unseen, onClick }: {
+  label: string; title?: string; status?: string; selected?: boolean;
+  working?: boolean; unseen?: number; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick} title={title}
+      className={cn(
+        "flex h-5 shrink-0 items-center gap-1 rounded-full border px-2 text-[10px] font-medium transition-colors cursor-pointer",
+        selected
+          ? "border-primary/50 bg-primary/15 text-primary"
+          : "border-border text-muted hover:bg-surface-2 hover:text-foreground",
+        // finished workers stay clickable but visually dimmed
+        status && AGENT_TERMINAL.has(status) && "opacity-60")}>
+      <span className={cn("h-1.5 w-1.5 rounded-full",
+        working ? "bg-primary animate-pulse"
+                : (AGENT_STATUS_DOT[status ?? ""] ?? "bg-muted"))} />
+      {label}
+      {!!unseen && (
+        <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[9px] leading-none text-surface">
+          {unseen}
+        </span>
+      )}
+    </button>
+  );
+}
+
 const KIND_STYLE: Record<string, { label: string; cls: string; iconCls: string }> = {
   suggestion: { label: "suggested command", cls: "border border-accent/40 bg-accent/10", iconCls: "bg-accent/15 text-accent" },
   action_report: { label: "coach action", cls: "border border-warning/40 bg-warning/10", iconCls: "bg-warning/15 text-warning" },
@@ -390,8 +729,9 @@ const KIND_STYLE: Record<string, { label: string; cls: string; iconCls: string }
 };
 
 // memoized — a new WS event would otherwise re-parse every message's markdown
-const Message = memo(function Message({ m, onConfirm }: {
+const Message = memo(function Message({ m, onConfirm, onSelectAgent }: {
   m: ChatMessage; onConfirm: (actionId: number, accept: boolean) => void;
+  onSelectAgent?: (id: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const isCoach = m.role === "coach";
@@ -465,6 +805,12 @@ const Message = memo(function Message({ m, onConfirm }: {
             resolved === "confirmed" ? "text-success" : "text-muted")}>
             {resolved === "confirmed" ? "executed on Kali" : resolved === "rejected" ? "dismissed" : resolved}
           </div>
+        )}
+        {typeof m.meta?.agent_ref === "string" && onSelectAgent && (
+          <button onClick={() => onSelectAgent(m.meta!.agent_ref as string)}
+            className="mt-1.5 block text-[10px] font-medium uppercase tracking-wide text-primary hover:underline cursor-pointer">
+            open {m.meta.agent_ref as string} feed →
+          </button>
         )}
         <div className="mt-1 text-[10px] text-muted">
           {m.ts ? new Date(m.ts).toLocaleTimeString() : ""}

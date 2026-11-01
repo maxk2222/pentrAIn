@@ -34,11 +34,11 @@ class FakeClient:
     async def report_llm_usage(self, sid, model, kind, usage, latency_ms):
         return {}
 
-    async def send_activity(self, sid, text="", *, active=True):
+    async def send_activity(self, sid, text="", *, active=True, agent="main"):
         pass
 
     async def stream_draft(self, sid, draft_id, content, *, reasoning="",
-                           done=False, kind="chat"):
+                           done=False, kind="chat", agent="main"):
         pass
 
 

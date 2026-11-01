@@ -159,9 +159,11 @@ export type Settings = Record<string, unknown>;
 /** Event envelope pushed over /ws/session/{id}. */
 export interface WsEvent {
   type: "state" | "deploy_log" | "flag" | "hint" | "solved" | "checkpoint"
-       | "coach_message" | "coach_action" | "telemetry" | string;
+       | "coach_message" | "coach_action" | "coach_stream" | "coach_activity"
+       | "coach_agents" | "telemetry" | string;
   session_id?: number;
   data?: Record<string, any>;
+  ts?: number;
 }
 
 export interface LlmEffortsOut {

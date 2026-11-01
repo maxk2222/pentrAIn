@@ -175,21 +175,42 @@ class CoachSuggestIn(BaseModel):
 
 class CoachStreamIn(BaseModel):
     """Ephemeral streaming draft — relayed to the session WS, never persisted.
-    `content` is cumulative (idempotent against reordering)."""
+    `content` is cumulative (idempotent against reordering). `agent` names
+    the producing agent ("main" or a worker id like "w1") so the UI can
+    route parallel subagent output into per-agent feeds."""
     session_id: int
     draft_id: str = Field(max_length=64)
     content: str = Field(default="", max_length=4000)
     reasoning: str = Field(default="", max_length=4000)
     done: bool = False
     kind: str = "chat"
+    agent: str = Field(default="main", max_length=16)
 
 
 class CoachActivityIn(BaseModel):
     """Ephemeral 'working' status — the UI shows a live indicator while a
-    slow action (exec, screen analysis, flag check) is in flight."""
+    slow action (exec, screen analysis, flag check) is in flight. `agent`
+    separates the indicators of parallel worker agents."""
     session_id: int
     active: bool
     text: str = Field(default="", max_length=200)
+    agent: str = Field(default="main", max_length=16)
+
+
+class CoachAgentState(BaseModel):
+    """One worker's roster entry — drives the UI's clickable agent chips."""
+    id: str = Field(max_length=16)
+    task: str = Field(default="", max_length=500)
+    status: str = Field(default="running", max_length=16)
+    actions: int = 0
+    elapsed: float = 0.0
+
+
+class CoachAgentsIn(BaseModel):
+    """Worker roster snapshot — sticky bus event replayed to late UI
+    subscribers so agent chips survive a page reload."""
+    session_id: int
+    agents: list[CoachAgentState] = Field(default_factory=list, max_length=8)
 
 
 # tmux window names inside the pentrain-coach session — worker agents run on

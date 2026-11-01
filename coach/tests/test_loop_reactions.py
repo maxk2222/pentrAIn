@@ -41,6 +41,7 @@ class FakeClient:
         self.screens = 0
         self.profiles: list[dict] = []
         self.activities: list[tuple] = []
+        self.agent_pushes: list[list[dict]] = []
         self.ctx = ctx or {
             "session": {"id": 1, "state": "active", "autonomy_level": 2, "coach_enabled": True},
             "quest": {"title": "Q", "track": "web", "tier": 1, "briefing": "b",
@@ -63,11 +64,14 @@ class FakeClient:
         return {}
 
     async def stream_draft(self, sid, draft_id, content, *, reasoning="",
-                           done=False, kind="chat"):
+                           done=False, kind="chat", agent="main"):
         pass
 
-    async def send_activity(self, sid, text="", *, active=True):
-        self.activities.append((active, text))
+    async def send_activity(self, sid, text="", *, active=True, agent="main"):
+        self.activities.append((active, text, agent))
+
+    async def send_agents(self, sid, agents):
+        self.agent_pushes.append(agents)
 
     async def exec_in_kali(self, sid, command, window=None):
         self.exec_calls = getattr(self, "exec_calls", [])
@@ -433,9 +437,9 @@ async def test_activity_status_emitted_around_exec():
     coach.state.autonomy_level = 4
     coach.llm = FakeLlm(actions=[{"type": "exec_in_kali", "command": "nmap -sV 10.0.0.5"}])
     await coach._llm_turn("scan it", force_reply=True)
-    starts = [t for a, t in c.activities if a]
+    starts = [t for a, t, *_ in c.activities if a]
     assert starts and "nmap" in starts[0]
-    assert c.activities[-1] == (False, "")
+    assert c.activities[-1] == (False, "", "main")
 
 
 async def test_activity_cleared_when_dispatch_raises():
@@ -448,7 +452,7 @@ async def test_activity_cleared_when_dispatch_raises():
     c.exec_in_kali = boom
     with pytest.raises(RuntimeError):
         await coach._llm_turn("go", force_reply=True)
-    assert c.activities[-1] == (False, "")
+    assert c.activities[-1] == (False, "", "main")
 
 
 async def test_history_seeded_on_attach():
@@ -1183,6 +1187,7 @@ class _WorkerScriptLlm(FakeLlm):
             self.worker_calls += 1
             if self.worker_calls == 1:
                 return {"content": "",
+                        "reasoning": "probe the NAS for services first",
                         "actions": [{"type": "exec_in_kali",
                                      "command": "nmap -sV 192.168.3.55",
                                      "_call_id": "c1"}],
@@ -1192,6 +1197,7 @@ class _WorkerScriptLlm(FakeLlm):
                                             "arguments": "{}"}}],
                         "raw": {"usage": {"total_tokens": 1}}}
             return {"content": "REPORT: 22/80 open, anonymous share listed",
+                    "reasoning": "both ports are interesting — wrapping up",
                     "actions": [{"type": "none", "reason": "task done"}],
                     "tool_calls": [],
                     "raw": {"usage": {"total_tokens": 1}}}
@@ -1227,9 +1233,56 @@ async def test_spawn_runs_worker_on_own_pane_and_reports():
     await asyncio.sleep(0.2)            # worker runs its two beats
     # its exec went to its OWN window — never the parent pane
     assert ("nmap -sV 192.168.3.55", "w1") in c.exec_calls
+    # every chat line the worker posted (exec report, final report) is
+    # tagged meta.agent="w1" so the UI files it under that agent's feed —
+    # nothing worker-related leaks into the main transcript
+    worker_msgs = [m for m in c.chats
+                   if (m.get("meta") or {}).get("agent") == "w1"]
+    main_msgs = [m for m in c.chats
+                 if not (m.get("meta") or {}).get("agent")]
+    assert any("nmap" in m["content"] for m in worker_msgs)
+    assert all(not m["content"].startswith("[w") for m in main_msgs)
+    # the roster chips learned about w1 (spawn push + finish push)
+    assert any(a["id"] == "w1" for push in c.agent_pushes for a in push)
+    assert c.agent_pushes[-1][0]["status"] == "done"
     _v, r = await coach._dispatch({"type": "collect_agent",
                                    "worker_id": "w1"})
     assert "w1 done" in r and "REPORT: 22/80" in r
+    await coach.stop()
+
+
+async def test_spawn_report_links_to_worker_feed():
+    """The parent's spawn confirmation in the main chat carries agent_ref —
+    the UI renders it as a jump link into the worker's feed."""
+    coach, c = _l4_coach()
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    await coach._dispatch({"type": "spawn_agent", "task": "enum"})
+    spawn_msg = next(m for m in c.chats if "Spawned" in m["content"])
+    assert spawn_msg["meta"]["agent_ref"] == "w1"
+    assert "agent" not in spawn_msg["meta"]   # it stays in the MAIN feed
+    await coach.stop()
+
+
+async def test_worker_activity_and_report_are_agent_scoped():
+    """Worker activity ticks and its closing report are tagged with its id;
+    its inactive event only clears ITS chip — never the parent's."""
+    coach, c = _l4_coach()
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    await coach._dispatch({"type": "spawn_agent", "task": "enum"})
+    await asyncio.sleep(0.2)
+    # every activity tick carries an agent tag
+    assert all(len(t) == 3 for t in c.activities)
+    worker_ticks = [t for t in c.activities if t[2] == "w1"]
+    assert worker_ticks
+    # finished → w1's activity explicitly cleared, tagged with w1
+    assert (False, "", "w1") in c.activities
+    # and the closing report landed in ITS feed with its reasoning
+    reports = [m for m in c.chats
+               if (m.get("meta") or {}).get("agent") == "w1"
+               and "REPORT" in m["content"]]
+    assert reports and reports[0]["meta"]["reasoning"]
     await coach.stop()
 
 
@@ -1420,7 +1473,7 @@ async def test_busy_bounces_escalate_to_wedge_directive():
                                     "command": "curl --max-time 5 http://t/x"},
                                    proactive=True)
     assert "PANE_WEDGED" in r2 and "C-c" in r2 and "type_in_pane" in r2
-    assert coach._busy_bounces == 2
+    assert coach._busy_bounces.get("main") == 2
 
 
 async def test_busy_bounces_reset_on_type_and_exit():
@@ -1437,12 +1490,35 @@ async def test_busy_bounces_reset_on_type_and_exit():
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     await coach._dispatch({"type": "exec_in_kali", "command": "x"}, proactive=True)
-    assert coach._busy_bounces == 1
+    assert coach._busy_bounces.get("main") == 1
     await coach._dispatch({"type": "type_in_pane", "text": "pw"}, proactive=True)
-    assert coach._busy_bounces == 0
+    assert coach._busy_bounces.get("main") == 0
     coach.client.busy = False
     await coach._dispatch({"type": "exec_in_kali", "command": "x"}, proactive=True)
-    assert coach._busy_bounces == 0
+    assert coach._busy_bounces.get("main") == 0
+
+
+async def test_busy_bounces_are_per_pane():
+    """A worker's wedged window must not escalate the parent's counter —
+    bounce state is tracked per pane, not globally."""
+    class Wedged(FakeClient):
+        async def exec_in_kali(self, sid, command, window=None):
+            if window:
+                return {"out": "", "err": "pane busy", "busy": True}
+            return {"out": "done", "exitcode": 0, "visible": True}
+    coach, _c = _coach()
+    coach.client = Wedged()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    await coach._dispatch({"type": "exec_in_kali", "command": "x"},
+                          window="w1")
+    await coach._dispatch({"type": "exec_in_kali", "command": "y"},
+                          window="w1")
+    assert coach._busy_bounces.get("w1") == 2
+    assert not coach._busy_bounces.get("main")
+    # the parent's clean pane sees no escalation from the worker's wedge
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": "id"})
+    assert "PANE_WEDGED" not in r
 
 
 async def test_operator_directive_clears_after_first_action():

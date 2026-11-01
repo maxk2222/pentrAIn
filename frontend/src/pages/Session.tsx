@@ -187,11 +187,13 @@ export function SessionPage() {
   }, [sessionId, qc]);
 
   // unread coach messages while the chat panel is collapsed — dedupe on the
-  // event identity so collapsing right after a message doesn't false-flag
+  // event identity so collapsing right after a message doesn't false-flag.
+  // Worker-tagged messages (meta.agent) feed their own chips, not this dot.
   const lastCounted = useRef<WsEvent | null>(null);
   useEffect(() => {
     const ev = events[events.length - 1];
-    if (ev?.type === "coach_message" && !panels.chat && ev !== lastCounted.current) {
+    if (ev?.type === "coach_message" && !panels.chat && ev !== lastCounted.current
+        && !(ev.data?.meta as { agent?: string } | undefined)?.agent) {
       lastCounted.current = ev;
       setUnread((u) => u + 1);
     }

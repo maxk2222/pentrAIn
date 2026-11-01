@@ -91,6 +91,16 @@ Worker contract:
   `collect_agent` waits up to `coach.collect_wait_s` (40 s).
 - Killed automatically on autonomy downgrade below 4, `Sub` off, or session end.
 
+In the chat UI each worker gets a live chip above the composer — click it
+to open its own feed (exec/type reports with thinking blocks, live pane
+output, final report) instead of it filling the main conversation. The
+main transcript only carries the parent's messages plus a spawn notice
+with a jump link into the worker's feed; finished workers stay as dimmed
+chips. Worker exec reports, activity ticks and streamed drafts are
+agent-tagged end-to-end (`meta.agent` / `agent` on coach events) and the
+backend keeps per-agent ephemeral slots, so one worker's status never
+clears another's.
+
 ## Guardrails
 
 | Guard | What it does |

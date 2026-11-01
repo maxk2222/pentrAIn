@@ -232,6 +232,34 @@ async def test_ephemeral_replay_sticky_and_clear():
     assert ephemeral_replay(42) == []
 
 
+async def test_ephemeral_slots_are_per_agent():
+    """Parallel subagents get their own sticky slots — a worker's inactive
+    tick clears only ITS indicator, its done draft only ITS draft."""
+    from app.services.events import ephemeral_replay, publish_session
+    await publish_session(50, "coach_activity",
+                          {"active": True, "text": "parent", "agent": "main"},
+                          sticky=True)
+    await publish_session(50, "coach_activity",
+                          {"active": True, "text": "worker", "agent": "w1"},
+                          sticky=True)
+    await publish_session(50, "coach_stream",
+                          {"draft_id": "d1", "agent": "w1",
+                           "content": "w draft"}, sticky=True)
+    assert len(ephemeral_replay(50)) == 3
+    # worker goes inactive → only its own slot clears
+    await publish_session(50, "coach_activity",
+                          {"active": False, "agent": "w1"})
+    evs = ephemeral_replay(50)
+    assert {e["data"].get("agent") for e in evs
+            if e["type"] == "coach_activity"} == {"main"}
+    assert any(e["type"] == "coach_stream" for e in evs)
+    # worker's draft finishes → only that draft's slot clears
+    await publish_session(50, "coach_stream",
+                          {"draft_id": "d1", "agent": "w1", "done": True})
+    evs = ephemeral_replay(50)
+    assert {e["type"] for e in evs} == {"coach_activity"}
+
+
 async def test_ephemeral_replay_ttl_prunes():
     import time
 

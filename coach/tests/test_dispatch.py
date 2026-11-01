@@ -33,7 +33,7 @@ class FakeClient:
         self.checkpoints.append(cid)
         return {}
 
-    async def send_activity(self, sid, text="", *, active=True):
+    async def send_activity(self, sid, text="", *, active=True, agent="main"):
         pass
 
 
@@ -86,8 +86,9 @@ async def test_busy_pane_bounces_without_marking_exec():
     _spoke, res = await coach._dispatch({"type": "exec_in_kali", "command": "nmap x"})
     assert "pane busy" in res
     assert coach.state.exec_count == 0 and not coach._coach_cmds
-    assert any("Could not run `nmap x`" in m["content"] for m in c.chats)
-    assert not any("Executed:" in m["content"] for m in c.chats)
+    assert any("Could not run" in m["content"] and "nmap x" in m["content"]
+               for m in c.chats)
+    assert not any("Executed" in m["content"] for m in c.chats)
 
 
 async def test_timed_out_exec_reports_partial_output():

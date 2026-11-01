@@ -55,17 +55,30 @@ _ephemeral: dict[int, dict[str, tuple[float, dict]]] = {}
 _EPHEMERAL_TTL = 120.0
 
 
+def _slot_key(etype: str, data: dict) -> str:
+    """Sticky slot identity. Events carrying an `agent` (parallel subagents)
+    and/or a `draft_id` get their own slot — a worker's inactive tick must
+    not clear the parent's indicator and one draft must not clobber
+    another agent's in-flight draft."""
+    agent = data.get("agent") or ""
+    draft = data.get("draft_id") or ""
+    if agent or draft:
+        return f"{etype}.{agent}.{draft}"
+    return etype
+
+
 async def publish_session(session_id: int, etype: str, data: dict,
                           *, sticky: bool = False) -> None:
     """Publish on `session.{id}`. Sticky events replay to late subscribers;
-    a non-sticky event of the same type clears the slot (done draft,
-    inactive activity)."""
+    a non-sticky event with the same slot key clears the slot (done draft,
+    inactive activity) without touching other agents' slots."""
     ev = {"type": etype, "session_id": session_id, "data": data}
     slot = _ephemeral.setdefault(session_id, {})
+    key = _slot_key(etype, data)
     if sticky:
-        slot[etype] = (time.monotonic(), ev)
+        slot[key] = (time.monotonic(), ev)
     else:
-        slot.pop(etype, None)
+        slot.pop(key, None)
         if not slot:
             _ephemeral.pop(session_id, None)
     await bus.publish(f"session.{session_id}", ev)

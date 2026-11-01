@@ -193,9 +193,10 @@ class StreamClient(FakeClient):
         self.drafts: list[dict] = []
 
     async def stream_draft(self, sid, draft_id, content, *, reasoning="",
-                           done=False, kind="chat"):
+                           done=False, kind="chat", agent="main"):
         self.drafts.append({"id": draft_id, "content": content,
-                            "reasoning": reasoning, "done": done})
+                            "reasoning": reasoning, "done": done,
+                            "agent": agent})
 
 
 def _coach() -> tuple[SessionCoach, StreamClient]:

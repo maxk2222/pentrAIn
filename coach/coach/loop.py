@@ -12,6 +12,7 @@ Event model — three distinct paths:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import ipaddress
 import re
@@ -96,13 +97,16 @@ class SessionCoach:
         self._llm_lock = asyncio.Lock()      # serialize LLM turns (chat vs reflect)
         self._coach_cmds: list[tuple[str, float]] = []   # commands we issued via exec
         self._pane_interactive = False   # pane holds a program awaiting input
-        self._busy_bounces = 0           # consecutive execs that never finished
+        # consecutive execs that never finished — PER PANE: a worker's wedged
+        # window must not escalate the parent's counter (and vice versa)
+        self._busy_bounces: dict[str, int] = {}
         self._last_capture_ts = 0.0
         self._last_badflag_ack = 0.0
         self._disabled_notice_sent = False
         self._draft_seq = 0
         self._active_draft: str | None = None   # draft_id for send_chat meta
         self._draft_used = False                 # meta attaches only once
+        self._draft_pushed = False               # any delta relayed this turn
         self._turn_reasoning = ""                # reasoning of the in-flight turn
         self.facts = FactsDB()                   # structured session memory —
         # hosts/creds/files/flags + ips_seen; feeds FACTS:, the objective
@@ -112,6 +116,9 @@ class SessionCoach:
         self._submit_challenged: dict[str, int] = {}  # unverified submits
         self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
         self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
+        # per-worker in-turn reasoning — attached once to that worker's next
+        # posted message (pop-once), mirroring the parent's _turn_reasoning
+        self._worker_reasoning: dict[str, str] = {}
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -273,6 +280,9 @@ class SessionCoach:
             self.state.last_activity_ts = self.state.last_progress_ts
         self._traj = _traj.for_session(self.sid)
         self._ready.set()
+        # clear any stale roster a previous coach process left sticky — its
+        # worker tasks died with it, the UI must not ghost them as running
+        self._push_agents()
         self._task = asyncio.create_task(self._run())
         # a silently-dead run task is the worst failure mode — log its fate
         def _on_run_done(t: asyncio.Task) -> None:
@@ -358,6 +368,12 @@ class SessionCoach:
         self.state.autonomy_level = int(s.get("autonomy_level", self.state.autonomy_level))
         self.state.subagents_enabled = bool(
             s.get("subagents_enabled", self.state.subagents_enabled))
+        # resync is the drift-repair path — the same kill rule the live
+        # autonomy/subagents handlers enforce must apply here too, or a
+        # dropped event leaves workers holding exec rights on Kali
+        if (self.state.autonomy_level < 4
+                or not self.state.subagents_enabled):
+            self._kill_all_workers()
         global_on = bool(self.cfg.get("coach", {}).get("enabled", True))
         self.state.coach_enabled = bool(s.get("coach_enabled", True)) and global_on
         self.state.checkpoints_hit = set(ctx.get("checkpoints_hit", []))
@@ -692,6 +708,31 @@ class SessionCoach:
     async def _llm_turn(self, user_msg: str, *, force_reply: bool = False,
                         proactive: bool = False, record_user: str | None = None
                         ) -> bool:
+        """Draft-safety wrapper — EVERY exit path of a turn (normal return,
+        dispatch exception, cancel at the turn budget) must close the UI's
+        streaming draft, or an open 'thinking' bubble ghosts forever."""
+        try:
+            return await self._llm_turn_body(
+                user_msg, force_reply=force_reply, proactive=proactive,
+                record_user=record_user)
+        finally:
+            await self._close_draft()
+
+    async def _close_draft(self) -> None:
+        """Relay done for the in-flight draft (idempotent — the persisted
+        message also removes it via meta.draft_id) and clear the slot.
+        Only sent when deltas actually streamed, or the UI would flash an
+        empty bubble for a draft it never saw."""
+        did, sent = self._active_draft, self._draft_pushed
+        self._active_draft = None
+        self._draft_pushed = False
+        if did and sent:
+            with contextlib.suppress(Exception):
+                await self.client.stream_draft(self.sid, did, "", done=True)
+
+    async def _llm_turn_body(self, user_msg: str, *, force_reply: bool = False,
+                             proactive: bool = False,
+                             record_user: str | None = None) -> bool:
         """One LLM turn, serialized via lock (chat + reflect must not interleave).
         `record_user` = the raw text remembered as the trainee's message (the
         wrapped prompt itself is scaffolding, not conversation).
@@ -723,6 +764,7 @@ class SessionCoach:
             draft_id = f"{self.sid}d{self._draft_seq}"
             self._active_draft = draft_id
             self._draft_used = False
+            self._draft_pushed = False
             self._turn_reasoning = ""
             pushed = False
             last_push = 0.0
@@ -737,6 +779,7 @@ class SessionCoach:
                     return  # throttle — LAN relay, ~8 msgs/s is plenty
                 pushed = True
                 last_push = now
+                self._draft_pushed = True
                 await self.client.stream_draft(
                     self.sid, draft_id, cum, reasoning=reasoning, kind=kind)
 
@@ -768,10 +811,6 @@ class SessionCoach:
                         resp = await self.llm.chat(messages, tools=tools)
                     except (LlmError, httpx.HTTPError) as e2:
                         await log.awarning("llm call failed", error=str(e2))
-                        if pushed:
-                            await self.client.stream_draft(
-                                self.sid, draft_id, "", done=True)
-                        self._active_draft = None
                         return False
                 chain_len += 1
                 self._turn_reasoning = (resp.get("reasoning") or "").strip()
@@ -815,7 +854,8 @@ class SessionCoach:
                                          "denied:")})
                 finally:
                     # whatever happened mid-dispatch — no stale 'working' chip
-                    await self.client.send_activity(self.sid, active=False)
+                    await self.client.send_activity(self.sid, active=False,
+                                                    agent="main")
                 self._traj.record(
                     kind="turn", proactive=proactive, chain=chain_len,
                     reason=str(user_msg)[:160], actions=acts,
@@ -882,11 +922,6 @@ class SessionCoach:
                 await self.client.send_chat(self.sid, text, meta=self._draft_meta())
                 self._record_reply(text)
                 spoke = True
-            if pushed:
-                # draft's job is done — the real message (with draft_id meta)
-                # replaces it; done is the failsafe for turns with no chat
-                await self.client.stream_draft(self.sid, draft_id, "", done=True)
-            self._active_draft = None
             if chain_len > 1:
                 await log.ainfo("llm turn done", session=self.sid,
                                 chain_len=chain_len)
@@ -936,13 +971,37 @@ class SessionCoach:
             meta["reasoning"] = self._turn_reasoning[:3500]
         return meta
 
+    def _msg_meta(self, window: str | None) -> dict:
+        """Meta for dispatch-posted chat lines. Worker paths tag meta.agent
+        (the UI routes them into that agent's feed) plus their own turn's
+        reasoning — never the parent's draft meta, which would graft a
+        worker message onto the parent's draft bubble."""
+        if not window:
+            return self._draft_meta()
+        meta: dict = {"agent": window}
+        if r := self._worker_reasoning.pop(window, None):
+            meta["reasoning"] = r[:3500]
+        return meta
+
+    def _push_agents(self) -> None:
+        """Push the worker roster to the UI's agent chips — fire-and-forget;
+        an empty roster after a coach restart clears stale chips (worker
+        tasks died with the previous process anyway)."""
+        now = time.monotonic()
+        agents = [{"id": w.id, "task": w.task[:200], "status": w.status,
+                   "actions": w.actions,
+                   "elapsed": round(now - w.started, 1)}
+                  for w in sorted(self._workers.values(), key=lambda x: x.id)]
+        asyncio.create_task(self.client.send_agents(self.sid, agents))
+
     # ---------- action dispatch ----------
 
     _FLAG_PLACEHOLDER_RE = re.compile(
         r"^pentrAIn\{(?:\.{2,}|x{3,}|example|flag|your[-_ ]?flag.*|"
         r"flag[-_ ]?here|<.*>)\}$", re.IGNORECASE)
 
-    async def _scan_flags(self, out: str, cmd: str = "") -> str:
+    async def _scan_flags(self, out: str, cmd: str = "",
+                          window: str | None = None) -> str:
         """flag-on-sight: a pentrAIn{...} in tool output IS the flag —
         per-session values make guessing impossible, so the only correct
         move is submit_flag NOW. First sight gets a directive; the SECOND
@@ -977,10 +1036,19 @@ class SessionCoach:
                 continue
             n = self.facts.flag_seen(fv)
             if n == 1:
-                note += (f"\nFLAG CAPTURED: {fv} — call submit_flag with "
-                         f"it NOW (flag values are per-session; a wrong "
-                         f"submit is impossible). Do not re-run commands "
-                         f"to re-confirm it.")
+                if window:
+                    # workers can't submit_flag — tell them to hand the flag
+                    # to the parent via their report instead of burning a
+                    # turn on a denied tool call
+                    note += (f"\nFLAG CAPTURED: {fv} — include it verbatim "
+                             f"in your report so the parent coach can "
+                             f"submit it. Do not re-run commands to "
+                             f"re-confirm it.")
+                else:
+                    note += (f"\nFLAG CAPTURED: {fv} — call submit_flag with "
+                             f"it NOW (flag values are per-session; a wrong "
+                             f"submit is impossible). Do not re-run commands "
+                             f"to re-confirm it.")
             elif not self.facts.flags[fv].submitted:
                 try:
                     r = await self.client.submit_flag(self.sid, fv)
@@ -1000,7 +1068,7 @@ class SessionCoach:
                 await self.client.send_chat(
                     self.sid,
                     f"Auto-submitted flag `{fv}` (seen {n}x) → **{verdict}**",
-                    kind="action_report", meta=self._draft_meta())
+                    kind="action_report", meta=self._msg_meta(window))
             else:
                 prev = ("accepted" if self.facts.flags[fv].accepted
                         else "rejected")
@@ -1071,11 +1139,16 @@ class SessionCoach:
 
         # workers are exec-only — a model emitting an unoffered tool through a
         # worker context gets a hard deny (defense-in-depth; the tool schema
-        # already prevents it, this covers drift/compat endpoints)
+        # already prevents it, this covers drift/compat endpoints). The deny
+        # is part of the worker's story — its feed should show it
         if window and t not in WORKER_TOOL_NAMES:
-            return spoke, ("denied: workers can only run exec_in_kali / "
-                           "type_in_pane — report findings via your last "
-                           "message, the parent coach relays them")
+            result = ("denied: workers can only run exec_in_kali / "
+                      "type_in_pane — report findings via your last "
+                      "message, the parent coach relays them")
+            await self.client.send_chat(
+                self.sid, f"Denied: `{t}` — workers may only exec/type",
+                kind="action_report", meta=self._msg_meta(window))
+            return spoke, result
 
         if t == "send_chat":
             content = (a.get("content") or "").strip()[:2000]
@@ -1190,7 +1263,8 @@ class SessionCoach:
                     self._coach_cmds.append((cmd, time.time()))
                     where = f"[{window}] " if window else ""
                     await self.client.send_activity(
-                        self.sid, f"{where}typing `{cmd[:110]}` in Kali")
+                        self.sid, f"{where}typing `{cmd[:110]}` in Kali",
+                        agent=window or "main")
                     try:
                         res = await self.client.exec_in_kali(self.sid, cmd,
                                                              window=window)
@@ -1266,23 +1340,25 @@ class SessionCoach:
                                        f"{n} times — the file exists, more "
                                        f"rewrites do not advance the quest. "
                                        f"RUN it (e.g. python3 -u {path}).")
-                    result += await self._scan_flags(out, cmd)
+                    result += await self._scan_flags(out, cmd, window)
                     # pane-busy escalation: consecutive execs that never
                     # finished (bounced off a held pane or still running)
                     # mean the pane is wedged — command variants won't fix
                     # it; a literal C-c or a type_in_pane answer will
                     if res.get("busy") or res.get("timed_out"):
-                        self._busy_bounces += 1
-                        if self._busy_bounces >= 2:
+                        key = window or "main"
+                        n = self._busy_bounces.get(key, 0) + 1
+                        self._busy_bounces[key] = n
+                        if n >= 2:
                             result += (
                                 f"\nPANE_WEDGED: the pane has been busy for "
-                                f"{self._busy_bounces} consecutive commands — "
+                                f"{n} consecutive commands — "
                                 f"stop trying command variants. Either "
                                 f"interrupt with exec_in_kali 'C-c', or if a "
                                 f"prompt waits for input (password/menu) "
                                 f"answer it via type_in_pane NOW.")
                     elif code is not None:
-                        self._busy_bounces = 0
+                        self._busy_bounces[window or "main"] = 0
                     if typed and code == 0 and out.strip():
                         # output-signature dedup: re-reads/re-greps of the same
                         # data return byte-identical output — the command-text
@@ -1301,15 +1377,24 @@ class SessionCoach:
                                        "are settled (see ALREADY_DONE). Take a "
                                        "DIFFERENT action toward the flag.")
                     if res.get("busy"):
-                        text = f"{where}Could not run `{cmd}` — {res.get('err') or 'pane busy'}"
+                        text = (f"{where}**Could not run**\n"
+                                f"```command\n$ {cmd}\n```\n"
+                                f"{res.get('err') or 'pane busy'}")
+                    elif res.get("status") == "denied" or res.get("error"):
+                        why = res.get("error") or res.get("err") or "denied"
+                        text = (f"{where}**Denied**\n"
+                                f"```command\n$ {cmd}\n```\n"
+                                f"{str(why)[:300]}")
                     else:
                         note = ("\n\n*(still running — watch the `pentrain-coach` tmux)*"
-                                if res.get("timed_out")
-                                else "\n\n*(typed live in the `pentrain-coach` tmux)*"
-                                if res.get("visible") else "")
-                        text = f"{where}Executed: `{cmd}`\n```\n{out[-1500:]}\n```{note}"
+                                if res.get("timed_out") else "")
+                        text = (f"{where}**Executed**\n"
+                                f"```command\n$ {cmd}\n```")
+                        if out.strip():
+                            text += f"\n```output\n{out[-1500:]}\n```"
+                        text += note
                     await self.client.send_chat(self.sid, text, kind="action_report",
-                                                meta=self._draft_meta())
+                                                meta=self._msg_meta(window))
                     self._record_reply(text)
                     spoke = True
         elif t == "type_in_pane":
@@ -1330,7 +1415,8 @@ class SessionCoach:
                 result = (percept.normalize(f"<type> {text_in}", out, None).reply
                           or "input sent")
                 self.facts.observe_output(f"<type> {text_in}", out, None)
-                result += await self._scan_flags(out, f"<type> {text_in}")
+                result += await self._scan_flags(out, f"<type> {text_in}",
+                                                 window)
                 # keep the interactive fast-path alive while the pane is
                 # still held (inside an ssh/ftp/vim session remote commands
                 # must ALL go through type_in_pane — at LLM cadence, not
@@ -1340,16 +1426,18 @@ class SessionCoach:
                 if window is None:
                     self._pane_interactive = bool(res.get("busy", True))
                 # a successful type means the wedge was answered, not bounced
-                self._busy_bounces = 0
+                self._busy_bounces[window or "main"] = 0
                 # interactive input is coach activity too — keep it visible in
                 # command memory (marked so it can't pollute recon/write regexes)
                 self.state.add_command(time.time(), f"<type> {text_in[:80]}",
                                        from_coach=True)
                 rep = (f"{'[' + window + '] ' if window else ''}"
-                       f"Typed into the pane: `{text_in[:90]}`\n"
-                       f"```\n{out[-1200:]}\n```")
+                       f"**Typed into the pane**\n"
+                       f"```command\n$ {text_in[:90]}\n```")
+                if out.strip():
+                    rep += f"\n```output\n{out[-1200:]}\n```"
                 await self.client.send_chat(self.sid, rep, kind="action_report",
-                                            meta=self._draft_meta())
+                                            meta=self._msg_meta(window))
                 self._record_reply(rep)
                 spoke = True
         elif t == "submit_flag":
@@ -1377,7 +1465,8 @@ class SessionCoach:
                         f"submits count. Re-read the file/output where the "
                         f"flag actually appeared and paste the EXACT string. "
                         f"(Submitting the same value again confirms it.)")
-                await self.client.send_activity(self.sid, "submitting flag…")
+                await self.client.send_activity(self.sid, "submitting flag…",
+                                                agent=window or "main")
                 res = await self.client.submit_flag(self.sid, val)
                 self.facts.flag_mark_submitted(val, bool(res.get("correct")))
                 verdict = ("correct — flag solved" if res.get("correct")
@@ -1398,7 +1487,8 @@ class SessionCoach:
                 key = (a.get("flag_key") or "").strip()[:64]
                 if not key:
                     return spoke, "error: empty flag_key"
-                await self.client.send_activity(self.sid, f"verifying `{key}`…")
+                await self.client.send_activity(self.sid, f"verifying `{key}`…",
+                                                agent=window or "main")
                 res = await self.client.check_flag(self.sid, key)
                 verdict = ("verified — flag solved" if res.get("correct")
                            else f"not satisfied ({res.get('error') or 'check failed'})")
@@ -1429,7 +1519,8 @@ class SessionCoach:
                 result = "rate_limited"
             else:
                 self._last_capture_ts = time.time()
-                await self.client.send_activity(self.sid, "analyzing screen…")
+                await self.client.send_activity(self.sid, "analyzing screen…",
+                                                agent=window or "main")
                 res = await self.client.capture_screen(self.sid)
                 if res.get("png_b64"):
                     self.state.screen_desc = await self._describe_screen(res["png_b64"])
@@ -1439,12 +1530,14 @@ class SessionCoach:
         elif t == "spawn_agent":
             result = self._spawn_agent(a)
             if not result.startswith(("denied:", "error:")):
+                wid = result.split(" — ")[0].split()[-1]
                 rep = (f"Spawned worker on pane "
-                       f"`{result.split(' — ')[0].split()[-1]}` — "
+                       f"`{wid}` — "
                        f"{(a.get('task') or '')[:120]}")
                 await self.client.send_chat(self.sid, rep,
                                             kind="action_report",
-                                            meta=self._draft_meta())
+                                            meta={**self._draft_meta(),
+                                                  "agent_ref": wid})
                 spoke = True
         elif t == "collect_agent":
             result = await self._collect_agent(a)
@@ -1496,6 +1589,7 @@ class SessionCoach:
                    next(i for i in ids if i not in running_ids))
         w = _Worker(id=wid, task=task[:500], started=time.monotonic())
         self._workers[wid] = w
+        self._push_agents()
         w.task_obj = asyncio.create_task(self._worker_loop(w))
         return (f"spawned {wid} — \"{task[:120]}\". It works autonomously on "
                 f"its own pane ({wid}); continue your own work and read its "
@@ -1525,6 +1619,8 @@ class SessionCoach:
                     pass
                 except asyncio.CancelledError:
                     raise
+        # the wait may have raced a status transition — refresh the chips
+        self._push_agents()
         status = w.status
         if status == "running":
             return (f"{wid} still running ({w.actions} actions, "
@@ -1571,6 +1667,7 @@ class SessionCoach:
         if w.task_obj:
             w.task_obj.cancel()
         w.status = "killed"
+        self._push_agents()
         return f"{wid} killed — its pane ({wid}) keeps its scrollback"
 
     def _kill_all_workers(self) -> None:
@@ -1579,6 +1676,20 @@ class SessionCoach:
                 w.status = "killed"
                 if w.task_obj:
                     w.task_obj.cancel()
+        if self._workers:
+            self._push_agents()
+
+    async def _finish_worker(self, w: _Worker) -> None:
+        """Terminal housekeeping for a worker: drop its live indicator, post
+        its report into its own feed (meta.agent routes it there; leftover
+        turn reasoning rides as meta.reasoning like the parent's), then
+        refresh the roster chips."""
+        await self.client.send_activity(self.sid, active=False, agent=w.id)
+        if w.report:
+            meta = self._msg_meta(w.id)
+            await self.client.send_chat(
+                self.sid, w.report[:2000], kind="action_report", meta=meta)
+        self._push_agents()
 
     async def _worker_loop(self, w: _Worker) -> None:
         """One worker's act→observe→act loop — private message list (never
@@ -1597,6 +1708,12 @@ class SessionCoach:
                    and time.monotonic() - t0 < time_cap):
                 resp = await self.llm.chat(msgs, tools=worker_tools())
                 w.turns += 1
+                # stash this turn's reasoning — the next message the worker
+                # posts (exec report, final report) carries it as
+                # meta.reasoning so its feed shows a thinking block like
+                # the parent's persisted messages do
+                self._worker_reasoning[w.id] = (
+                    resp.get("reasoning") or "")[:3500]
                 usage = (resp.get("raw") or {}).get("usage") or {}
                 self.usage["tokens"] += int(usage.get("total_tokens", 0))
                 asyncio.create_task(self.client.report_llm_usage(
@@ -1619,12 +1736,19 @@ class SessionCoach:
                     if cid := a.get("_call_id"):
                         call_results[cid] = res
                     last_out = res or last_out
+                # per-turn roster push — the chip's action count stays live
+                # instead of freezing at its spawn-time snapshot
+                self._push_agents()
                 if not calls or not exec_acts:
                     # no tool calls or only 'none' — the worker is done; its
                     # trailing message IS the report to the parent
                     w.report = ((resp.get("content") or "").strip()
                                 or last_out[-1500:] or "(finished silently)")
                     w.status = "done"
+                    # a failed report-post must not flip a finished worker
+                    # to 'failed' and overwrite its real report
+                    with contextlib.suppress(Exception):
+                        await self._finish_worker(w)
                     return
                 # assistant/tool pairing identical to the parent turn — strict
                 # endpoints reject a tool_call left without its reply
@@ -1640,14 +1764,20 @@ class SessionCoach:
             w.status = "timeout"
             w.report = (f"hit worker caps after {w.actions} actions/"
                         f"{w.turns} turns — {last_out[-800:]}")
+            with contextlib.suppress(Exception):
+                await self._finish_worker(w)
         except asyncio.CancelledError:
             w.status = "killed"
+            with contextlib.suppress(Exception):
+                await self._finish_worker(w)
             raise
         except Exception as e:
             w.status = "failed"
             w.report = f"worker crashed: {e}"
             await log.awarning("worker failed", session=self.sid,
                                worker=w.id, error=str(e))
+            with contextlib.suppress(Exception):
+                await self._finish_worker(w)
 
     async def _describe_screen(self, png_b64: str) -> str:
         """Send the screenshot to a vision-capable model for a text description."""

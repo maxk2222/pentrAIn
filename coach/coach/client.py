@@ -69,28 +69,39 @@ class BackendClient:
 
     async def stream_draft(self, session_id: int, draft_id: str, content: str,
                            *, reasoning: str = "", done: bool = False,
-                           kind: str = "chat") -> None:
+                           kind: str = "chat", agent: str = "main") -> None:
         """Relay an in-progress draft to the UI. Fire-and-forget — a dropped
-        delta is cosmetic, never worth killing a turn over."""
+        delta is cosmetic, never worth killing a turn over. `agent` routes
+        subagent drafts into their own feed."""
         try:
             await self._post("/api/coach/stream",
                              {"session_id": session_id, "draft_id": draft_id,
                               "content": content[:4000],
                               "reasoning": reasoning[-4000:], "done": done,
-                              "kind": kind})
+                              "kind": kind, "agent": agent})
         except Exception as e:
             await log.adebug("stream relay failed", error=str(e))
 
     async def send_activity(self, session_id: int, text: str = "",
-                            *, active: bool = True) -> None:
+                            *, active: bool = True, agent: str = "main") -> None:
         """Live 'working on X' indicator — ephemeral like stream_draft; a
-        dropped update costs the trainee a status line, never worth a turn."""
+        dropped update costs the trainee a status line, never worth a turn.
+        `agent` keeps parallel worker indicators apart."""
         try:
             await self._post("/api/coach/activity",
                              {"session_id": session_id, "active": active,
-                              "text": text[:200]})
+                              "text": text[:200], "agent": agent})
         except Exception as e:
             await log.adebug("activity relay failed", error=str(e))
+
+    async def send_agents(self, session_id: int, agents: list[dict]) -> None:
+        """Push the worker roster to the UI's agent chips — sticky snapshot,
+        replayed to late subscribers. Fire-and-forget."""
+        try:
+            await self._post("/api/coach/agents",
+                             {"session_id": session_id, "agents": agents})
+        except Exception as e:
+            await log.adebug("agents relay failed", error=str(e))
 
     async def suggest_command(self, session_id: int, command: str, why: str) -> dict:
         return await self._post("/api/coach/suggest",

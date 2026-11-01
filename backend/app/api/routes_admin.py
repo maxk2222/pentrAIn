@@ -16,6 +16,7 @@ from ..schemas import (
     CheckpointIn,
     CoachActionLogIn,
     CoachActivityIn,
+    CoachAgentsIn,
     CoachExecIn,
     CoachFlagCheckIn,
     CoachFlagIn,
@@ -599,11 +600,12 @@ async def coach_message(body: CoachMessageIn, db: AsyncSession = Depends(get_db)
 async def coach_stream(body: CoachStreamIn):
     """Relay an in-progress draft to the session UI. Pure bus event — nothing
     is persisted; the final send_chat call creates the real message. Sticky
-    while streaming so a page reload re-hydrates the draft bubble."""
+    while streaming so a page reload re-hydrates the draft bubble. `agent`
+    routes parallel subagent drafts into their own feed."""
     await publish_session(body.session_id, "coach_stream", {
         "draft_id": body.draft_id, "content": body.content,
         "reasoning": body.reasoning,
-        "done": body.done, "kind": body.kind},
+        "done": body.done, "kind": body.kind, "agent": body.agent},
         sticky=not body.done)
     return {"ok": True}
 
@@ -611,10 +613,22 @@ async def coach_stream(body: CoachStreamIn):
 @coach_router.post("/activity")
 async def coach_activity(body: CoachActivityIn):
     """Live 'the coach is doing X' indicator for the session UI — ephemeral
-    bus event like /stream, cleared by a follow-up with active=false."""
+    bus event like /stream, cleared by a follow-up with active=false.
+    Per-agent: workers update their own chip, never the parent's."""
     await publish_session(body.session_id, "coach_activity",
-                          {"active": body.active, "text": body.text},
+                          {"active": body.active, "text": body.text,
+                           "agent": body.agent},
                           sticky=body.active)
+    return {"ok": True}
+
+
+@coach_router.post("/agents")
+async def coach_agents(body: CoachAgentsIn):
+    """Worker roster snapshot for the UI's agent chips — sticky so a page
+    reload re-hydrates which subagents exist and their status."""
+    await publish_session(body.session_id, "coach_agents",
+                          {"agents": [a.model_dump() for a in body.agents]},
+                          sticky=True)
     return {"ok": True}
 
 

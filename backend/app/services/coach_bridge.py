@@ -345,7 +345,9 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str,
                             {"out": out[-600:]}, status="ok")
         if session_id:
             await publish_session(session_id, "coach_activity", {
-                "active": True, "text": "typing input in the pane",
+                "active": True, "agent": window or "main",
+                "text": f"{f'[{window}] ' if window else ''}"
+                        "typing input in the pane",
                 "output": out[-1500:]}, sticky=True)
         return {"out": out, "visible": True, "exitcode": None,
                 "current_command": cur, "busy": busy}
@@ -571,8 +573,9 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
             if session_id and tail != last_tail:
                 last_tail = tail
                 await publish_session(session_id, "coach_activity", {
-                    "active": True,
-                    "text": f"executing `{command[:90]}`",
+                    "active": True, "agent": window or "main",
+                    "text": f"{f'[{window}] ' if window else ''}"
+                            f"executing `{command[:90]}`",
                     "output": tail}, sticky=True)
             if not b_sent:
                 # completion = pane back at a shell, the typed command line

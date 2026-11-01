@@ -14,26 +14,48 @@ function extractText(node: ReactNode): string {
   return "";
 }
 
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
+function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
   return (
+    <button
+      onClick={() => {
+        void navigator.clipboard?.writeText(code);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="text-muted opacity-0 transition-opacity hover:text-foreground group-hover/code:opacity-100 cursor-pointer"
+      title="Copy">
+      {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
+
+/** Semantic fence langs the coach emits for exec reports — the command
+ * pops in accent, its result recedes in muted text. */
+const LANG_TEXT_CLS: Record<string, string> = {
+  command: "text-accent",
+  output: "text-muted",
+};
+
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  return (
     <div className="group/code relative my-2 overflow-hidden rounded-md border border-border bg-black/50">
-      <div className="flex items-center justify-between border-b border-border px-2.5 py-1">
-        <span className="font-mono text-[10px] uppercase tracking-wide text-muted">
-          {lang || "text"}
-        </span>
-        <button
-          onClick={() => {
-            void navigator.clipboard?.writeText(code);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          }}
-          className="text-muted opacity-0 transition-opacity hover:text-foreground group-hover/code:opacity-100 cursor-pointer"
-          title="Copy">
-          {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
-        </button>
-      </div>
-      <pre className="overflow-x-auto p-2.5 font-mono text-xs leading-relaxed text-foreground">
+      {lang ? (
+        <div className="flex items-center justify-between border-b border-border px-2.5 py-1">
+          <span className="font-mono text-[10px] uppercase tracking-wide text-muted">
+            {lang}
+          </span>
+          <CopyButton code={code} />
+        </div>
+      ) : (
+        // no language — plain command output: skip the header row entirely,
+        // the copy affordance floats over the block on hover instead
+        <div className="absolute right-1.5 top-1.5 z-10">
+          <CopyButton code={code} />
+        </div>
+      )}
+      <pre className={cn("overflow-x-auto p-2.5 font-mono text-xs leading-relaxed",
+                         LANG_TEXT_CLS[lang] ?? "text-foreground")}>
         <code>{code}</code>
       </pre>
     </div>
