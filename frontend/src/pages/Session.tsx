@@ -10,7 +10,7 @@ import { useAppStore } from "@/lib/store";
 import { Badge, Button, IconButton, Tabs } from "@/components/ui";
 import { ResizeHandle } from "@/components/resizable";
 import { ConsoleView } from "@/components/console";
-import { ChatPanel } from "@/components/chat";
+import { ChatPanel, AutonomyToggle } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
 import { NotesPanel } from "@/components/notes";
@@ -224,6 +224,12 @@ export function SessionPage() {
   const state = session?.state;
   const consoleReady = state === "ready" || state === "active";
 
+  function setAutonomy(level: number) {
+    api.post(`/api/sessions/${sessionId}/autonomy`, { level })
+      .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
+      .catch(() => {});
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
@@ -269,6 +275,10 @@ export function SessionPage() {
                 <span className="hidden lg:inline">{state === "solved" ? "Tear down" : "End session"}</span>
               </Button>
             </div>
+          )}
+          {session?.autonomy_level !== undefined && (
+            <AutonomyToggle autonomy={session.autonomy_level}
+              onAutonomy={setAutonomy} />
           )}
           <div className="ml-1 flex items-center gap-0.5 border-l border-border pl-2">
             <IconButton icon={CheckSquare} label="Progress"
@@ -359,11 +369,7 @@ export function SessionPage() {
               style={{ width: widths.chat }}>
               <ChatPanel sessionId={sessionId} events={events}
                 autonomy={session?.autonomy_level}
-                onAutonomy={(level) => {
-                  api.post(`/api/sessions/${sessionId}/autonomy`, { level })
-                    .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
-                    .catch(() => {});
-                }} />
+                onAutonomy={setAutonomy} />
             </div>
           </>
         ) : (

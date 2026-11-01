@@ -43,6 +43,36 @@ const AUTONOMY = [
   { level: 4, short: "Auto", name: "Autonomous", tip: "executes on Kali itself" },
 ];
 
+export function AutonomyToggle({ autonomy, onAutonomy }: {
+  autonomy: number;
+  onAutonomy: (level: number) => void;
+}) {
+  return (
+    <span className="flex items-center gap-0.5 rounded-md border border-border p-0.5"
+      title="Coach autonomy — same as /autonomy <level> in chat">
+      {AUTONOMY.map((a) => (
+        <button
+          key={a.level}
+          title={`${a.level} — ${a.name}: ${a.tip}`}
+          onClick={() => {
+            if (a.level === autonomy) return;
+            if (a.level === 4 &&
+              !confirm("Autonomous mode lets the coach execute commands on Kali. Enable?")) return;
+            onAutonomy(a.level);
+          }}
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer",
+            a.level === autonomy
+              ? "bg-primary/20 text-primary"
+              : "text-muted hover:bg-surface-2 hover:text-foreground",
+          )}>
+          {a.level}·{a.short}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 export function ChatPanel({ sessionId, events, autonomy, onAutonomy }: {
   sessionId: number; events: WsEvent[];
   autonomy?: number;
@@ -216,28 +246,7 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy }: {
         <span>Coach <span className="ml-1 text-xs font-normal text-muted">adaptive hints</span></span>
         <span className="flex items-center gap-2">
           {autonomy !== undefined && onAutonomy && (
-            <span className="flex items-center gap-0.5 rounded-md border border-border p-0.5"
-              title="Coach autonomy — same as /autonomy <level> in chat">
-              {AUTONOMY.map((a) => (
-                <button
-                  key={a.level}
-                  title={`${a.level} — ${a.name}: ${a.tip}`}
-                  onClick={() => {
-                    if (a.level === autonomy) return;
-                    if (a.level === 4 &&
-                      !confirm("Autonomous mode lets the coach execute commands on Kali. Enable?")) return;
-                    onAutonomy(a.level);
-                  }}
-                  className={cn(
-                    "rounded px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer",
-                    a.level === autonomy
-                      ? "bg-primary/20 text-primary"
-                      : "text-muted hover:bg-surface-2 hover:text-foreground",
-                  )}>
-                  {a.level}·{a.short}
-                </button>
-              ))}
-            </span>
+            <AutonomyToggle autonomy={autonomy} onAutonomy={onAutonomy} />
           )}
           {thinking && (
             <span className="flex items-center gap-1 text-xs text-muted">
