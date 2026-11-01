@@ -1,0 +1,70 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: lab-t1-assessment
+  track: home-lab
+  tier: 1
+  title: "Home Field Advantage"
+  version: 1
+display:
+  tagline: "Point Kali at your own LAN — discover, enumerate, assess, and write it up like a real engagement."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 40
+  est_deploy_min: 8
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+    wan: true                          # net1→WAN bridge attached at deploy
+    roles: [pentrain_home_lab]
+  vms: []                              # no lab targets — the LAN IS the target
+flags:
+  - id: report
+    name: "Assessment report — lan-report.md with hosts, ports and findings"
+    kind: command
+    points: 500
+    command:
+      vm: kali
+      cmd: "for f in /root/lan-report.md /home/kali/lan-report.md; do [ -s \"$f\" ] && R=\"$f\" && break; done; [ -n \"$R\" ] && grep -qiE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' \"$R\" && grep -qiE 'port|service' \"$R\" && grep -qiE 'finding|risk|recommend|severity' \"$R\""
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Your WAN nic is eth1 (check `ip -4 addr`). `sudo arp-scan --localnet -I eth1` or `nmap -sn <yoursubnet>/24` gives you the live host list — that list drives everything else."
+  - id: h2
+    cost: 40
+    stage: enum
+    text: "Per host: `sudo nmap -sV -sC -O <ip>` first, then `-p-` on anything interesting. Don't forget UDP top-ports — home gear loves SNMP/DNS/UPnP."
+  - id: h3
+    cost: 60
+    stage: analysis
+    text: "`cp ~/lan-report-template.md ~/lan-report.md`, fill it in. The checker greps for real IPs, port/service lines and a findings section with severities — a copy-paste of nmap output without analysis won't pass."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-discovery
+      name: "Ran a host-discovery sweep"
+      detect: { command_match: "(arp-scan|nbtscan|nmap\\s+-(s[sn]|P))" }
+      hint_after_s: 480
+    - id: cp-enum
+      name: "Enumerated services on a LAN host"
+      detect: { command_match: "nmap\\s+.*-(sV|sC|p-|A|O)" }
+      hint_after_s: 600
+    - id: cp-assess
+      name: "Ran a vulnerability/config check"
+      detect: { command_match: "(script vuln|nuclei|smbclient -[LN]|snmpwalk|hydra|enum4linux)" }
+      hint_after_s: 720
+    - id: cp-report
+      name: "Started the assessment report"
+      detect: { command_match: "lan-report\\.md" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 3600
+  hint_cost: 0
+  takeover_cost: 200

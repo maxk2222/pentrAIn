@@ -33,6 +33,8 @@ class KaliSpec(BaseModel):
     ram_gb: int = 6
     ram_min_gb: int | None = None  # ballooning floor — compile_topology defaults to 3
     cpus: int = 4
+    wan: bool = False              # auto-attach net1→WAN bridge (LAN/internet) at deploy
+    roles: list[dict | str] = Field(default_factory=list)  # extra roles on kali
 
 
 class VmSpec(BaseModel):
@@ -134,6 +136,7 @@ TRACK_TITLES = {
     "forensics": ("Forensics", "Log triage, disk artifacts and full intrusion timelines on attacked ranges.", "search", 50),
     "scripting": ("Scripting & Automation", "Bash and Python glue code, automation and tooling for pentesters.", "terminal", 60),
     "wifi": ("Wireless", "WiFi recon, handshake capture and cracking on a simulated radio lab.", "wifi", 70),
+    "home-lab": ("Home Lab", "Authorized assessment of your own LAN — discovery, enumeration, vuln scan, reporting.", "home", 80),
 }
 
 

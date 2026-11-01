@@ -77,7 +77,8 @@ def _additive_columns(conn) -> None:
                    "exam": "INTEGER NOT NULL DEFAULT 0"},
         "tracks": {"cheatsheet_md": "TEXT NOT NULL DEFAULT ''"},
         "attempts": {"assistance": "JSON NOT NULL DEFAULT '{}'"},
-        "sessions": {"kali_internet": "INTEGER NOT NULL DEFAULT 0"},
+        "sessions": {"kali_internet": "INTEGER NOT NULL DEFAULT 0",
+                     "kali_wan_ip": "TEXT"},
     }
     existing_tables = set(inspect(conn).get_table_names())
     for table, cols in wanted.items():

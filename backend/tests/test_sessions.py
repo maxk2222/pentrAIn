@@ -469,3 +469,143 @@ async def test_resume_inflight_sweeps_states(db_with_packs):
         await asyncio.sleep(0.05)
     done = (await db.execute(select(Session.state))).scalars().all()
     assert done.count("ready") == 2 and "active" in done
+
+
+# ---------- live autonomy switching ----------
+
+async def test_set_autonomy_persists_and_announces(db_with_packs):
+    """set_autonomy writes the level, posts a system message and broadcasts —
+    the coach picks it up from session_context on its next turn."""
+    from app.models.domain import CoachMessage
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+
+    s = await sessions_svc.set_autonomy(db, s.id, 4)
+    assert s.autonomy_level == 4
+    msg = (await db.execute(
+        select(CoachMessage).where(CoachMessage.session_id == s.id)
+        .order_by(CoachMessage.id.desc()).limit(1))).scalar_one()
+    assert msg.role == "system" and "Autonomous" in msg.content
+    await sessions_svc.abort(db, s.id)
+
+
+async def test_set_autonomy_rejects_terminal_and_bad_levels(db_with_packs):
+    db = db_with_packs
+    s = Session(quest_id="linux-t1-first-foothold", state="solved")
+    db.add(s)
+    await db.commit()
+    with pytest.raises(sessions_svc.SessionError, match="locked"):
+        await sessions_svc.set_autonomy(db, s.id, 4)
+    s.state = "ready"
+    await db.commit()
+    for bad in (0, 5):
+        with pytest.raises(sessions_svc.SessionError, match="1-4"):
+            await sessions_svc.set_autonomy(db, s.id, bad)
+
+
+async def test_chat_slash_autonomy_paths(db_with_packs):
+    """Slash commands never reach post_message — they'd surface as an
+    OPERATOR_DIRECTIVE in L4 prompts and the model would 'execute' them."""
+    from app.api.routes_streams import _chat_slash
+    from app.models.domain import CoachMessage
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+
+    # not a slash command → None
+    assert await _chat_slash(db, s.id, "hello coach") is None
+    assert await _chat_slash(db, s.id, "/restart everything") is None
+
+    # status — no arg
+    r = await _chat_slash(db, s.id, "/autonomy")
+    assert r["id"] < 0                       # negative echo id, no dedupe clash
+
+    # name + digit aliases all resolve
+    r = await _chat_slash(db, s.id, "/level takeover")
+    assert r["id"] < 0
+    s = await db.get(Session, s.id)
+    assert s.autonomy_level == 4
+    r = await _chat_slash(db, s.id, "/mode 2")
+    s = await db.get(Session, s.id)
+    assert s.autonomy_level == 2
+
+    # bogus level → usage reply, level unchanged
+    r = await _chat_slash(db, s.id, "/autonomy bogus")
+    assert r["id"] < 0
+    msgs = list((await db.execute(
+        select(CoachMessage).where(CoachMessage.session_id == s.id)
+        .order_by(CoachMessage.id.desc()).limit(1))).scalars())
+    assert "Usage" in msgs[0].content
+    # no user-role message was persisted for any slash variant
+    user_msgs = (await db.execute(
+        select(CoachMessage).where(
+            CoachMessage.session_id == s.id, CoachMessage.role == "user"))).all()
+    assert not user_msgs
+    await sessions_svc.abort(db, s.id)
+
+
+# ---------- home-lab lan-assessment mode ----------
+
+async def test_wan_quest_auto_uplinks_and_stores_lease(db_with_packs):
+    """topology.kali.wan attaches net1 at deploy — session.kali_internet
+    ends True on the mock path, and the lease field exists (mock leaves
+    it empty, which is what the lan.scope_cidr fallback covers)."""
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "lab-t1-assessment")
+    s = await _wait_state(s.id, "ready")
+    assert s.kali_internet is True
+    assert hasattr(s, "kali_wan_ip")          # column exists; mock leaves None
+    assert set(s.target_vmids) == {"kali"}     # kali-only range
+    await sessions_svc.abort(db, s.id)
+
+
+async def test_compile_topology_wan_and_kali_roles():
+    """KaliSpec.wan rides in the stored topology; KaliSpec.roles merge after
+    the mandatory pentrain_kali_agent."""
+    from app.services.sessions import compile_topology
+    q = Quest(id="x", track_slug="home-lab", tier=1, title="x",
+              topology={"kali": {"wan": True, "roles": ["pentrain_home_lab",
+                                                     {"name": "extra"}]},
+                        "vms": []})
+    cfg = compile_topology(q)
+    kali = cfg["ludus"][0]
+    assert kali["roles"] == ["pentrain_kali_agent", "pentrain_home_lab",
+                            {"name": "extra"}]
+    assert len(cfg["ludus"]) == 1             # kali only — no targets
+    assert q.topology["kali"]["wan"] is True  # survives model_dump storage
+
+
+async def test_session_context_reports_scope(db_with_packs):
+    """home-lab sessions surface scope + lan-scope target to the coach —
+    the only 'where to aim' the model gets with zero range VMs."""
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "lab-t1-assessment")
+    s = await _wait_state(s.id, "ready")
+
+    # explicit setting wins
+    await settings_svc.set_setting(db, "lan.scope_cidr", "192.168.7.0/24")
+    ctx = await coach_bridge.session_context(db, s.id)
+    assert ctx["quest"]["scope"] == "192.168.7.0/24"
+    assert ctx["quest"]["mode"] == "lan-assessment"
+    assert ctx["quest"]["targets"] == [
+        {"name": "lan-scope", "ip": "192.168.7.0/24"}]
+
+    # lease fallback when the setting is empty — _wait_state returns a
+    # detached row (own session_factory), so re-load into the test session
+    await settings_svc.set_setting(db, "lan.scope_cidr", "")
+    s = await db.get(Session, s.id)
+    s.kali_wan_ip = "192.168.3.131"
+    await db.commit()
+    ctx = await coach_bridge.session_context(db, s.id)
+    assert ctx["quest"]["scope"] == "192.168.3.131/24"
+
+    # a normal quest never gets a scope
+    s2 = await db.get(Session, s.id)
+    await sessions_svc.abort(db, s2.id)
+    s2 = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s2 = await _wait_state(s2.id, "ready")
+    ctx = await coach_bridge.session_context(db, s2.id)
+    assert ctx["quest"]["scope"] is None
+    await sessions_svc.abort(db, s2.id)

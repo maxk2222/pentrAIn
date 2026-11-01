@@ -849,6 +849,9 @@ def test_written_files_detects_heredoc_and_filters():
                    from_coach=True); st.commands[-1].exit_code = 0
     st.add_command(3.0, "cat > /dev/null", from_coach=True)
     st.commands[-1].exit_code = 0
+    st.add_command(3.5, "cat /tmp/rt.txt 2>/dev/null || echo NO",
+                   from_coach=True)                                   # stderr discard — not a write
+    st.commands[-1].exit_code = 0
     st.add_command(4.0, "cat > /root/fail.sh", from_coach=True)
     st.commands[-1].exit_code = 1                          # failed write — no file
     st.add_command(5.0, "cat > /root/solve.py << 'V2'", from_coach=True)
@@ -915,3 +918,24 @@ async def test_start_seeds_write_counts_from_replay():
                                     "command": "cat > /root/solve.py << 'EOF'\nz\nEOF"})
     assert r.startswith("denied:")
     await coach2.stop()
+
+
+async def test_context_operator_directive_at_l4():
+    """User chat at L4 must surface as OPERATOR_DIRECTIVE in the takeover
+    context — session 30 showed the model ignoring operator nudges for ~7
+    turns because they only existed as role=user history entries."""
+    from coach.prompts import build_context_msg
+    import time
+    coach, _ = _coach()
+    coach.ctx["session"]["autonomy_level"] = 4
+    st = coach.state
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "OPERATOR_DIRECTIVE" not in msg          # none buffered yet
+    st.operator_directive = "run ssh -tt for the pager"
+    st.operator_directive_ts = time.time()
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "OPERATOR_DIRECTIVE" in msg and "ssh -tt" in msg
+    # stale directives expire — don't boss the model around forever
+    st.operator_directive_ts = time.time() - 700
+    msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
+    assert "OPERATOR_DIRECTIVE" not in msg

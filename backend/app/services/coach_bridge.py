@@ -96,6 +96,15 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                 func.json_extract(CoachAction.result, "$.out")
                     .like("%pentrAIn{%")))).all() if r[0]]
     profile = await db.get(UserProfile, 1)
+    # home-lab LAN assessment: scope comes from the lan.scope_cidr setting,
+    # falling back to the /24 of the WAN lease stored on the session. Only
+    # relevant when the quest declares topology.kali.wan.
+    scope = None
+    if ((quest.topology or {}).get("kali") or {}).get("wan"):
+        from . import settings as settings_svc
+        scope = (await settings_svc.get_setting(db, "lan.scope_cidr", "") or "").strip()
+        if not scope and session.kali_wan_ip:
+            scope = f"{session.kali_wan_ip}/24"
     # resolve concrete target IPs for the coach — hostnames alone invite the
     # model to invent RFC-5737 addresses. The range's /24 prefix comes from
     # the live kali IP; quest topology supplies each vm's last octet.
@@ -116,6 +125,8 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         octet = v.get("ip_last_octet")
         ip = f"{kali_ip.rsplit('.', 1)[0]}.{octet}" if kali_ip and octet else None
         targets.append({"name": name, "ip": ip})
+    if scope and not targets:
+        targets.append({"name": "lan-scope", "ip": scope})
     return {
         "session": {
             "id": session.id, "state": session.state,
@@ -136,6 +147,9 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             # real hostnames + resolved IPs the trainee can reach — keeps the
             # model from inventing RFC-5737 addresses
             "targets": targets,
+            # home-lab mode: authorized LAN scope + mode marker for prompts
+            "scope": scope,
+            "mode": "lan-assessment" if scope else None,
         },
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
                    "solved": f.key in solved} for f in flags],

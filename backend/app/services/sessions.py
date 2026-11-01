@@ -96,7 +96,7 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
         "ram_min_gb": kali.get("ram_min_gb") or 3,
         "cpus": kali.get("cpus", 4),
         "linux": True,
-        "roles": ["pentrain_kali_agent"],
+        "roles": ["pentrain_kali_agent", *(kali.get("roles") or [])],
     })
     for i, v in enumerate(topo.get("vms") or []):
         ram_gb = v.get("ram_gb", 4)
@@ -314,8 +314,10 @@ async def _finalize(db: AsyncSession, engine, session: Session,
 
     # kali wan uplink — BEFORE the snapshot so soft reset keeps the net1
     # config. Non-fatal: a missing DHCP lease must not sink the deploy.
-    want_net = bool(session.kali_internet) or bool(
-        await settings_svc.get_setting(db, "kali.internet_default", False))
+    # topology.kali.wan = the quest REQUIRES the uplink (home-lab LAN mode)
+    want_net = (bool(session.kali_internet)
+                or bool((quest.topology or {}).get("kali", {}).get("wan"))
+                or bool(await settings_svc.get_setting(db, "kali.internet_default", False)))
     if want_net and session.kali_vmid:
         try:
             res = await kali_net_svc.apply_kali_internet(
@@ -323,6 +325,8 @@ async def _finalize(db: AsyncSession, engine, session: Session,
                 await settings_svc.get_setting(db, "engine.kali_wan_bridge", "vmbr0"),
                 kali_net_svc.target_names_for(quest))
             session.kali_internet = True
+            # persist the LAN lease — coach scope auto-detect + UI display
+            session.kali_wan_ip = res.get("ip") or None
             await db.commit()
             detail = f"{res.get('ip','?')} via {res.get('iface','?')}" if res.get("ip") else "mock"
             await _append_log(db, session, f"[pentrain] kali internet on ({detail})")
@@ -488,14 +492,16 @@ async def _reset(session_id: int, hard: bool) -> None:
             if session.kali_vmid:
                 try:
                     if session.kali_internet:
-                        await kali_net_svc.apply_kali_internet(
+                        res = await kali_net_svc.apply_kali_internet(
                             engine, session.kali_vmid,
                             await settings_svc.get_setting(
                                 db, "engine.kali_wan_bridge", "vmbr0"),
                             kali_net_svc.target_names_for(quest) if quest else [])
+                        session.kali_wan_ip = res.get("ip") or session.kali_wan_ip
                     else:
                         await kali_net_svc.remove_kali_internet(
                             engine, session.kali_vmid)
+                        session.kali_wan_ip = None
                 except Exception as e:
                     await log.awarning("kali internet re-apply failed", error=str(e)[:150])
             # re-randomize flags (old secrets are gone after rollback)
@@ -597,6 +603,30 @@ async def solved_quest_ids(db: AsyncSession) -> set[str]:
     (created only on all_solved), NOT session.state — abort() legitimately
     tears down a solved session's range and must not erase progression."""
     return {r[0] for r in (await db.execute(select(Attempt.quest_id).distinct())).all()}
+
+
+LEVEL_NAMES = {1: "Observer", 2: "Mentor", 3: "Copilot", 4: "Autonomous"}
+
+
+async def set_autonomy(db: AsyncSession, session_id: int, level: int) -> Session:
+    """Live-switch the coach autonomy level mid-session. The coach reads it
+    fresh from session_context every turn, so a DB write + broadcast is all
+    it takes — no coach-side plumbing needed."""
+    session = await db.get(Session, session_id)
+    if not session:
+        raise SessionError("no session")
+    if session.state in (SessionState.SOLVED.value, SessionState.ABORTED.value,
+                         SessionState.FAILED.value):
+        raise SessionError(f"session is {session.state} — autonomy is locked")
+    if not 1 <= level <= 4:
+        raise SessionError("autonomy level must be 1-4")
+    session.autonomy_level = level
+    await db.commit()
+    await coach_bridge.post_message(
+        db, session_id, "system", "chat",
+        f"Autonomy level → {level} ({LEVEL_NAMES[level]}).")
+    await _broadcast(session_id, "autonomy", {"level": level})
+    return session
 
 
 async def abort(db: AsyncSession, session_id: int) -> Session:

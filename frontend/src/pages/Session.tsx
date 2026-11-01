@@ -111,7 +111,7 @@ export function SessionPage() {
         try {
           const ev = JSON.parse(e.data) as WsEvent;
           setEvents((prev) => [...prev.slice(-299), ev]);
-          if (ev.type === "state") {
+          if (ev.type === "state" || ev.type === "autonomy") {
             qc.invalidateQueries({ queryKey: ["session", sessionId] });
             qc.invalidateQueries({ queryKey: ["session-flags", sessionId] });
             useAppStore.getState().loadActiveSession();
@@ -357,7 +357,13 @@ export function SessionPage() {
               onReset={() => setPanelWidth("chat", WIDTH_DEFAULTS.chat)} />
             <div className="flex shrink-0 flex-col border-l border-border bg-surface"
               style={{ width: widths.chat }}>
-              <ChatPanel sessionId={sessionId} events={events} />
+              <ChatPanel sessionId={sessionId} events={events}
+                autonomy={session?.autonomy_level}
+                onAutonomy={(level) => {
+                  api.post(`/api/sessions/${sessionId}/autonomy`, { level })
+                    .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
+                    .catch(() => {});
+                }} />
             </div>
           </>
         ) : (

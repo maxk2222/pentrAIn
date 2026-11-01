@@ -70,6 +70,7 @@ class SessionOut(BaseModel):
     autonomy_level: int
     coach_enabled: bool
     kali_internet: bool = False
+    kali_wan_ip: str | None = None
     created_at: str | None
     ready_at: str | None
     error: str | None = None
@@ -77,6 +78,10 @@ class SessionOut(BaseModel):
 
 class InternetIn(BaseModel):
     enabled: bool
+
+
+class AutonomyIn(BaseModel):
+    level: int = Field(ge=1, le=4)
 
 
 class SessionStartIn(BaseModel):

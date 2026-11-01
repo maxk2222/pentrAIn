@@ -46,6 +46,10 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
         label: "Kali internet on new sessions", type: "bool",
         help: "Attach a second NIC to the WAN bridge on every new range — toggleable live per session.",
       }],
+      ["lan.scope_cidr", {
+        label: "Home-lab LAN scope", type: "text", placeholder: "192.168.1.0/24",
+        help: "Authorized scope the coach uses in Home Lab mode — empty = auto-detect /24 from the WAN lease.",
+      }],
     ],
   },
   {

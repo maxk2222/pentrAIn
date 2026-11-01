@@ -117,6 +117,7 @@ class Session(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     coach_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     kali_internet: Mapped[bool] = mapped_column(Boolean, default=False)  # net1→wan bridge attached
+    kali_wan_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)  # LAN lease on net1 — scope auto-detect
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import secrets
 from collections.abc import Callable
 
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
 from ..db import get_db
-from ..models.domain import CoachMessage
+from ..models.domain import CoachMessage, Session
 from ..services import coach_bridge
 from ..services.console import proxy_console, proxy_vm_console
 from ..services.events import bus, ephemeral_replay
@@ -124,16 +125,73 @@ async def chat_history(session_id: int, db: AsyncSession = Depends(get_db),
             for m in rows]
 
 
+_SLASH_ALIASES = {"/autonomy", "/level", "/mode", "/l"}
+_SLASH_LEVELS = {
+    "1": 1, "observer": 1, "spectate": 1,
+    "2": 2, "mentor": 2, "advisor": 2,
+    "3": 3, "copilot": 3,
+    "4": 4, "autonomous": 4, "takeover": 4,
+}
+_SLASH_USAGE = ("Usage: /autonomy <1-4|observer|mentor|copilot|autonomous> "
+                "— switches the coach mode live.")
+_slash_echo_ids = itertools.count(1)
+
+
+def _slash_echo(msg_id: int | None) -> int:
+    """Negative unique id for the UI's user-message echo — a real (positive)
+    id would dedupe-block the system reply arriving over the WS, and a fixed
+    value would collide on the second slash command."""
+    return -(msg_id or (10**9 + next(_slash_echo_ids)))
+
+
+async def _chat_slash(db: AsyncSession, session_id: int,
+                      content: str) -> dict | None:
+    """Intercept /autonomy-style commands BEFORE post_message — a stored user
+    line would surface in the L4 prompt as an OPERATOR_DIRECTIVE telling the
+    model to 'execute /autonomy verbatim'. Returns the response or None when
+    the content isn't a command."""
+    from ..services import sessions as sessions_svc
+
+    cmd, _, arg = content.partition(" ")
+    if cmd.lower() not in _SLASH_ALIASES:
+        return None
+    session = await db.get(Session, session_id)
+    arg = arg.strip().lower()
+    if not arg:
+        level = session.autonomy_level if session else 0
+        msg = await coach_bridge.post_message(
+            db, session_id, "system", "chat",
+            f"Autonomy level: {level} ({sessions_svc.LEVEL_NAMES.get(level, '?')}). "
+            + _SLASH_USAGE)
+        return {"id": _slash_echo(msg.id)}
+    level = _SLASH_LEVELS.get(arg)
+    if level is None:
+        msg = await coach_bridge.post_message(
+            db, session_id, "system", "chat", f"Unknown level {arg!r}. " + _SLASH_USAGE)
+        return {"id": _slash_echo(msg.id)}
+    try:
+        await sessions_svc.set_autonomy(db, session_id, level)
+    except sessions_svc.SessionError as e:
+        msg = await coach_bridge.post_message(
+            db, session_id, "system", "chat", f"Autonomy unchanged: {e}")
+        return {"id": _slash_echo(msg.id)}
+    # set_autonomy already posted the system confirmation + broadcast.
+    return {"id": _slash_echo(None)}
+
+
 @chat_router.post("/sessions/{session_id}/chat")
 async def chat_send(session_id: int, body: dict, db: AsyncSession = Depends(get_db),
                     _=Depends(get_current_user)):
     from fastapi import HTTPException
 
-    from ..models.domain import Session
     if not await db.get(Session, session_id):
         raise HTTPException(404, "session not found")
     content = str(body.get("content") or "").strip()[:8000]
     if not content:
         raise HTTPException(422, "empty message")
+    if content.startswith("/"):
+        handled = await _chat_slash(db, session_id, content)
+        if handled is not None:
+            return handled
     msg = await coach_bridge.post_message(db, session_id, "user", "chat", content)
     return {"id": msg.id}

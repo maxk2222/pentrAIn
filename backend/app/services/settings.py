@@ -23,6 +23,7 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "engine.kali_template": ("", False),            # custom kali template name — empty = per-quest default
     "engine.kali_wan_bridge": ("vmbr0", False),     # bridge with real internet for kali net1 + builder VM
     "kali.internet_default": (False, False),        # attach kali WAN nic on new sessions
+    "lan.scope_cidr": ("", False),                  # authorized LAN scope for home-lab mode; empty = auto-detect /24 from WAN lease
     "kali.builder_vmid": (0, False),                # internal: in-flight template-builder VM
     "platform.api_url": ("http://pentrain-app:8000", False),  # backend URL reachable from ranges
     "resources.max_ram_gb": (48, False),

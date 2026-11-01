@@ -7,6 +7,8 @@ Two prompts:
 """
 from __future__ import annotations
 
+import time
+
 SYSTEM_BASE = """\
 You are pentrAIn — an adaptive penetration-testing coach embedded beside the \
 trainee's Kali desktop. You coach one person working through one quest right now.
@@ -143,6 +145,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         *([("INTERNET: YES — kali has a LAN uplink (second nic, DHCP) so "
             "apt/pip/curl DO work this session; range targets stay isolated")]
           if s.get("kali_internet") else []),
+        *([("SCOPE: " + q["scope"] + " — authorized LAN assessment; only touch "
+            "in-scope hosts, never DoS or destructive actions. Hosts here are "
+            "REAL devices, not lab VMs — fingerprints stay gentle.")]
+          if q.get("scope") else []),
         f"BRIEF: {q.get('briefing', '')[:1200]}",
         f"COACH_NOTES: {q.get('coach_context', '')[:800]}",
         f"TRAINEE_LEVEL(track): {level}",
@@ -183,7 +189,22 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "When a pentrAIn{...} value appears in tool output, call "
             "submit_flag with it in the SAME turn — flag values are "
             "per-session so a guess can never match; a rejected submit "
-            "costs nothing, a delayed one stalls the solve.")
+            "costs nothing, a delayed one stalls the solve. The Kali pane "
+            "is zsh: a literal `!` inside DOUBLE-quoted strings triggers "
+            "history expansion and kills the line ('event not found'). "
+            "Payloads needing `!` (shebangs) go in SINGLE quotes — or skip "
+            "the shebang: `sh pwn.sh` reads the file without one. "
+            "ssh host 'cmd' runs with NO TTY — pagers/vim dump-and-exit "
+            "instead of opening; force one with `ssh -tt` when the exploit "
+            "needs an interactive remote program. After planting an async "
+            "trigger (cron/wildcard), poll its output file with the SAME "
+            "tool until the result appears — do NOT wander to a different "
+            "attack before checking whether it fired.")
+        if (st.operator_directive
+                and time.time() - st.operator_directive_ts < 600):
+            parts.append(
+                "OPERATOR_DIRECTIVE (this overrides your plan — execute it "
+                "verbatim NOW): " + st.operator_directive)
         if st.proactive_streak:
             parts.append(
                 f"STALL_ALERT: your last {st.proactive_streak} turn(s) "

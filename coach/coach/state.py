@@ -31,6 +31,10 @@ class SessionState:
     proactive_streak: int = 0
     # buffered user chat lines awaiting a debounced answer
     pending_chat: list[str] = field(default_factory=list)
+    # last user message — rendered as OPERATOR_DIRECTIVE on L4 so takeover
+    # turns can't dismiss it as trainee chatter (they ignored it otherwise)
+    operator_directive: str = ""
+    operator_directive_ts: float = 0.0
     # latest screenshot description produced by the vision model
     screen_desc: str = ""
     notes: list[str] = field(default_factory=list)               # coach-side observations
@@ -101,7 +105,10 @@ class SessionState:
                 out.append(c.command)
         return out[-n:]
 
-    _WRITE_RE = re.compile(r">\s*(/\S+)|\btee\s+(-a\s+)?(\S+)")
+    # bare `> target` is a write; fd-number redirects (`2>`) aren't, and a
+    # target of /dev/null is a discard — not a file worth guarding
+    _WRITE_RE = re.compile(r"(?<!\d)>\s*(/(?!dev/null\b)\S+)"
+                           r"|\btee\s+(-a\s+)?(\S+)")
     _RECON_RE = re.compile(
         r"\b(nmap|masscan|rustscan|unicornscan|naabu|zmap|nikto|gobuster|"
         r"feroxbuster|dirb|dirsearch|ffuf|nuclei)\b")

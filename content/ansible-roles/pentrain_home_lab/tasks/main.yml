@@ -1,0 +1,45 @@
+---
+# pentrain_home_lab — home-lab LAN assessment helpers on the Kali VM.
+#
+# Attached via topology.kali.roles by the home-lab quests: drops the report
+# skeleton the command flag greps against and makes sure the assessment
+# toolchain is present (the WAN uplink means apt works, but offline kits
+# shouldn't miss a beat either).
+- name: assessment toolchain
+  ansible.builtin.apt:
+    name:
+      - nmap
+      - nbtscan
+      - arp-scan
+      - smbclient
+      - snmp
+      - dnsutils
+      - python3-pip
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+  failed_when: false   # some names drift between kali releases — never brick deploy
+
+- name: report skeleton (flag checks structure, not this template)
+  ansible.builtin.copy:
+    dest: /home/kali/lan-report-template.md
+    mode: "0644"
+    owner: kali
+    group: kali
+    content: |
+      # LAN Assessment Report
+      # copy me to lan-report.md and fill every section — the grader greps for it
+
+      ## Scope
+      authorized network: <CIDR>   assessment date: <YYYY-MM-DD>
+
+      ## Hosts discovered
+      | IP | MAC / vendor | hostname | open ports / services |
+      |----|--------------|----------|-----------------------|
+
+      ## Findings
+      | severity | host:port | finding | recommendation |
+      |----------|-----------|---------|----------------|
+
+      ## Summary
+      devices in scope: <n>   findings: <n>   top risks: <one line>

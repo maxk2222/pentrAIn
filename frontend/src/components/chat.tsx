@@ -36,7 +36,18 @@ function ThinkingBlock({ text, open }: { text: string; open?: boolean }) {
   );
 }
 
-export function ChatPanel({ sessionId, events }: { sessionId: number; events: WsEvent[] }) {
+const AUTONOMY = [
+  { level: 1, short: "Obs", name: "Observer", tip: "watches and hints only" },
+  { level: 2, short: "Ment", name: "Mentor", tip: "adaptive guidance" },
+  { level: 3, short: "Co", name: "Copilot", tip: "suggests commands — you confirm" },
+  { level: 4, short: "Auto", name: "Autonomous", tip: "executes on Kali itself" },
+];
+
+export function ChatPanel({ sessionId, events, autonomy, onAutonomy }: {
+  sessionId: number; events: WsEvent[];
+  autonomy?: number;
+  onAutonomy?: (level: number) => void;
+}) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -203,11 +214,37 @@ export function ChatPanel({ sessionId, events }: { sessionId: number; events: Ws
     <div className="relative flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-sm font-medium">
         <span>Coach <span className="ml-1 text-xs font-normal text-muted">adaptive hints</span></span>
-        {thinking && (
-          <span className="flex items-center gap-1 text-xs text-muted">
-            <Radio className="h-3 w-3 animate-pulse text-primary" /> thinking…
-          </span>
-        )}
+        <span className="flex items-center gap-2">
+          {autonomy !== undefined && onAutonomy && (
+            <span className="flex items-center gap-0.5 rounded-md border border-border p-0.5"
+              title="Coach autonomy — same as /autonomy <level> in chat">
+              {AUTONOMY.map((a) => (
+                <button
+                  key={a.level}
+                  title={`${a.level} — ${a.name}: ${a.tip}`}
+                  onClick={() => {
+                    if (a.level === autonomy) return;
+                    if (a.level === 4 &&
+                      !confirm("Autonomous mode lets the coach execute commands on Kali. Enable?")) return;
+                    onAutonomy(a.level);
+                  }}
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer",
+                    a.level === autonomy
+                      ? "bg-primary/20 text-primary"
+                      : "text-muted hover:bg-surface-2 hover:text-foreground",
+                  )}>
+                  {a.level}·{a.short}
+                </button>
+              ))}
+            </span>
+          )}
+          {thinking && (
+            <span className="flex items-center gap-1 text-xs text-muted">
+              <Radio className="h-3 w-3 animate-pulse text-primary" /> thinking…
+            </span>
+          )}
+        </span>
       </div>
       <div ref={scrollRef} onScroll={onScroll} className="flex-1 space-y-3 overflow-auto p-3">
         {(messages ?? []).map((m) => (

@@ -7,6 +7,7 @@ from ..db import get_db
 from ..models.domain import AssistUse, Flag, FlagSubmission, Quest, Session, TelemetryEvent
 from ..schemas import (
     AssistIn,
+    AutonomyIn,
     ConfirmActionIn,
     FlagCheckIn,
     FlagOut,
@@ -36,7 +37,7 @@ def _out(s: Session) -> SessionOut:
     return SessionOut(
         id=s.id, quest_id=s.quest_id, state=s.state, kali_vmid=s.kali_vmid,
         autonomy_level=s.autonomy_level, coach_enabled=s.coach_enabled,
-        kali_internet=bool(s.kali_internet),
+        kali_internet=bool(s.kali_internet), kali_wan_ip=s.kali_wan_ip,
         created_at=s.created_at.isoformat() if s.created_at else None,
         ready_at=s.ready_at.isoformat() if s.ready_at else None,
         error=s.error)
@@ -284,6 +285,16 @@ async def abort(session_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(409, str(e)) from e
 
 
+@router.post("/sessions/{session_id}/autonomy", response_model=SessionOut)
+async def set_session_autonomy(session_id: int, body: AutonomyIn,
+                               db: AsyncSession = Depends(get_db)):
+    """Live autonomy switch — same write the chat /autonomy command uses."""
+    try:
+        return _out(await sessions_svc.set_autonomy(db, session_id, body.level))
+    except sessions_svc.SessionError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 @router.post("/sessions/{session_id}/internet")
 async def toggle_internet(session_id: int, body: InternetIn,
                           db: AsyncSession = Depends(get_db)):
@@ -303,11 +314,13 @@ async def toggle_internet(session_id: int, body: InternetIn,
                 engine, s.kali_vmid, bridge,
                 kali_net_svc.target_names_for(quest) if quest else [])
             s.kali_internet = True
+            s.kali_wan_ip = res.get("ip") or None
             await db.commit()
             return {"enabled": True, "ip": res.get("ip"), "iface": res.get("iface"),
                     "mock": bool(res.get("mock"))}
         await kali_net_svc.remove_kali_internet(engine, s.kali_vmid)
         s.kali_internet = False
+        s.kali_wan_ip = None
         await db.commit()
         return {"enabled": False}
     except Exception as e:
