@@ -640,3 +640,20 @@ async def test_set_subagents_and_slash_paths(db_with_packs):
     with pytest.raises(sessions_svc.SessionError, match="locked"):
         await sessions_svc.set_subagents(db, s.id, True)
     await sessions_svc.abort(db, s.id)
+
+
+async def test_session_context_carries_reference_and_tools(db_with_packs):
+    """The coach's knowledge base rides in session_context: track + quest
+    cheatsheets (tool syntax/methodology) and the live kali_tools probe."""
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    s = await db.get(Session, s.id)
+    s.kali_tools = "nmap\nsmbclient\nmysql"
+    await db.commit()
+    ctx = await coach_bridge.session_context(db, s.id)
+    assert "nmap" in ctx["quest"]["track_cheatsheet"]      # linux cheatsheet
+    assert ctx["quest"]["cheatsheet"]                    # quest-local card
+    assert ctx["session_tools"] == "nmap\nsmbclient\nmysql"
+    await sessions_svc.abort(db, s.id)

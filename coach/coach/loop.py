@@ -93,6 +93,7 @@ class SessionCoach:
         self._llm_lock = asyncio.Lock()      # serialize LLM turns (chat vs reflect)
         self._coach_cmds: list[tuple[str, float]] = []   # commands we issued via exec
         self._pane_interactive = False   # pane holds a program awaiting input
+        self._busy_bounces = 0           # consecutive execs that never finished
         self._last_capture_ts = 0.0
         self._last_badflag_ack = 0.0
         self._disabled_notice_sent = False
@@ -1147,6 +1148,22 @@ class SessionCoach:
                         if rm:
                             self._run_exits[rm.group(1)] = code
                     result += await self._scan_flags(out)
+                    # pane-busy escalation: consecutive execs that never
+                    # finished (bounced off a held pane or still running)
+                    # mean the pane is wedged — command variants won't fix
+                    # it; a literal C-c or a type_in_pane answer will
+                    if res.get("busy") or res.get("timed_out"):
+                        self._busy_bounces += 1
+                        if self._busy_bounces >= 2:
+                            result += (
+                                f"\nPANE_WEDGED: the pane has been busy for "
+                                f"{self._busy_bounces} consecutive commands — "
+                                f"stop trying command variants. Either "
+                                f"interrupt with exec_in_kali 'C-c', or if a "
+                                f"prompt waits for input (password/menu) "
+                                f"answer it via type_in_pane NOW.")
+                    elif code is not None:
+                        self._busy_bounces = 0
                     if typed and code == 0 and out.strip():
                         # output-signature dedup: re-reads/re-greps of the same
                         # data return byte-identical output — the command-text
@@ -1200,6 +1217,8 @@ class SessionCoach:
                 # their own pane via res.busy.
                 if window is None:
                     self._pane_interactive = bool(res.get("busy", True))
+                # a successful type means the wedge was answered, not bounced
+                self._busy_bounces = 0
                 # interactive input is coach activity too — keep it visible in
                 # command memory (marked so it can't pollute recon/write regexes)
                 self.state.add_command(time.time(), f"<type> {text_in[:80]}",
@@ -1316,6 +1335,12 @@ class SessionCoach:
         if spoke:
             self.state.last_nudge_ts = time.time()
             self.state.nudges_sent += 1
+        # an executed action (parent only — a worker's execs must not consume
+        # the operator's directive) retires the pinned OPERATOR_DIRECTIVE so
+        # it stops steering later turns; the chat message stays in history
+        if (spoke and window is None and t in (
+                "exec_in_kali", "type_in_pane", "submit_flag", "check_flag")):
+            self.state.operator_directive = ""
         return spoke, result
 
     # ---------- parallel worker agents (L4 subagents) ----------

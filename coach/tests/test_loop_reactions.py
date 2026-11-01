@@ -1303,3 +1303,76 @@ async def test_finished_worker_frees_its_slot():
     _v, r = await coach._dispatch({"type": "spawn_agent", "task": "b"})
     assert "spawned w1" in r          # the done slot is reusable
     await coach.stop()
+
+
+async def test_busy_bounces_escalate_to_wedge_directive():
+    """Two consecutive execs that never finished (bounced off a held pane
+    or still running) must escalate to a hard C-c/type_in_pane directive —
+    session 25 burned 3+ turns trying command variants on a wedged curl."""
+    class Wedged(FakeClient):
+        async def exec_in_kali(self, sid, command, window=None):
+            return {"out": "", "err": "pane busy: 'curl'",
+                    "busy": True, "visible": False}
+    coach, _c = _coach()
+    coach.client = Wedged()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _v, r1 = await coach._dispatch({"type": "exec_in_kali",
+                                    "command": "curl http://t/x"}, proactive=True)
+    assert "PANE_WEDGED" not in r1
+    _v, r2 = await coach._dispatch({"type": "exec_in_kali",
+                                    "command": "curl --max-time 5 http://t/x"},
+                                   proactive=True)
+    assert "PANE_WEDGED" in r2 and "C-c" in r2 and "type_in_pane" in r2
+    assert coach._busy_bounces == 2
+
+
+async def test_busy_bounces_reset_on_type_and_exit():
+    """Answering the prompt (type_in_pane) or a clean exit must reset the
+    wedge counter — only *consecutive* unfinished execs escalate."""
+    class Toggle(FakeClient):
+        busy = True
+        async def exec_in_kali(self, sid, command, window=None):
+            if self.busy:
+                return {"out": "", "err": "pane busy", "busy": True}
+            return {"out": "done", "exitcode": 0, "visible": True}
+    coach, _c = _coach()
+    coach.client = Toggle()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    await coach._dispatch({"type": "exec_in_kali", "command": "x"}, proactive=True)
+    assert coach._busy_bounces == 1
+    await coach._dispatch({"type": "type_in_pane", "text": "pw"}, proactive=True)
+    assert coach._busy_bounces == 0
+    coach.client.busy = False
+    await coach._dispatch({"type": "exec_in_kali", "command": "x"}, proactive=True)
+    assert coach._busy_bounces == 0
+
+
+async def test_operator_directive_clears_after_first_action():
+    """A pinned OPERATOR_DIRECTIVE that was acted on must stop steering —
+    otherwise stale directives train the model to ignore the block."""
+    import time
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    st = coach.state
+    st.operator_directive = "submit the flag you saw"
+    st.operator_directive_ts = time.time()
+    await coach._dispatch({"type": "exec_in_kali", "command": "ls"},
+                          proactive=True)
+    assert st.operator_directive == ""
+
+
+async def test_context_includes_reference_and_tool_inventory():
+    """TRACK_REFERENCE/QUEST_REFERENCE/KALI_TOOLS must render — the cheatsheet
+    tool syntax + live inventory are the coach's knowledge base."""
+    from coach.prompts import build_context_msg
+    coach, _c = _coach()
+    coach.ctx["quest"]["track_cheatsheet"] = "nmap -sV <ip>\nsmbclient -N -L"
+    coach.ctx["quest"]["cheatsheet"] = "quest-local note"
+    coach.ctx["session_tools"] = "nmap\nsmbclient\nmysql"
+    msg = build_context_msg(coach.ctx, coach.state, "takeover loop")
+    assert "TRACK_REFERENCE:" in msg and "smbclient -N -L" in msg
+    assert "QUEST_REFERENCE:" in msg and "quest-local note" in msg
+    assert "KALI_TOOLS" in msg and "mysql" in msg
