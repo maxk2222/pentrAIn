@@ -181,6 +181,27 @@ class Percept:
 _HEAD_LINES, _TAIL_LINES = 20, 8
 _MAX_REPLY = 1700
 
+# auth-loop detector: a POST to a login endpoint that returns an empty/tiny
+# body is a silent 302-back-to-form — curl exits 0 so the model reads it as
+# "login done" and burns turns exploiting an unauthenticated session (the
+# session-39 DVWA loop). Annotate the one deterministic symptom.
+_LOGIN_URL = re.compile(r"(?:/|^)(?:login|signin|auth)[\w./-]*", re.I)
+_POST = re.compile(r"(?:\s-d\s|--data\b|POST)", re.I)
+
+
+def _auth_note(cmd: str, stripped: str) -> str:
+    if not (_POST.search(cmd) and _LOGIN_URL.search(cmd)):
+        return ""
+    body = stripped.strip()
+    if len(body) > 400 or "login" not in body.lower() and body:
+        # a real response body without a login bounce = probably fine
+        return ""
+    return ("\n[auth unverified — login POST returned no usable body "
+            "(empty/redirect): credentials or a hidden field were rejected. "
+            "Fetch the form, extract hidden inputs (user_token/csrf/_token) "
+            "and include them in the POST, then VERIFY by fetching a "
+            "protected page before exploiting.]")
+
 
 def normalize(cmd: str, out: str, exit_code: int | None, *,
               timed_out: bool = False) -> Percept:
@@ -209,6 +230,7 @@ def normalize(cmd: str, out: str, exit_code: int | None, *,
     reply = stripped[:_MAX_REPLY]
     if exit_code is not None:
         reply = f"{reply}\n(exit {exit_code})" if reply else f"exit {exit_code}"
+    reply += _auth_note(cmd, stripped)
     return Percept(reply=reply, status=status, facts=delta)
 
 

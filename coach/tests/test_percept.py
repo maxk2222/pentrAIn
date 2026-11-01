@@ -98,3 +98,27 @@ def test_parse_worker_report_prose_returns_none():
     assert parse_worker_report("REPORT: 22/80 open, share listed") is None
     assert parse_worker_report("") is None
     assert parse_worker_report('{"unrelated": 1}') is None
+
+
+def test_normalize_flags_silent_login_redirect():
+    """Empty-body response to a login POST = silent 302-back-to-form —
+    curl exits 0 so without the annotation the model reads auth as
+    established (session 39 DVWA loop)."""
+    from coach.percept import normalize
+    p = normalize(
+        "curl -s -c jar 'http://t/login.php' -d 'username=admin&password=x'",
+        "", 0)
+    assert "auth unverified" in p.reply
+    # same login-shaped redirect body also triggers
+    p2 = normalize(
+        "curl -s -b jar -c jar 'http://t/dvwa/login.php' -d 'u=1'",
+        '<meta http-equiv="refresh" content="0; URL=login.php">', 0)
+    assert "auth unverified" in p2.reply
+    # a real response body is not flagged
+    p3 = normalize(
+        "curl -s -c jar 'http://t/login.php' -d 'u=1'",
+        "Welcome admin — dashboard …" * 30, 0)
+    assert "auth unverified" not in p3.reply
+    # GETs and non-login endpoints never trigger
+    p4 = normalize("curl -s 'http://t/index.php'", "", 0)
+    assert "auth unverified" not in p4.reply
