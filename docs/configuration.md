@@ -77,6 +77,7 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `coach.worker_turn_cap` | `10` | LLM turns per worker |
 | `coach.worker_time_cap_s` | `300` | Wall-clock per worker |
 | `coach.collect_wait_s` | `40` | `collect_agent` block bound |
+| `coach.wait_max_s` | `180` | Cap per `wait` tool call |
 
 ### Content & data
 

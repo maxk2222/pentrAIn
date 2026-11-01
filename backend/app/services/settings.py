@@ -51,6 +51,7 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.worker_turn_cap": (10, False),        # LLM turns per worker task
     "coach.worker_time_cap_s": (300, False),     # wall-clock per worker task
     "coach.collect_wait_s": (40, False),         # collect_agent block bound
+    "coach.wait_max_s": (180, False),            # cap per wait-tool call
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

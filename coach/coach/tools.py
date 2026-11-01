@@ -56,6 +56,16 @@ TOOLS: list[dict] = [
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
+    _fn("wait",
+        "Wait N seconds without acting — for time-dependent state changes "
+        "(cron jobs, service startup, lockout/cooldown timers). Touches "
+        "nothing on the pane and costs no action budget. Prefer this over "
+        "polling the same check in a loop.",
+        {"seconds": {"type": "integer", "minimum": 5, "maximum": 240,
+                     "description": "seconds to wait — capped by "
+                                    "coach.wait_max_s"},
+         "why": _str("what you're waiting for, e.g. 'root cron every 2min'")},
+        ["seconds"]),
     _fn("spawn_agent",
         "Delegate an INDEPENDENT subtask to a parallel worker agent running "
         "on its own tmux window (w1..w3) — it executes commands autonomously "
@@ -78,7 +88,7 @@ TOOLS: list[dict] = [
 
 # tools a spawned worker may call — exec-only: no chat, flags, checkpoints
 # or nested spawns; completion stays with the parent coach.
-WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "none"}
+WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none"}
 SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
                        "kill_agent"}
 
@@ -94,7 +104,7 @@ _LEVEL_TOOLS = {
         "capture_screen", "none"},
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
-        "none"},
+        "wait", "none"},
 }
 
 

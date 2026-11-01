@@ -51,6 +51,7 @@ never even *see* an action it isn't allowed:
 | `exec_in_kali` | 4 | Runs a command in the coach tmux pane, output reported to chat |
 | `type_in_pane` | 4 | Types into a *busy* pane — passwords, ssh/ftp logins, menus (exec bounces while a foreground program holds the pane) |
 | `submit_flag` / `check_flag` | 4 | Submits a `pentrAIn{...}` it saw in output / verifies state-kind flags |
+| `wait` | 4 + workers | Blocks N seconds (≤`wait_max_s`) without touching the pane — for cron/startup/cooldown delays; no budget cost; operator chat aborts it early |
 | `capture_screen` | 1+ | Screenshot of the Kali desktop → vision model (when `llm.vision_model` is set) |
 | `spawn_agent` etc. | 4 + `Sub` | Parallel workers — next section |
 | `none` | all | Stay silent, keep a private working note |
@@ -83,8 +84,8 @@ flowchart LR
 Worker contract:
 
 - Own LLM context, own tmux window (`w1`…`w3`), own action prefix `[wN]`.
-- **Exec-only** toolset: `exec_in_kali`, `type_in_pane`, `none` — no chat, no
-  flags, no checkpoints, **no recursive spawns**.
+- **Exec-only** toolset: `exec_in_kali`, `type_in_pane`, `wait`, `none` — no
+  chat, no flags, no checkpoints, **no recursive spawns**.
 - Share the parent's scope, read/write guards and action budget.
 - Caps: `coach.max_workers` (default **3**), `coach.worker_turn_cap` (10 LLM
   turns), `coach.worker_time_cap_s` (300 s wall clock);
@@ -153,6 +154,7 @@ tokens/requests/latency per day + budget fill).
 | `coach.worker_turn_cap` | `10` | LLM turns per worker |
 | `coach.worker_time_cap_s` | `300` | Wall-clock per worker |
 | `coach.collect_wait_s` | `40` | `collect_agent` block bound |
+| `coach.wait_max_s` | `180` | Cap per `wait` tool call (cron/startup delays) |
 
 Per-quest behavior (checkpoints, escalation timings, private briefing) lives
 in `quest.yaml` → [quest-authoring.md](quest-authoring.md).

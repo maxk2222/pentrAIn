@@ -1,6 +1,7 @@
 """Autonomy-gated action dispatch — fake backend client."""
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 from pathlib import Path
@@ -124,3 +125,89 @@ async def test_telemetry_event_feeds_state():
     coach.matcher = type("M", (), {"check": lambda self, cmd: []})()
     await coach._handle_event(ev)
     assert coach.state.recent_commands(1) == ["nmap -sV 10.0.0.5"]
+
+
+async def test_wait_sleeps_and_reports():
+    coach, c = _coach(4)
+    t0 = time.monotonic()
+    spoke, res = await coach._dispatch(
+        {"type": "wait", "seconds": 2, "why": "root cron"})
+    assert spoke and res.startswith("waited") and time.monotonic() - t0 >= 1.5
+    card = c.chats[-1]
+    assert card["kind"] == "action_report" and "Waiting 2s" in card["content"]
+    assert "root cron" in card["content"]
+
+
+async def test_wait_denied_below_l4():
+    coach, c = _coach(2)
+    spoke, res = await coach._dispatch({"type": "wait", "seconds": 5})
+    assert not spoke and res.startswith("denied:") and not c.chats
+
+
+async def test_wait_aborts_on_pending_chat():
+    coach, c = _coach(4)
+
+    async def _flag_soon():
+        await asyncio.sleep(0.3)
+        coach.state.pending_chat.append("hi coach")
+
+    task = asyncio.create_task(_flag_soon())
+    t0 = time.monotonic()
+    _spoke, res = await coach._dispatch({"type": "wait", "seconds": 30})
+    await task
+    assert time.monotonic() - t0 < 10
+    assert "aborted" in res and "operator message" in res
+
+
+async def test_wait_in_toolsets():
+    from coach.loop import _CHAIN_TOOLS
+    from coach.tools import WORKER_TOOL_NAMES, tools_for_level, worker_tools
+    assert "wait" in WORKER_TOOL_NAMES and "wait" in _CHAIN_TOOLS
+    assert "wait" in {t["function"]["name"] for t in worker_tools()}
+    assert "wait" in {t["function"]["name"] for t in tools_for_level(4)}
+    assert "wait" not in {t["function"]["name"] for t in tools_for_level(3)}
+
+
+async def test_wait_caps_at_max():
+    coach, _c = _coach(4)
+    coach.cfg["coach"]["wait_max_s"] = 1
+    t0 = time.monotonic()
+    _spoke, res = await coach._dispatch({"type": "wait", "seconds": 999})
+    assert time.monotonic() - t0 < 10 and res.startswith("waited 1s")
+
+
+async def test_wait_streak_hint_and_reset():
+    coach, _c = _coach(4)
+    coach.cfg["coach"]["wait_max_s"] = 1
+    for _ in range(2):
+        await coach._dispatch({"type": "wait", "seconds": 1})
+    _s, res = await coach._dispatch({"type": "wait", "seconds": 1})
+    assert "consecutive waits" in res
+    # any non-wait action clears the streak
+    await coach._dispatch({"type": "exec_in_kali", "command": "id"})
+    _s, res = await coach._dispatch({"type": "wait", "seconds": 1})
+    assert "consecutive waits" not in res
+
+
+async def test_wait_budget_guard():
+    coach, c = _coach(4)
+    coach._turn_deadline = time.monotonic() + 15   # <20s margin left
+    spoke, res = await coach._dispatch({"type": "wait", "seconds": 60})
+    assert not spoke and "too little turn budget" in res and not c.chats
+
+
+async def test_worker_wait_uses_own_deadline():
+    from coach.loop import _Worker
+    coach, c = _coach(4)
+    coach.cfg["coach"]["wait_max_s"] = 2
+    # a nearly-exhausted PARENT turn deadline must not touch the worker's
+    coach._turn_deadline = time.monotonic() + 15
+    coach._workers["w1"] = _Worker(id="w1", task="enum",
+                                   started=time.monotonic())
+    spoke, res = await coach._dispatch(
+        {"type": "wait", "seconds": 2, "why": "cron"}, window="w1")
+    assert spoke and res.startswith("waited")
+    card = c.chats[-1]
+    assert card["meta"]["agent"] == "w1"
+    assert coach._wait_streak["w1"] == 1
+    assert coach._wait_streak.get("main", 0) == 0
