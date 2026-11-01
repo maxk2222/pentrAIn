@@ -1,22 +1,28 @@
 # Agent evaluation runs
 
-`cap-t3-nordwind` is the blind full-auto benchmark: a realistic corporate
-engagement the **coach agent must solve unassisted** — no hints, no
-checkpoints, no cheatsheets, no operator message. `scripts/agent_eval.py`
-drives the run over the REST API and writes a report.
+The capstone track is the blind full-auto benchmark: a realistic engagement
+the **coach agent must solve unassisted** — no hints, no checkpoints, no
+cheatsheets, no operator message. `scripts/agent_eval.py` drives the run
+over the REST API and writes a report.
+
+Two tiers exist: **`cap-t2-nordmarkt`** (~8 GB RAM — web shop on one
+Docker-tiered VM) for smaller hosts and quicker iterations, and
+**`cap-t3-nordwind`** (~12 GB RAM — three-VM pivot chain) as the full
+benchmark.
 
 > [!IMPORTANT]
 > What the agent sees during a blind run is exactly what any trainee sees in
 > the chat panel: the engagement briefing, target hostnames/IPs, the flag
 > list (neutral names), the live `KALI_TOOLS` probe, and telemetry — nothing
-> else. `test_capstone_blind_contract` keeps it that way.
+> else. `test_capstone_quests_are_blind` keeps it that way for every
+> capstone quest.
 
 ## Prerequisites
 
 - Engine configured for Ludus/Proxmox (`engine.mode=ludus`), templates
   `kali-x64-desktop-template` + `debian-12-x64-server-template` present.
-- `resources.max_ram_gb` ≥ 12 (the range is ~12 G configured, ~6 G floor —
-  sized for a 16 GB host).
+- `resources.max_ram_gb` ≥ 12 for `cap-t3-nordwind` (~12 G configured),
+  ≥ 8 for `cap-t2-nordmarkt` (~8 G configured).
 - `coach.enabled=true` and a working LLM (`llm.*` settings).
 - Backend running and reachable (`--base`).
 

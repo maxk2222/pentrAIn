@@ -133,7 +133,7 @@ the `pentrAIn{…}` box at the bottom of the Progress panel:
 |---|---|
 | **Reference sheet** | Live **network map** (VM names → range IPs), host inventory, flag counter, quest + track cheatsheets — spoiler-free reference material |
 | **Notes** | Per-session scratchpad (localStorage) — creds, IPs, dead ends; copy button included |
-| **Coach** | The full chat: messages, hints, command suggestions, action reports — see [coach.md](coach.md) |
+| **Coach** | The full chat: messages, hints, command suggestions, action reports. With **Sub** on, running workers appear as clickable chips above the input — each opens its own live feed instead of filling the main chat — see [coach.md](coach.md) |
 
 Panels are **resizable** (drag the edge, double-click to reset) and
 collapsible to edge strips; layout persists in `localStorage`.

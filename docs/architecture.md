@@ -174,6 +174,10 @@ flowchart LR
   model cannot select an action the gate would refuse.
 - L4 chains loop `tool_call → result → next call` bounded by
   `coach.takeover_chain_max` with `coach.takeover_pace_s` between chains.
+- Subagent workers (`w1`–`w3`) tag every relayed event with `agent`; the
+  backend keeps per-agent ephemeral slots so concurrent drafts and
+  activity ticks never clobber each other — the UI renders one feed per
+  agent. See [coach.md → Subagents](coach.md#subagents-l4-parallel-workers).
 
 ## Console proxy
 
@@ -267,7 +271,7 @@ erDiagram
 | `sessions` | Lifecycle state, `flag_seed`, `autonomy_level`, `subagents_enabled`, vmids, error |
 | `expected_flags` | HMAC-derived secrets for this session (rotated on soft reset) |
 | `flag_submissions` | Every attempt, correct or not |
-| `attempts` | Leaderboard rows: score, time, solve style |
+| `attempts` | Leaderboard rows: score, duration, solve style, persisted score `breakdown` |
 | `assist_uses` | Which aids (sheet/coach/hints/takeover) a solve used |
 | `coach_messages` / `coach_actions` | Chat history + executed tool calls |
 | `coach_session_state` | Coach memory per session (policy state) |

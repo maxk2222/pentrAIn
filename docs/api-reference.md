@@ -33,8 +33,8 @@ Key registry: [configuration.md](configuration.md).
 | GET | `/tracks` | Track cards: title, tier progress, quest counts |
 | GET | `/quests` | All quests with lock state + `lock_reason` |
 | GET | `/quests/{quest_id}` | Detail: briefing markdown, topology, flags (no values), hints w/ cost, scoring |
-| GET | `/quests/{quest_id}/leaderboard` | Ranked attempts |
-| GET | `/leaderboard` | Global leaderboard |
+| GET | `/quests/{quest_id}/leaderboard` | `{best, history}` — attempts ranked by score desc, duration asc; rows carry `score`, `duration_s`, `breakdown`, aid chips |
+| GET | `/leaderboard` | Global board: best score per quest + `duration_s`/`breakdown` of that run |
 | POST | `/packs/sync` | Re-import `content/packs` into the DB |
 
 ## Sessions
@@ -64,6 +64,7 @@ Key registry: [configuration.md](configuration.md).
 | GET | `/sessions/{id}/metrics/history` | Time series for the session |
 | GET | `/sessions/{id}/live` | Live aggregate for the stats overlay |
 | GET | `/sessions/{id}/telemetry` | Recent telemetry events |
+| GET | `/sessions/{id}/agent-metrics` | Agent behavior audit: tool histogram, denial reasons, grounding signals, time-to-first-flag, tokens |
 
 ### Session object (main fields)
 
@@ -136,8 +137,9 @@ Key registry: [configuration.md](configuration.md).
 | GET | `/coach/config` | LLM + coach runtime settings |
 | GET | `/coach/messages/{id}` | Last 50 chat messages |
 | POST | `/coach/message` | `{session_id, kind, content, meta}` → persisted coach message |
-| POST | `/coach/stream` | `{session_id, draft_id, content, reasoning, done, kind}` — ephemeral draft relay (sticky until `done`) |
-| POST | `/coach/activity` | `{session_id, active, text}` — "coach is doing X" indicator |
+| POST | `/coach/stream` | `{session_id, draft_id, content, reasoning, done, kind, agent?}` — ephemeral draft relay (sticky per agent+draft until `done`) |
+| POST | `/coach/activity` | `{session_id, active, text, agent?}` — "coach is doing X" indicator (per-agent slot) |
+| POST | `/coach/agents` | `{session_id, agents[]}` — worker roster snapshot relay (sticky; drives the UI's worker chips) |
 | POST | `/coach/suggest` | `{session_id, command, why}` → suggestion chip |
 | POST | `/coach/exec` | `{session_id, command, window?}` → run in Kali tmux pane |
 | POST | `/coach/type` | `{session_id, text, window?}` → type into busy pane |
@@ -152,7 +154,7 @@ Key registry: [configuration.md](configuration.md).
 
 | Path | Consumer | Events |
 |---|---|---|
-| `/ws/session/{id}` | Session page | `state`, `deploy_log`, `coach_message`, `coach_stream`, `coach_activity`, `flag`, `hint`, `telemetry`, `autonomy`, `subagents`, `internet` |
+| `/ws/session/{id}` | Session page | `state`, `deploy_log`, `flag`, `hint`, `solved`, `checkpoint`, `autonomy`, `subagents`, `telemetry`, `coach_message`, `coach_action`, `coach_stream`, `coach_activity`, `coach_agents` |
 | `/ws/coach` | Coach service | All session events + chat + telemetry — the event feed the policy gate consumes |
 | `/api/console/{id}` | Session console | Bidirectional VNC frames (proxied noVNC) |
 | `/api/console/vm/{vmid}` | Admin console | Same pipe for a standalone VM (template builder) |

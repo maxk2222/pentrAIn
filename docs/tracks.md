@@ -1,6 +1,6 @@
 # Tracks & quests
 
-**56 quests across 9 tracks**, organized in tiers 1–3. Quests ship a
+**57 quests across 9 tracks**, organized in tiers 1–3. Quests ship a
 briefing, coach checkpoints, staged hints and a `defense.md` (what broke, how
 to detect it, how to fix it) — capstone quests are the exception: they go in
 blind.
@@ -174,21 +174,24 @@ regeneration: [ops.md — wireless labs](ops.md#wireless-hwsim-labs).
 
 ```mermaid
 flowchart LR
-    B["base score<br/>scoring.base"] --> S
-    TB["+ time bonus<br/>(under par_s, decays to 0 at 2×par)"] --> S
-    F["+ flag points"] --> S
+    F["+ flag points<br/>Σ(flag.points)"] --> S
+    TB["+ time bonus<br/>decays linearly: full at t=0,<br/>half at par_s, 0 at 2×par"] --> S
     H["− hint costs"] --> S
-    T["− takeover_cost<br/>per L4 coach action"] --> S
-    S["final score → quest leaderboard"]
+    T["− takeover_cost<br/>if the coach executed anything"] --> S
+    S["final score → quest leaderboard<br/>+ persisted breakdown + duration"]
 ```
 
-- **Base + flag points** — every flag carries `points`, the quest carries
-  `scoring.base`.
-- **Time bonus** — finishing under `par_s` adds up to `time_bonus_max`,
-  decaying linearly to zero at 2×par.
+- **Flag points** — every flag carries `points`; their sum is the score's
+  base. (`scoring.base` in quest.yaml is a display reference, not added.)
+- **Time bonus** — `time_bonus_max` scaled by `1 − t/(2·par_s)`: full
+  only on an instant clear, half at par, zero at 2×par.
 - **Hint costs** — shown up front per hint (−25, −50, …).
-- **Takeover cost** — every coach-executed action at autonomy 4 costs
-  `takeover_cost` points.
+- **Takeover cost** — a flat `takeover_cost` once the coach executes at
+  least one command (autonomy 4), not per action.
+- **Breakdown** — every attempt persists its components (`flags`,
+  `time_bonus`, `hint_cost`, `takeover_penalty`, `par_s`); hover a score
+  on any leaderboard to see them, and the global board shows the best
+  run's duration.
 - **Solve style** — the leaderboard shows per-attempt aid chips:
   `sheet`, `panel`, `coach`, `tips`, `hint`, `takeover`. Solving with no
   assistance earns the `solo` badge.
