@@ -61,7 +61,6 @@
          read only = yes
          guest ok = no
          valid users = svc-backup
-    validate: "testparm -s %s >/dev/null"
   notify: restart smbd
 
 - name: svc-backup user (password leaked in the public runbook)

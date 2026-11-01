@@ -23,6 +23,8 @@
       - proxychains4
       - sshuttle
       - python3-pexpect
+      - mariadb-client   # mysql client for db-enum quests
+      - gobuster
     state: present
   when: ansible_os_family == "Debian"
   failed_when: false   # package names drift; never brick the deploy for them
