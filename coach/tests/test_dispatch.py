@@ -237,6 +237,10 @@ async def test_update_plan_stores_normalizes_and_reports():
     card = next(k for k in c.chats if k["kind"] == "action_report"
                 and "Plan" in k["content"])
     assert "2 open / 3 steps" in card["content"]
+    # the actual items are visible in the feed, not just the count
+    assert "~~loot creds from tarball~~" in card["content"]   # done → struck
+    assert "**mysql LOAD_FILE via shop_ro** ←" in card["content"]  # doing
+    assert "- read /root flags" in card["content"]
 
 
 async def test_update_plan_all_levels_and_atomic_replace():
