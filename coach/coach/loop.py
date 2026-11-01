@@ -942,7 +942,7 @@ class SessionCoach:
         r"^pentrAIn\{(?:\.{2,}|x{3,}|example|flag|your[-_ ]?flag.*|"
         r"flag[-_ ]?here|<.*>)\}$", re.IGNORECASE)
 
-    async def _scan_flags(self, out: str) -> str:
+    async def _scan_flags(self, out: str, cmd: str = "") -> str:
         """flag-on-sight: a pentrAIn{...} in tool output IS the flag —
         per-session values make guessing impossible, so the only correct
         move is submit_flag NOW. First sight gets a directive; the SECOND
@@ -953,8 +953,25 @@ class SessionCoach:
         note = ""
         # IPs observed in output become allowed targets (pivot-safe) — kept
         # here as well as in observe_output so a bare _scan_flags call (tests,
-        # legacy paths) still relaxes the foreign-ip guard correctly
-        self.facts.ips_seen.update(self._IP_RE.findall(out or ""))
+        # legacy paths) still relaxes the foreign-ip guard correctly. IPs
+        # already present in the command are intent, not discovery: echoing
+        # them back in an error must not whitelist a hallucinated target.
+        cmd_ips = set(self._IP_RE.findall(cmd or ""))
+        self.facts.ips_seen.update(
+            ip for ip in self._IP_RE.findall(out or "") if ip not in cmd_ips)
+        # discovered subnets (routing table, ifconfig on a compromised host)
+        # authorize the whole net — the multi-segment pivot case
+        for cidr in self._CIDR_RE.findall(out or ""):
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                continue
+            if (net.prefixlen < 8 or net.is_loopback or net.is_multicast
+                    or not net.is_private):
+                continue
+            if all(net not in a for a in self._allowed_nets) \
+                    and net not in self._allowed_nets:
+                self._allowed_nets.append(net)
         for fv in set(FLAG_RE.findall(out or "")):
             if self._FLAG_PLACEHOLDER_RE.match(fv):
                 continue
@@ -992,6 +1009,7 @@ class SessionCoach:
         return note
 
     _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+    _CIDR_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b")
 
     def _foreign_ip(self, cmd: str) -> str | None:
         """Private/link-local literal that's neither inside a target /24 nor
@@ -1248,7 +1266,7 @@ class SessionCoach:
                                        f"{n} times — the file exists, more "
                                        f"rewrites do not advance the quest. "
                                        f"RUN it (e.g. python3 -u {path}).")
-                    result += await self._scan_flags(out)
+                    result += await self._scan_flags(out, cmd)
                     # pane-busy escalation: consecutive execs that never
                     # finished (bounced off a held pane or still running)
                     # mean the pane is wedged — command variants won't fix
@@ -1312,7 +1330,7 @@ class SessionCoach:
                 result = (percept.normalize(f"<type> {text_in}", out, None).reply
                           or "input sent")
                 self.facts.observe_output(f"<type> {text_in}", out, None)
-                result += await self._scan_flags(out)
+                result += await self._scan_flags(out, f"<type> {text_in}")
                 # keep the interactive fast-path alive while the pane is
                 # still held (inside an ssh/ftp/vim session remote commands
                 # must ALL go through type_in_pane — at LLM cadence, not

@@ -9,12 +9,25 @@ curl -s http://<ip>/robots.txt
 whatweb http://<ip>/ ; nikto -h http://<ip>/
 ```
 
+## Session auth via curl
+
+```bash
+# ONE jar for the whole session — -c writes, -b sends, reuse it everywhere
+curl -s -c /tmp/jar -b /tmp/jar 'http://<ip>/login.php' \
+     -d 'username=admin&password=password&Login=Login'
+curl -s -b /tmp/jar -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+     'http://<ip>/index.php'      # 302→login = failed, 200 = session live
+```
+
 ## The classics
 
 - **SQLi**: `'`, `' OR 1=1-- -`, `UNION SELECT` column counting, then
   `sqlmap -u 'http://<ip>/item?id=1' --batch --dump`
 - **XSS**: `<script>alert(1)</script>` → stored vs reflected vs DOM
-- **LFI**: `../../../../etc/passwd`, `php://filter/convert.base64-encode/resource=index.php`
+- **LFI**: sanity `../../../../etc/passwd` → empty page means MORE `../`
+  (include() resolves relative to the vuln script's dir) or absolute
+  `?page=/path/file` → `php://filter/convert.base64-encode/resource=index.php`
+  reads PHP source
 - **SSRF**: make the server fetch — `?url=http://127.0.0.1/`, `file:///etc/passwd`,
   cloud metadata `169.254.169.254`
 - **IDOR/BOLA**: swap ids in requests; object-level authz is the common gap

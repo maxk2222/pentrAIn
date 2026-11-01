@@ -168,7 +168,8 @@ class FactsDB:
         self._seen_cmds.add(cmd)
         ips = IP_RE.findall(cmd)
         for ip in ips:
-            self.ips_seen.add(ip)
+            # bookkeeping only — a command-line IP is intent, not discovery;
+            # whitelisting it would let a hallucinated IP self-authorize
             self.add_host(ip)
         tgt = ips[-1] if ips else None
         if tgt and RECON_RE.search(cmd):

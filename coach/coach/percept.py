@@ -129,8 +129,13 @@ def parse_output(cmd: str, out: str) -> dict:
     d: dict = {"ips": set(), "names": {}, "ports": {}, "creds": [],
                "findings": []}
     try:
+        # an IP in the command line is intent, not discovery — its own error
+        # output ("Failed to connect to 10.42.0.5") must not retroactively
+        # whitelist it for the foreign-ip guard (self-seeding bypass)
+        cmd_ips = set(_IP_RE.findall(cmd or ""))
         for ip in _IP_RE.findall(out or ""):
-            d["ips"].add(ip)
+            if ip not in cmd_ips:
+                d["ips"].add(ip)
         parser = _PARSERS.get(_tool_token(cmd))
         if parser:
             parser(out or "", d)

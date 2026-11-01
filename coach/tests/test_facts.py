@@ -31,7 +31,9 @@ def test_observe_output_nmap_ports_and_names():
     assert h.names == {"web01"}
     assert h.ports[22].startswith("OpenSSH") and h.ports[80].startswith("nginx")
     assert 3306 not in h.ports                     # closed ports aren't facts
-    assert "10.1.10.21" in f.ips_seen
+    # the scanned IP is intent (in the command), not discovery — output
+    # seeding only whitelists IPs that appear WITHOUT being in the command
+    assert "10.1.10.21" not in f.ips_seen
 
 
 def test_observe_output_hydra_cred_valid_on_host():

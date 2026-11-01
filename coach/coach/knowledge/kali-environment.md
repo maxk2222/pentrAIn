@@ -51,3 +51,21 @@ the live probe — anything absent there is NOT installed, don't retry it):
   the cron run produces it — minutely crons need up to ~70s.
 - Long tasks: bound every command (`--max-time 30`, `-T4 --max-retries 2`,
   `-w 5`); an unbounded curl/nc wedges the pane and costs a C-c turn.
+
+## Web app work
+
+- Session state lives in ONE cookie jar: `curl -c /tmp/jar -b /tmp/jar`
+  on EVERY request — a fresh `-c` file per attempt discards the login you
+  just did. Verify the login BEFORE exploiting: fetch a protected page
+  (`/index.php`), a 302 back to login means the POST failed.
+- LFI methodology — in this order, never skip the sanity check:
+  1. `?page=../../../../etc/passwd` proves traversal works at all
+  2. empty page / same page back → ADD more `../` (include() resolves
+     relative to the vulnerable script's dir — an endpoint under
+     /vulnerabilities/x/ needs 4-6 levels to reach filesystem root)
+  3. absolute `?page=/absolute/path/file` skips the depth game entirely
+  4. `php://filter/convert.base64-encode/resource=<file>` when include()
+     executes/parses the file instead of printing it
+- Retrying the SAME payload with cosmetic changes (new cookie file,
+  added -L, same ../ count) is a loop, not iteration — change exactly
+  ONE variable per attempt and keep the rest fixed.

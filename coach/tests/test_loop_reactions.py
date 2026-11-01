@@ -1107,6 +1107,41 @@ async def test_foreign_ip_guard():
     await coach.stop()
 
 
+async def test_foreign_ip_no_self_seeding():
+    """A hallucinated IP must never whitelist itself: its own error output
+    ('Failed to connect to 10.42.0.5') echoes the command line — intent, not
+    discovery. Only IPs appearing in output but NOT in the command are real
+    discoveries (session 39 regression)."""
+    c = FakeClient()
+    c.ctx["quest"]["targets"] = [{"name": "dvwa01", "ip": "10.1.10.21"}]
+    c.ctx["session"]["autonomy_level"] = 4
+    coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    coach.llm = FakeLlm()
+    await coach.start()
+    # simulate: the hallucinated command ran once (e.g. before targets
+    # resolved) and its error output echoed the bad IP back
+    coach.facts.observe_output(
+        "curl -s http://10.42.0.5/dvwa/",
+        "curl: (7) Failed to connect to 10.42.0.5 port 80: No route to host",
+        7)
+    assert "10.42.0.5" not in coach.facts.ips_seen
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "curl http://10.42.0.5/dvwa/"})
+    assert r.startswith("denied:")
+    # but a genuinely discovered IP/subnet (in output only, never in a
+    # command) still whitelists — the pivot case the guard exists for
+    coach.facts.observe_output(
+        "ssh edge 'ip route'",
+        "default via 10.2.0.1 dev eth1\n10.2.0.0/24 dev eth1", 0)
+    await coach._scan_flags(
+        "default via 10.2.0.1 dev eth1\n10.2.0.0/24 dev eth1",
+        "ssh edge 'ip route'")
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "nmap 10.2.0.5"})
+    assert not r.startswith("denied:")
+    await coach.stop()
+
+
 async def test_lan_scope_is_enforced_by_ip_guard():
     """Home-lab mode: the authorized CIDR seeds allowed_nets — in-scope IPs
     pass, out-of-scope PRIVATE ips are a hard deny (real ROE for L4, not
