@@ -203,16 +203,19 @@ export function TerminalView({ sessionId, chan, visible = true, onStatus }: {
         className="pointer-events-none absolute inset-0 m-auto w-56 select-none opacity-[0.06]" />
       <div ref={hostRef} className="pentrain-term h-full w-full px-1.5 py-1" />
 
-      {/* floating paste button — needed when the browser blocks Cmd/V paste */}
-      <button
-        title="Paste from clipboard (or Cmd/Ctrl+V)"
-        onClick={() => navigator.clipboard?.readText()
-          .then((t) => { if (t) termRef.current?.paste(t); })
-          .catch(() => {})}
-        className="absolute right-2 top-2 rounded border border-border/60 bg-surface/70 p-1
-          text-muted opacity-40 transition hover:opacity-100">
-        <ClipboardPaste className="h-3.5 w-3.5" />
-      </button>
+      {/* floating paste button — only where the clipboard API exists (secure
+          contexts); elsewhere Ctrl+V via xterm's own textarea still works */}
+      {!!navigator.clipboard?.readText && (
+        <button
+          title="Paste from clipboard (or Cmd/Ctrl+V)"
+          onClick={() => navigator.clipboard.readText()
+            .then((t) => { if (t) termRef.current?.paste(t); })
+            .catch(() => {})}
+          className="absolute right-2 top-2 rounded border border-border/60 bg-surface/70 p-1
+            text-muted opacity-40 transition hover:opacity-100">
+          <ClipboardPaste className="h-3.5 w-3.5" />
+        </button>
+      )}
 
       {state !== "live" && (
         <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2

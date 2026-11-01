@@ -294,8 +294,18 @@ export function SessionPage() {
     });
   }
 
+  function newChanId(): string {
+    // crypto.randomUUID is secure-context-only — over plain http://LAN it
+    // doesn't exist and the + button dies silently. getRandomValues works
+    // everywhere; chan ids are UI handles (server only checks the format).
+    const b = new Uint8Array(8);
+    if (crypto.getRandomValues) crypto.getRandomValues(b);
+    else for (let i = 0; i < b.length; i++) b[i] = Math.random() * 256;
+    return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  }
+
   function addTerm() {
-    const chan = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const chan = newChanId();
     updateTerms((p) => {
       p.tabs.push({ chan, title: `Term ${p.tabs.length + 1}`, docked: false });
       p.active = chan;

@@ -39,10 +39,21 @@ export function NotesPanel({ sessionId, open, onToggle }: {
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // non-secure context (http://LAN) — execCommand fallback
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;opacity:0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch { /* best effort */ }
+        ta.remove();
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch { /* clipboard unavailable (non-secure context) */ }
+    } catch { /* clipboard unavailable */ }
   }
 
   return (
