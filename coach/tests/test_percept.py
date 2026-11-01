@@ -122,3 +122,16 @@ def test_normalize_flags_silent_login_redirect():
     # GETs and non-login endpoints never trigger
     p4 = normalize("curl -s 'http://t/index.php'", "", 0)
     assert "auth unverified" not in p4.reply
+
+
+def test_hidden_form_inputs_become_findings():
+    """HTML hidden fields (user_token/csrf) land in findings WITH the value —
+    the token stops being a recipe step and becomes a usable fact."""
+    from coach.percept import parse_output
+    html = ("<form action='login.php'><input type='hidden' name='user_token' "
+            "value='897d1126f1351f7abb9c6e9b183b4f4b' /></form>")
+    d = parse_output("curl -s http://t/login.php", html)
+    assert "form:user_token=897d1126f1351f7abb9c6e9b183b4f4b" in d["findings"]
+    # name-first ordering also parses
+    d2 = parse_output("curl x", "<input name='csrf' value='abc' type=\"hidden\">")
+    assert any(f.startswith("form:csrf=") for f in d2["findings"])

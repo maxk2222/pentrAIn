@@ -101,7 +101,21 @@ def _p_generic(out: str, d: dict) -> None:
     for m in _CRED_PAIR.finditer(out):
         d["creds"].append({"user": m.group(1), "secret": m.group(2),
                            "host": None})
+    # hidden form inputs (user_token/csrf/_token) — the auth blocker the
+    # model kept missing: the token lands in findings with its VALUE, so
+    # including it in the POST takes no reasoning step at all
+    for tag in _HIDDEN_TAG.finditer(out):
+        nm = _ATTR_NAME.search(tag.group(0))
+        vm = _ATTR_VALUE.search(tag.group(0))
+        if nm and len(d["findings"]) < 8:
+            d["findings"].append(
+                f"form:{nm.group(1)}={(vm.group(1) if vm else '')[:64]}")
 
+
+_HIDDEN_TAG = re.compile(
+    r"<input\b[^>]*type=['\"]hidden['\"][^>]*>", re.I)
+_ATTR_NAME = re.compile(r"name=['\"]([\w.\[\]-]+)['\"]", re.I)
+_ATTR_VALUE = re.compile(r"value=['\"]([^'\"]*)['\"]", re.I)
 
 _PARSERS = {
     "nmap": _p_nmap,
