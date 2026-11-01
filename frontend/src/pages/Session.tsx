@@ -171,7 +171,7 @@ export function SessionPage() {
           const ev = JSON.parse(e.data) as WsEvent;
           setEvents((prev) => [...prev.slice(-299), ev]);
           if (ev.type === "state" || ev.type === "autonomy"
-              || ev.type === "subagents") {
+              || ev.type === "subagents" || ev.type === "coach_enabled") {
             qc.invalidateQueries({ queryKey: ["session", sessionId] });
             qc.invalidateQueries({ queryKey: ["session-flags", sessionId] });
             useAppStore.getState().loadActiveSession();
@@ -351,6 +351,12 @@ export function SessionPage() {
 
   function setSubagents(enabled: boolean) {
     api.post(`/api/sessions/${sessionId}/subagents`, { enabled })
+      .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
+      .catch(() => {});
+  }
+
+  function setCoach(enabled: boolean) {
+    api.post(`/api/sessions/${sessionId}/coach`, { enabled })
       .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
       .catch(() => {});
   }
@@ -632,7 +638,9 @@ export function SessionPage() {
                 autonomy={session?.autonomy_level}
                 onAutonomy={setAutonomy}
                 subagents={session?.subagents_enabled}
-                onSubagents={setSubagents} />
+                onSubagents={setSubagents}
+                coachEnabled={session?.coach_enabled}
+                onCoachToggle={setCoach} />
             </div>
           </>
         ) : (

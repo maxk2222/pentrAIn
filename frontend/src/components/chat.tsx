@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Bot, Lightbulb, Loader2, Play, Radio, Terminal, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Lightbulb, Loader2, Pause, Play, Radio, Terminal, User, X } from "lucide-react";
 import { api, type ChatMessage, type WsEvent } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { MarkdownView } from "@/components/markdown";
@@ -145,13 +145,33 @@ export function SubagentsToggle({ enabled, onToggle }: {
   );
 }
 
+export function CoachToggle({ enabled, onToggle }: {
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <Button size="icon" variant="ghost"
+      title={enabled
+        ? "Pause Elliot — he stops acting and thinking entirely; the range stays up, resume anytime"
+        : "Resume Elliot — picks up where he paused"}
+      aria-label={enabled ? "Pause Elliot" : "Resume Elliot"}
+      onClick={() => onToggle(!enabled)}
+      className={cn(!enabled && "text-warning")}>
+      {enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+    </Button>
+  );
+}
+
 export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
-                            subagents, onSubagents }: {
+                            subagents, onSubagents,
+                            coachEnabled, onCoachToggle }: {
   sessionId: number; events: WsEvent[];
   autonomy?: number;
   onAutonomy?: (level: number) => void;
   subagents?: boolean;
   onSubagents?: (enabled: boolean) => void;
+  coachEnabled?: boolean;
+  onCoachToggle?: (enabled: boolean) => void;
 }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
@@ -468,7 +488,11 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-sm font-medium">
-        <span>Elliot <span className="ml-1 text-xs font-normal text-muted">samsepi0l · adaptive hints</span></span>
+        <span>Elliot <span className="ml-1 text-xs font-normal text-muted">samsepi0l · adaptive hints</span>
+          {coachEnabled === false && (
+            <span className="ml-1.5 rounded border border-warning/40 bg-warning/10 px-1 py-0.5 text-[10px] font-normal text-warning">paused</span>
+          )}
+        </span>
         <span className="flex items-center gap-2">
           {autonomy !== undefined && onAutonomy && (
             <AutonomyToggle autonomy={autonomy} onAutonomy={onAutonomy} />
@@ -591,6 +615,9 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
             className="max-h-[120px] min-w-0 flex-1 resize-none rounded-md border border-border bg-surface-2 px-3 py-2 text-sm outline-none placeholder:text-muted focus:border-primary/60" />
           {text.length > 7200 && (
             <span className="pb-1.5 text-[10px] text-muted">{text.length}/8000</span>
+          )}
+          {coachEnabled !== undefined && onCoachToggle && (
+            <CoachToggle enabled={coachEnabled} onToggle={onCoachToggle} />
           )}
           <Button size="icon" aria-label="Send message"
             onClick={() => void send()} disabled={!text.trim()}>

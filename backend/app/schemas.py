@@ -89,6 +89,10 @@ class SubagentsIn(BaseModel):
     enabled: bool
 
 
+class CoachEnabledIn(BaseModel):
+    enabled: bool
+
+
 class SessionStartIn(BaseModel):
     quest_id: str
     autonomy_level: int | None = Field(default=None, ge=1, le=4)

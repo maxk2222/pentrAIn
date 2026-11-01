@@ -765,6 +765,28 @@ async def set_subagents(db: AsyncSession, session_id: int,
     return session
 
 
+async def set_coach_enabled(db: AsyncSession, session_id: int,
+                            enabled: bool) -> Session:
+    """Per-session pause/resume for the whole coach — the loop reads
+    coach_enabled from session_context every tick and idles completely
+    (no thinking either, unlike an autonomy drop). Range and kali stay
+    up; resume picks up where it paused."""
+    session = await db.get(Session, session_id)
+    if not session:
+        raise SessionError("no session")
+    if session.state in (SessionState.SOLVED.value, SessionState.ABORTED.value,
+                         SessionState.FAILED.value,
+                         SessionState.ABORTING.value):
+        raise SessionError(f"session is {session.state} — coach is locked")
+    session.coach_enabled = enabled
+    await db.commit()
+    await coach_bridge.post_message(
+        db, session_id, "system", "chat",
+        "Coach resumed." if enabled else "Coach paused — range stays up.")
+    await _broadcast(session_id, "coach_enabled", {"enabled": enabled})
+    return session
+
+
 async def abort(db: AsyncSession, session_id: int) -> Session:
     session = await db.get(Session, session_id)
     if not session:

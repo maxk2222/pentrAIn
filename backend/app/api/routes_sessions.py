@@ -8,6 +8,7 @@ from ..models.domain import AssistUse, Flag, FlagSubmission, Quest, Session, Tel
 from ..schemas import (
     AssistIn,
     AutonomyIn,
+    CoachEnabledIn,
     ConfirmActionIn,
     FlagCheckIn,
     FlagOut,
@@ -305,6 +306,18 @@ async def set_session_autonomy(session_id: int, body: AutonomyIn,
     """Live autonomy switch — same write the chat /autonomy command uses."""
     try:
         return _out(await sessions_svc.set_autonomy(db, session_id, body.level))
+    except sessions_svc.SessionError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/sessions/{session_id}/coach", response_model=SessionOut)
+async def set_session_coach(session_id: int, body: CoachEnabledIn,
+                            db: AsyncSession = Depends(get_db)):
+    """Live pause/resume for the coach on THIS session only — the global
+    coach.enabled setting stays untouched; the loop idles fully."""
+    try:
+        return _out(await sessions_svc.set_coach_enabled(db, session_id,
+                                                         body.enabled))
     except sessions_svc.SessionError as e:
         raise HTTPException(409, str(e)) from e
 

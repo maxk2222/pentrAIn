@@ -800,3 +800,31 @@ async def test_session_context_returns_plan_and_coach_notes(db_with_packs):
     assert ctx["coach_notes"] == ["pivot via deploy@shop01",
                                   "[w1] api needs bearer"]
     await _abort_done(db, s.id)
+
+
+async def test_set_coach_enabled_pauses_and_resumes(db_with_packs):
+    """Per-session pause: coach_enabled flips in DB (the coach reads it
+    from session_context each tick), posts a system note, and locks in
+    terminal states."""
+    from app.models.domain import CoachMessage
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    assert s.coach_enabled
+    s = await sessions_svc.set_coach_enabled(db, s.id, False)
+    assert not s.coach_enabled
+    ctx = await coach_bridge.session_context(db, s.id)
+    assert ctx["session"]["coach_enabled"] is False   # coach sees it
+    msg = (await db.execute(
+        select(CoachMessage).where(CoachMessage.session_id == s.id)
+        .order_by(CoachMessage.id.desc()).limit(1))).scalar_one()
+    assert "paused" in msg.content
+    s = await sessions_svc.set_coach_enabled(db, s.id, True)
+    assert s.coach_enabled
+    done = Session(quest_id="linux-t1-first-foothold", state="solved")
+    db.add(done)
+    await db.commit()
+    with pytest.raises(sessions_svc.SessionError, match="locked"):
+        await sessions_svc.set_coach_enabled(db, done.id, False)
+    await _abort_done(db, s.id)
