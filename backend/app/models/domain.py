@@ -31,6 +31,7 @@ class SessionState(str, enum.Enum):
     ABORTED = "aborted"
     FAILED = "failed"
     RESETTING = "resetting"
+    ABORTING = "aborting"
 
 
 class FlagKind(str, enum.Enum):

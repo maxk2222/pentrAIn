@@ -13,6 +13,13 @@ from app.services import sessions as sessions_svc
 from app.services import settings as settings_svc
 
 
+async def _abort_done(db, session_id: int) -> Session:
+    """abort() is async now (range destroy runs as a background task) —
+    return only once the session has actually reached 'aborted'."""
+    s = await sessions_svc.abort(db, session_id)
+    return await _wait_state(session_id, "aborted")
+
+
 async def _wait_state(session_id: int, want: str, timeout_s: float = 15.0) -> Session:
     """Poll for a state — db.get alone would return the stale identity-map copy."""
     async with sessions_svc.session_factory()() as db:
@@ -134,7 +141,7 @@ async def test_solved_progression_survives_abort(db_with_packs):
     db.add(Attempt(quest_id="linux-t1-suid-hunt", session_id=s.id, score=100))
     await db.commit()
 
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
     t2 = await db.get(Quest, "linux-t2-privesc-chain")
     ok, _ = await sessions_svc.check_unlock(db, t2)
     assert ok
@@ -162,11 +169,11 @@ async def test_one_active_session_only(db_with_packs):
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     with pytest.raises(sessions_svc.SessionError, match="active"):
         await sessions_svc.create_session(db, "linux-t1-first-foothold")
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
     # aborted → next session allowed
     s2 = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     await _wait_state(s2.id, "ready")
-    await sessions_svc.abort(db, s2.id)
+    await _abort_done(db, s2.id)
 
 
 # every quest in the library must survive a mock deploy —
@@ -187,7 +194,7 @@ async def test_new_quest_deploys_on_mock(db_with_packs, quest_id):
     await _solve_prereqs(db, quest)
     s = await sessions_svc.create_session(db, quest_id)
     await _wait_state(s.id, "ready")
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_full_session_lifecycle_mock(db_with_packs):
@@ -231,7 +238,7 @@ async def test_full_session_lifecycle_mock(db_with_packs):
     assert attempt.flags_found == 2
 
     # abort destroys
-    s = await sessions_svc.abort(db, s.id)
+    s = await _abort_done(db, s.id)
     assert s.state == "aborted"
 
 
@@ -248,7 +255,7 @@ async def test_command_flag_on_kali_uses_kali_vmid(db_with_packs):
                 command_spec={"vm": "kali", "cmd": "id", "expect": "mock"})
     assert await flags_svc.check_command_flag(db, engine, s, flag)
     assert engine.pve.exec_log[-1][0] == s.kali_vmid
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_file_flag_on_kali_injects_to_kali_vmid(db_with_packs):
@@ -266,7 +273,7 @@ async def test_file_flag_on_kali_injects_to_kali_vmid(db_with_packs):
     logs = await flags_svc.inject_flags(db, engine, s, [flag])
     assert (s.kali_vmid, "/root/kali-flag.txt") in engine.pve.files
     assert any("injected" in line for line in logs)
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_check_flag_rejects_noncommand_flag(db_with_packs):
@@ -277,7 +284,7 @@ async def test_check_flag_rejects_noncommand_flag(db_with_packs):
     await sessions_svc.activate(db, s.id)
     with pytest.raises(sessions_svc.SessionError, match="not a command flag"):
         await sessions_svc.check_flag(db, s.id, "user-flag")
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_soft_reset_regenerates_secrets(db_with_packs):
@@ -296,7 +303,7 @@ async def test_soft_reset_regenerates_secrets(db_with_packs):
         select(flags_svc.ExpectedFlag).where(
             flags_svc.ExpectedFlag.session_id == s.id))).scalars().all()}
     assert secrets["user-flag"] == flags_svc.derive_flag_secret(s.flag_seed, "user-flag")
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_compile_topology_ludus_format(db_with_packs):
@@ -487,7 +494,7 @@ async def test_set_autonomy_persists_and_announces(db_with_packs):
         select(CoachMessage).where(CoachMessage.session_id == s.id)
         .order_by(CoachMessage.id.desc()).limit(1))).scalar_one()
     assert msg.role == "system" and "Autonomous" in msg.content
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_set_autonomy_rejects_terminal_and_bad_levels(db_with_packs):
@@ -542,7 +549,7 @@ async def test_chat_slash_autonomy_paths(db_with_packs):
         select(CoachMessage).where(
             CoachMessage.session_id == s.id, CoachMessage.role == "user"))).all()
     assert not user_msgs
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 # ---------- home-lab lan-assessment mode ----------
@@ -557,7 +564,7 @@ async def test_wan_quest_auto_uplinks_and_stores_lease(db_with_packs):
     assert s.kali_internet is True
     assert hasattr(s, "kali_wan_ip")          # column exists; mock leaves None
     assert set(s.target_vmids) == {"kali"}     # kali-only range
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_compile_topology_wan_and_kali_roles():
@@ -603,12 +610,12 @@ async def test_session_context_reports_scope(db_with_packs):
 
     # a normal quest never gets a scope
     s2 = await db.get(Session, s.id)
-    await sessions_svc.abort(db, s2.id)
+    await _abort_done(db, s2.id)
     s2 = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     s2 = await _wait_state(s2.id, "ready")
     ctx = await coach_bridge.session_context(db, s2.id)
     assert ctx["quest"]["scope"] is None
-    await sessions_svc.abort(db, s2.id)
+    await _abort_done(db, s2.id)
 
 
 async def test_set_subagents_and_slash_paths(db_with_packs):
@@ -639,7 +646,7 @@ async def test_set_subagents_and_slash_paths(db_with_packs):
     await db.commit()
     with pytest.raises(sessions_svc.SessionError, match="locked"):
         await sessions_svc.set_subagents(db, s.id, True)
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_session_context_carries_reference_and_tools(db_with_packs):
@@ -656,7 +663,7 @@ async def test_session_context_carries_reference_and_tools(db_with_packs):
     assert "nmap" in ctx["quest"]["track_cheatsheet"]      # linux cheatsheet
     assert ctx["quest"]["cheatsheet"]                    # quest-local card
     assert ctx["session_tools"] == "nmap\nsmbclient\nmysql"
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_agent_metrics_aggregates_audit_trail(db_with_packs):
@@ -708,7 +715,7 @@ async def test_agent_metrics_aggregates_audit_trail(db_with_packs):
     assert m["flags"]["time_to_first_flag_s"] is not None
     assert m["llm"]["total_tokens"] == 15
     assert m["exec"] == {"ok": 2, "error": 0}
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)
 
 
 async def test_session_context_returns_coach_outputs(db_with_packs):
@@ -731,4 +738,4 @@ async def test_session_context_returns_coach_outputs(db_with_packs):
     nmap_row = next(o for o in outs if o["command"] == "nmap -sV t")
     assert nmap_row["out"] == "22/tcp open ssh"
     assert nmap_row["exitcode"] == 0
-    await sessions_svc.abort(db, s.id)
+    await _abort_done(db, s.id)

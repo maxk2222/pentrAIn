@@ -89,7 +89,7 @@ export interface TopologyVm {
 
 export type SessionState =
   | "queued" | "deploying" | "ready" | "active" | "resetting"
-  | "solved" | "aborted" | "failed";
+  | "solved" | "aborting" | "aborted" | "failed";
 
 export interface Session {
   id: number; quest_id: string; state: SessionState; kali_vmid: number | null;

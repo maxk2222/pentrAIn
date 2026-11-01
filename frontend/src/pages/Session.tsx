@@ -501,7 +501,7 @@ export function SessionPage() {
               </>
             ) : isLoading ? (
               <div className="grid h-full place-items-center text-sm text-muted">Loading…</div>
-            ) : state === "deploying" || state === "queued" || state === "resetting" ? (
+            ) : state === "deploying" || state === "queued" || state === "resetting" || state === "aborting" ? (
               <DeployLog lines={logLines} state={state} />
             ) : (
               <div className="grid h-full place-items-center text-sm text-muted">

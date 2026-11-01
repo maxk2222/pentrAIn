@@ -501,7 +501,8 @@ async def use_hint(db: AsyncSession, session_id: int, hint_id: str) -> dict:
 
 async def reset(db: AsyncSession, session_id: int, *, hard: bool = False) -> Session:
     session = await db.get(Session, session_id)
-    if not session or session.state in (SessionState.ABORTED.value, SessionState.FAILED.value):
+    if not session or session.state in (SessionState.ABORTED.value, SessionState.FAILED.value,
+                                        SessionState.ABORTING.value):
         raise SessionError("session not resettable")
     await _set_state(db, session, SessionState.RESETTING)
     _tasks[session.id] = asyncio.create_task(_reset(session.id, hard))
@@ -654,7 +655,8 @@ async def set_autonomy(db: AsyncSession, session_id: int, level: int) -> Session
     if not session:
         raise SessionError("no session")
     if session.state in (SessionState.SOLVED.value, SessionState.ABORTED.value,
-                         SessionState.FAILED.value):
+                         SessionState.FAILED.value,
+                         SessionState.ABORTING.value):
         raise SessionError(f"session is {session.state} — autonomy is locked")
     if not 1 <= level <= 4:
         raise SessionError("autonomy level must be 1-4")
@@ -675,7 +677,8 @@ async def set_subagents(db: AsyncSession, session_id: int,
     if not session:
         raise SessionError("no session")
     if session.state in (SessionState.SOLVED.value, SessionState.ABORTED.value,
-                         SessionState.FAILED.value):
+                         SessionState.FAILED.value,
+                         SessionState.ABORTING.value):
         raise SessionError(f"session is {session.state} — subagents locked")
     session.subagents_enabled = enabled
     await db.commit()
@@ -692,17 +695,34 @@ async def abort(db: AsyncSession, session_id: int) -> Session:
     session = await db.get(Session, session_id)
     if not session:
         raise SessionError("no session")
+    if session.state == SessionState.ABORTING.value:
+        raise SessionError("abort already in progress")
     task = _tasks.get(session_id)
     if task and not task.done():
         task.cancel()
-    try:
-        engine = await get_engine(db)
-        await engine.provider.destroy_range(session.range_id)
-    except Exception as e:
-        await log.awarning("destroy failed", error=str(e))
-    await _set_state(db, session, SessionState.ABORTED,
-                     ended_at=datetime.now(UTC).replace(tzinfo=None))
+    # range destroy takes 60s+ on multi-VM topologies — a synchronous call
+    # blows through the nginx proxy timeout (504) while the teardown keeps
+    # running behind it. Transitional state + background task like reset().
+    await _set_state(db, session, SessionState.ABORTING)
+    _tasks[session.id] = asyncio.create_task(_abort(session.id))
     return session
+
+
+async def _abort(session_id: int) -> None:
+    try:
+        async with session_factory()() as db:
+            session = await db.get(Session, session_id)
+            if not session:
+                return
+            try:
+                engine = await get_engine(db)
+                await engine.provider.destroy_range(session.range_id)
+            except Exception as e:
+                await log.awarning("destroy failed", error=str(e))
+            await _set_state(db, session, SessionState.ABORTED,
+                             ended_at=datetime.now(UTC).replace(tzinfo=None))
+    finally:
+        _tasks.pop(session_id, None)
 
 
 async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: int,
