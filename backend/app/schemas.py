@@ -1,7 +1,7 @@
 """Pydantic API schemas."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LoginIn(BaseModel):
@@ -246,6 +246,14 @@ class CoachFlagCheckIn(BaseModel):
     flag_key: str = Field(max_length=64)
 
 
+# coach-internal bookkeeping tools that may self-report status=ok — real
+# actions (exec_in_kali, submit_flag, …) go through their own endpoints and
+# must NEVER be fabricatable through this audit sink
+_OK_AUDIT_TOOLS = frozenset({
+    "spawn_agent", "collect_agent", "agent_status", "kill_agent",
+    "update_plan", "note"})
+
+
 class CoachActionLogIn(BaseModel):
     """Coach self-reported action audit (guard denials happen coach-side,
     before any backend call — without this they never reach the DB)."""
@@ -253,7 +261,16 @@ class CoachActionLogIn(BaseModel):
     tool: str = Field(max_length=64)
     args: dict = Field(default_factory=dict)
     result: dict = Field(default_factory=dict)
-    status: str = Field(default="denied", pattern="^(denied|error)$")
+    status: str = Field(default="denied", pattern="^(denied|error|ok)$")
+
+    @model_validator(mode="after")
+    def _ok_only_for_internal_tools(self):
+        if self.status == "ok" and self.tool not in _OK_AUDIT_TOOLS:
+            raise ValueError(
+                f"status=ok audit rows only allowed for internal tools "
+                f"{sorted(_OK_AUDIT_TOOLS)} — {self.tool!r} claims a real "
+                f"action it can't prove")
+        return self
 
 
 class EngineStatusOut(BaseModel):

@@ -669,8 +669,9 @@ async def coach_checkpoint(body: CheckpointIn, db: AsyncSession = Depends(get_db
 @coach_router.post("/action")
 async def coach_action_log(body: CoachActionLogIn,
                            db: AsyncSession = Depends(get_db)):
-    """Audit-only sink for coach-side guard outcomes — restricted to
-    denied/error so it can never fabricate a successful action row."""
+    """Audit-only sink for coach-side outcomes — denied/error for any tool
+    (guard denials), ok only for coach-internal bookkeeping tools
+    (_OK_AUDIT_TOOLS) so a real action can never be fabricated here."""
     a = await coach_bridge.record_action(
         db, body.session_id, body.tool, body.args, body.result,
         status=body.status)

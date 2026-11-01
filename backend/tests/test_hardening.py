@@ -388,3 +388,24 @@ async def test_engine_rebuild_retires_instead_of_closing(db):
         return
     assert engine_svc._retired or eng1.provider is not eng2.provider
     await engine_svc.shutdown()
+
+
+def test_coach_action_log_status_contract():
+    """/api/coach/action must never fabricate successful real actions —
+    status=ok is only for coach-internal bookkeeping tools."""
+    import pytest
+    from pydantic import ValidationError
+    from app.schemas import CoachActionLogIn
+    # internal tools may log ok (worker lifecycle, plan, notes)
+    for tool in ("spawn_agent", "collect_agent", "kill_agent",
+                 "update_plan", "note"):
+        m = CoachActionLogIn(session_id=1, tool=tool, status="ok")
+        assert m.status == "ok"
+    # real actions can never self-report ok — that's the fabrication guard
+    for tool in ("exec_in_kali", "submit_flag", "check_flag",
+                 "type_in_pane", "send_chat"):
+        with pytest.raises(ValidationError):
+            CoachActionLogIn(session_id=1, tool=tool, status="ok")
+    # denied/error stay unrestricted (guard self-reports under real names)
+    CoachActionLogIn(session_id=1, tool="exec_in_kali", status="denied")
+    CoachActionLogIn(session_id=1, tool="exec_in_kali", status="error")
