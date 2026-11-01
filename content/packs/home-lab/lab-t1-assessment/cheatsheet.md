@@ -41,7 +41,7 @@ sudo nmap --script upnp-info <ip>
 
 # printers — status, never print
 nmap -p 515,631,9100 <ip>
-ipptool -tv ipp://<ip> get-printer-attributes.test
+ipptool -tv ipp://<ip>/ipp/print /usr/share/cups/ipptool/get-printer-attributes.test
 printf '@PJL INFO STATUS\n' | nc <ip> 9100
 
 # IoT / cameras / smart home

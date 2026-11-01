@@ -13,6 +13,14 @@
   finding|risk|recommend|severity vocabulary AND
   access|share|credential|anonymous|filesystem vocabulary — the report
   must cover access probes even when nothing was reachable.
+- Completion: the flag key is `report` — call `check_flag` with key
+  "report" once the file is written; it re-runs the grep live.
+- SCOPE IS ENFORCED, not just advisory: exec commands carrying a private
+  IP outside the authorized CIDR are denied outright. If a probe gets
+  "denied: <ip> is no known target" — the IP was wrong or out of scope;
+  re-check the scope line and scan output. IPs become allowed the moment
+  they appear in tool output, so read `ip addr`/scan results before
+  probing.
 - Report skeleton at /home/kali/lan-report-template.md (pentrain_home_lab
   role). Trainee must copy → lan-report.md and fill it.
 - Evidence convention: dumps go to ~/evidence/ (share listings, config
@@ -44,9 +52,10 @@
 - Router / AP: `curl -sI http://IP`, `snmpwalk -v2c -c public IP
   system` (sysDescr = firmware), `nmap --script upnp-info IP`. Web UI =
   finding if on http or default creds — creds only on their own router.
-- Printer: `nmap -p 515,631,9100 IP`, `ipptool -tv ipp://IP get-printer-
-  attributes.test`, `nc IP 9100` and send `@PJL INFO STATUS\n` (quit
-  after the banner — never print). Web UI usually on :80/:443.
+- Printer: `nmap -p 515,631,9100 IP`, `ipptool -tv ipp://IP/ipp/print
+  /usr/share/cups/ipptool/get-printer-attributes.test`, `nc IP 9100` and
+  send `@PJL INFO STATUS\n` (quit after the banner — never print). Web UI
+  usually on :80/:443.
 - IoT / cameras / smart gear: telnet/ssh banner grab (`nc IP 23`,
   `ssh -o ConnectTimeout=5 user@IP`), RTSP `curl rtsp://IP:554/` DESCRIBE,
   MQTT anonymous subscribe `mosquitto_sub -h IP -t '#' -C 1 -W 5`,
@@ -58,6 +67,17 @@
 - Found credentials somewhere (config leak, docs, sticker in the report
   photo)? Trying them on ssh/web is in scope for devices they own.
   Brute force only on gear they can factory-reset — say so explicitly.
+
+## Takeover specifics (L4)
+
+- Prefer ONE-SHOT forms — `smbclient //IP/share -N -c 'ls'`, `curl`, `nc`,
+  `snmpwalk` — interactive smbclient/ssh/telnet sessions cost type_in_pane
+  round-trips and their internals never reach telemetry. Drop straight to
+  the read you want.
+- Read `ip -4 addr`/the arp-scan output FIRST — every IP there becomes an
+  allowed probe target; invented ones get denied.
+- Write the report INCREMENTALLY (`cat >> ~/lan-report.md` blocks), then
+  call check_flag("report") — a single flag completes the quest.
 
 ## Common wrong turns
 

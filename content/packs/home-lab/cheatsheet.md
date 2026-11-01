@@ -24,7 +24,7 @@ enum4linux -a <host>                        # users, shares, policies
 showmount -e <host>                         # NFS exports
 snmpwalk -v2c -c public <host> system       # firmware via sysDescr
 curl -sI http://<router>                    # router/NAS/cam web UI
-ipptool -tv ipp://<printer> get-printer-attributes.test
+ipptool -tv ipp://<printer>/ipp/print /usr/share/cups/ipptool/get-printer-attributes.test
 mosquitto_sub -h <host> -t '#' -C 1 -W 5    # open MQTT broker?
 avahi-browse -a                             # phones/TVs via mDNS instead
 

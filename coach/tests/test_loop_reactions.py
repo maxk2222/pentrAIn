@@ -1070,3 +1070,56 @@ async def test_policy_takeover_pace_gates_new_chains():
     assert not p.evaluate(st).may_proactive      # inside the 10s settle
     st.last_nudge_ts = time.time() - 15
     assert p.evaluate(st).may_proactive          # past it → next chain fires
+
+
+async def test_foreign_ip_guard():
+    """Hallucinated target IPs (session 31: 10.42.0.5 invented from kali's
+    10.1.10.5) hang every connect. Commands may only carry IPs inside a
+    target /24, seen in earlier output, or public."""
+    c = FakeClient()
+    c.ctx["quest"]["targets"] = [{"name": "svc01", "ip": "10.1.10.25"}]
+    c.ctx["session"]["autonomy_level"] = 4
+    coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    coach.llm = FakeLlm()
+    await coach.start()
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "curl http://10.42.0.5/x"})
+    assert r.startswith("denied:") and "10.42.0.5" in r and "10.1.10.25" in r
+    # same /24 as the target (router, sibling VMs) passes
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "ping -c1 10.1.10.254"})
+    assert not r.startswith("denied:")
+    # public IP passes (internet uplink)
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "curl -sI https://8.8.8.8"})
+    assert not r.startswith("denied:")
+    # an IP seen in tool output becomes allowed (pivot-safe)
+    await coach._scan_flags("nmap done: discovered host 172.16.5.10")
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "nmap 172.16.5.10"})
+    assert not r.startswith("denied:")
+    await coach.stop()
+
+
+async def test_lan_scope_is_enforced_by_ip_guard():
+    """Home-lab mode: the authorized CIDR seeds allowed_nets — in-scope IPs
+    pass, out-of-scope PRIVATE ips are a hard deny (real ROE for L4, not
+    just a prompt line)."""
+    c = FakeClient()
+    c.ctx["quest"]["targets"] = [{"name": "lan-scope",
+                                  "ip": "192.168.3.131/24"}]
+    c.ctx["quest"]["scope"] = "192.168.3.0/24"
+    c.ctx["session"]["autonomy_level"] = 4
+    coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    coach.llm = FakeLlm()
+    await coach.start()
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "ping -c1 192.168.3.50"})
+    assert not r.startswith("denied:")          # inside the authorized CIDR
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "nmap -sn 10.0.0.0/24"})
+    assert r.startswith("denied:")              # out-of-scope private → ROE
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "curl -sI https://8.8.8.8"})
+    assert not r.startswith("denied:")          # public uplink stays open
+    await coach.stop()

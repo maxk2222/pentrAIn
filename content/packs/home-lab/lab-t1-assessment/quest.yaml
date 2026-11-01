@@ -5,14 +5,14 @@ meta:
   track: home-lab
   tier: 1
   title: "Home Field Advantage"
-  version: 1
+  version: 2
 display:
-  tagline: "Point Kali at your own LAN — discover, enumerate, assess, and write it up like a real engagement."
+  tagline: "Point Kali at your own LAN — discover, enumerate, get on the devices, and write it up like a real engagement."
 requirements:
   min_ram_gb: 10
   min_vcpus: 6
   min_disk_gb: 40
-  est_deploy_min: 8
+  est_deploy_min: 5
 topology:
   kali:
     template: kali-x64-desktop-template
@@ -51,7 +51,7 @@ coach:
       hint_after_s: 480
     - id: cp-enum
       name: "Enumerated services on a LAN host"
-      detect: { command_match: "nmap\\s+.*-(sV|sC|p-|A|O)" }
+      detect: { command_match: "nmap\\s+.*-(sV|sC|sS|sU|sT|p\\b|A|O)" }
       hint_after_s: 600
     - id: cp-assess
       name: "Ran a vulnerability/config check"

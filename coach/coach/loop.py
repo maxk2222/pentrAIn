@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import re
 import time
 
@@ -89,6 +90,8 @@ class SessionCoach:
         self._flags_seen: dict[str, int] = {}    # flag value → times shown
         self._flags_submitted: dict[str, bool] = {}  # flag → accepted
         self._submit_challenged: dict[str, int] = {}  # unverified submits
+        self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
+        self._ips_seen: set[str] = set()         # IPs observed in outputs
 
     # ---------- lifecycle ----------
 
@@ -112,6 +115,35 @@ class SessionCoach:
         self.state.flags_solved = {f["key"] for f in self.ctx.get("flags", []) if f.get("solved")}
         self.state.exec_count = int(self.ctx.get("exec_count", 0))
         self.matcher = CheckpointMatcher(self.ctx.get("quest", {}).get("checkpoints", []))
+        # known-good target space for the hallucinated-IP guard: each target's
+        # /24 (or explicit CIDR — home-lab carries "lan-scope=192.168.3.131/24"),
+        # plus every IP ever seen in tool output (pivot-safe — a host the model
+        # discovers in output becomes reachable, one it invents does not)
+        for t in (self.ctx.get("quest", {}).get("targets") or []):
+            ip = (t.get("ip") or "").strip()
+            if not ip:
+                continue
+            try:
+                net = (ipaddress.ip_network(ip, strict=False) if "/" in ip
+                       else ipaddress.ip_network(f"{ip}/24", strict=False))
+                if net not in self._allowed_nets:
+                    self._allowed_nets.append(net)
+                self._ips_seen.add(ip.split("/")[0])
+            except ValueError:
+                pass
+        # authorized LAN scope (home-lab): the whole CIDR is fair game AND
+        # out-of-scope private space becomes a hard deny — real ROE, not just
+        # a prompt line. Without this seed the guard silently disables itself
+        # on quests with no lab targets.
+        scope = (self.ctx.get("quest", {}).get("scope") or "").strip()
+        if scope:
+            try:
+                net = ipaddress.ip_network(scope, strict=False)
+                if net not in self._allowed_nets:
+                    self._allowed_nets.append(net)
+                self._ips_seen.add(scope.split("/")[0])
+            except ValueError:
+                pass
         esc = self.ctx.get("quest", {}).get("escalation", {})
         coach_cfg = self.cfg.get("coach", {})
         self.policy = Policy(
@@ -818,6 +850,7 @@ class SessionCoach:
         real flags are correct anyway, wrong submits are already counted
         by the backend either way."""
         note = ""
+        self._ips_seen.update(self._IP_RE.findall(out or ""))
         for fv in set(re.findall(r"pentrAIn\{[^}\s]+\}", out or "")):
             if self._FLAG_PLACEHOLDER_RE.match(fv):
                 continue
@@ -854,6 +887,30 @@ class SessionCoach:
                 note += (f"\n{fv} — submission already attempted ({prev}); "
                          f"stop re-reading it and move on.")
         return note
+
+    _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+    def _foreign_ip(self, cmd: str) -> str | None:
+        """Private/link-local literal that's neither inside a target /24 nor
+        seen in earlier output. Public IPs pass (internet uplink); observed
+        IPs pass (pivot/discovered hosts); invented ones are denied — they
+        hang every connect (session 31: model merged kali's 10.1.10.5 into
+        10.42.0.5 and burned ~10 turns on it)."""
+        if not self._allowed_nets:
+            return None                     # no baseline — can't judge foreign
+        for lit in self._IP_RE.findall(cmd):
+            try:
+                ip = ipaddress.ip_address(lit)
+            except ValueError:
+                continue
+            if ip.is_loopback or not (ip.is_private or ip.is_link_local):
+                continue
+            if lit in self._ips_seen:
+                continue
+            if any(ip in n for n in self._allowed_nets):
+                continue
+            return lit
+        return None
 
     async def _dispatch(self, a: dict, *, proactive: bool = False) -> tuple[bool, str]:
         """Execute one LLM action under autonomy/budget gates.
@@ -960,6 +1017,19 @@ class SessionCoach:
                                     f"Take a DIFFERENT action toward the flag: "
                                     f"connect to a discovered service, use "
                                     f"credentials you found, or submit a flag.")
+                    bad_ip = self._foreign_ip(cmd)
+                    if bad_ip:
+                        known = [f"{t.get('name')}={t.get('ip')}"
+                                 for t in (self.ctx.get("quest", {}).get(
+                                     "targets") or []) if t.get("ip")]
+                        await log.ainfo("foreign ip denied", session=self.sid,
+                                        ip=bad_ip, cmd=cmd[:120])
+                        return spoke, (
+                            f"denied: {bad_ip} is no known target — connects "
+                            f"to it hang and eat the pane. KNOWN TARGETS: "
+                            f"{'; '.join(known) or '(resolve names via getent)'}. "
+                            f"A host is only allowed once its IP appears in "
+                            f"tool output (scan result, getent, logs).")
                     # mark BEFORE the call so telemetry echo is recognized as ours
                     self._coach_cmds.append((cmd, time.time()))
                     await self.client.send_activity(
