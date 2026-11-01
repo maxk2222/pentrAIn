@@ -42,7 +42,8 @@ def _net_mac(config: dict, key: str = WAN_NET) -> str | None:
     return m.group(1).lower() if m else None
 
 
-def _guest_bringup(mac: str, target_names: list[str]) -> str:
+def _guest_bringup(mac: str, target_names: list[str],
+                   api_host: str | None = None) -> str:
     """Shell script: find iface by MAC → link up → DHCP via NetworkManager
     first (nmcli and a manual dhclient would race into two leases), then
     drop the range gateway's default route — it outranks the LAN route
@@ -59,6 +60,7 @@ def _guest_bringup(mac: str, target_names: list[str]) -> str:
     # the generated script MUST stay pure ASCII — guest-file-write dies on
     # wide chars inside pvedaemon (encode step), returning an opaque 500
     return f"""MAC='{mac}'
+API_HOST='{api_host or ""}'
 iface=$(for i in /sys/class/net/*; do
   [ "$(tr 'A-F' 'a-f' < "$i/address" 2>/dev/null)" = "$MAC" ] && basename "$i"
 done)
@@ -97,6 +99,11 @@ ip -4 -o addr show "$iface" | grep -q "inet " || \\
   (timeout 15 dhclient -1 "$iface" 2>/dev/null || timeout 15 dhcpcd "$iface" 2>/dev/null || true)
 OLDGW=$(ip -4 route show default dev eth0 2>/dev/null | awk '{{print $3; exit}}')
 ip route del default dev eth0 2>/dev/null || true
+# platform API lives on the ludus WAN bridge behind the range router — pin a
+# /32 via the range gateway so telemetry/terminal keep working while the
+# LAN default route owns all other egress
+[ -n "$API_HOST" ] && [ -n "$RDNS" ] && \\
+  ip route replace "$API_HOST"/32 via "$RDNS" dev eth0 2>/dev/null || true
 # range DNS LAST - external names via LAN servers, range names via /etc/hosts
 [ -n "$RDNS" ] && {{ grep -v "nameserver $RDNS" /etc/resolv.conf > /tmp/rc 2>/dev/null; \\
   echo "nameserver $RDNS" >> /tmp/rc; cat /tmp/rc > /etc/resolv.conf; }}
@@ -106,7 +113,7 @@ echo "IF=$iface"
 """
 
 
-def _guest_release(mac: str) -> str:
+def _guest_release(mac: str, api_host: str | None = None) -> str:
     """Down the WAN iface + restore the range gateway's default route — the
     app/telemetry host is only reachable through it once the LAN path is
     gone. Gateway derivation follows the Ludus convention (subnet .254).
@@ -118,6 +125,7 @@ def _guest_release(mac: str) -> str:
     sleep a beat for any in-flight NM rewrite, then restore + re-append the
     range nameserver as a guard."""
     return f"""MAC='{mac}'
+API_HOST='{api_host or ""}'
 iface=$(for i in /sys/class/net/*; do
   [ "$(tr 'A-F' 'a-f' < "$i/address" 2>/dev/null)" = "$MAC" ] && basename "$i"
 done)
@@ -135,6 +143,7 @@ if [ -n "$RDNS" ]; then
   echo "nameserver $RDNS" >> /tmp/rc; cat /tmp/rc > /etc/resolv.conf
 fi
 grep -v ' # pentrain-wan$' /etc/hosts > /tmp/h 2>/dev/null && cat /tmp/h > /etc/hosts
+[ -n "$API_HOST" ] && ip route del "$API_HOST"/32 2>/dev/null || true
 ip route show default dev eth0 2>/dev/null | grep -q . || {{
   gw=$(ip -4 -o addr show dev eth0 | awk '{{split($4,a,"/"); split(a[1],o,"."); \\
        print o[1]"."o[2]"."o[3]".254"; exit}}')
@@ -145,7 +154,8 @@ true
 
 
 async def apply_kali_internet(engine, vmid: int, wan_bridge: str = "vmbr0",
-                              target_names: list[str] | None = None) -> dict:
+                              target_names: list[str] | None = None,
+                              api_host: str | None = None) -> dict:
     """Attach net1→wan_bridge + DHCP in guest. Returns {"ip","iface","mac"}.
 
     `target_names`: range hostnames to pin into /etc/hosts — the LAN
@@ -174,7 +184,7 @@ async def apply_kali_internet(engine, vmid: int, wan_bridge: str = "vmbr0",
     # Long scripts as exec-args wedge the virtio QGA channel on this host —
     # write the script via guest-file-write, then exec a tiny command.
     await pve.agent_file_write(vmid, "/tmp/pentrain-netup.sh",
-                               _guest_bringup(mac, target_names or []))
+                               _guest_bringup(mac, target_names or [], api_host))
     r = await pve.agent_exec_sh(vmid, "timeout 55 sh /tmp/pentrain-netup.sh",
                               timeout_s=70)
     out = r.get("out") or ""
@@ -189,7 +199,8 @@ async def apply_kali_internet(engine, vmid: int, wan_bridge: str = "vmbr0",
             "mac": mac}
 
 
-async def remove_kali_internet(engine, vmid: int) -> None:
+async def remove_kali_internet(engine, vmid: int,
+                               api_host: str | None = None) -> None:
     """Release the lease + hot-unplug net1. Idempotent — no-op if absent."""
     pve = getattr(engine, "pve", None)
     if pve is None:
@@ -205,7 +216,7 @@ async def remove_kali_internet(engine, vmid: int) -> None:
     await asyncio.sleep(3.0)              # let the unplug + NM rewrite settle
     try:
         await pve.agent_file_write(vmid, "/tmp/pentrain-netdown.sh",
-                                   _guest_release(mac))
+                                   _guest_release(mac, api_host))
         await pve.agent_exec_sh(vmid, "timeout 12 sh /tmp/pentrain-netdown.sh",
                                 timeout_s=18)
     except Exception as e:  # guest agent down → config is already clean anyway

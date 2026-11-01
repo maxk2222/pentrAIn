@@ -332,18 +332,23 @@ async def toggle_internet(session_id: int, body: InternetIn,
         raise HTTPException(422, f"kali not ready (state {s.state})")
     engine = await get_engine(db)
     bridge = await settings_svc.get_setting(db, "engine.kali_wan_bridge", "vmbr0")
+    from ..services.sessions import _api_ip_port
+    api_ip, _ = _api_ip_port(
+        await settings_svc.get_setting(db, "platform.api_url", ""))
     try:
         if body.enabled:
             quest = await db.get(Quest, s.quest_id)
             res = await kali_net_svc.apply_kali_internet(
                 engine, s.kali_vmid, bridge,
-                kali_net_svc.target_names_for(quest) if quest else [])
+                kali_net_svc.target_names_for(quest) if quest else [],
+                api_host=api_ip)
             s.kali_internet = True
             s.kali_wan_ip = res.get("ip") or None
             await db.commit()
             return {"enabled": True, "ip": res.get("ip"), "iface": res.get("iface"),
                     "mock": bool(res.get("mock"))}
-        await kali_net_svc.remove_kali_internet(engine, s.kali_vmid)
+        await kali_net_svc.remove_kali_internet(engine, s.kali_vmid,
+                                                api_host=api_ip)
         s.kali_internet = False
         s.kali_wan_ip = None
         await db.commit()

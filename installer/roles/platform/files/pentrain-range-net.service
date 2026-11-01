@@ -1,0 +1,12 @@
+[Unit]
+Description=pentrAIn range control-plane nic + firewall
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pentrain-range-net.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

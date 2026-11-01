@@ -33,6 +33,14 @@ app_bridge: vmbr0
 app_ip: ""
 app_cloud_image_url: "{{ engine_cloud_image_url }}"
 
+# range control plane: second NIC on the ludus WAN bridge — range VMs reach
+# the platform API (telemetry + terminal channel) through their router via a
+# declarative ludus rule (vlan_src all → public, tcp/<port>). This is NOT
+# general internet for ranges; set platform.api_url to the address below.
+app_range_bridge: vmbr1000
+app_range_ip: "192.0.2.10"
+app_range_netmask: 24
+
 # ----- platform -----
 pentrain_repo: "https://github.com/CHANGEME/pentrain.git"
 pentrain_repo_ref: main

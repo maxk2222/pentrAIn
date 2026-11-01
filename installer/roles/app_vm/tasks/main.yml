@@ -58,6 +58,13 @@
   register: ipcfg
   changed_when: ipcfg.rc == 0
 
+- name: range control-plane nic on the ludus WAN bridge (net1)
+  ansible.builtin.command: "qm set {{ app_vmid }} --net1 virtio,bridge={{ app_range_bridge }}"
+  register: net1cfg
+  changed_when: net1cfg.rc == 0
+  failed_when: net1cfg.rc != 0 and 'Duplicate' not in (net1cfg.stderr | default(''))
+  when: app_range_bridge | default('') | length > 0
+
 - name: grow disk to target size (no-op when already correct)
   ansible.builtin.command: qm resize {{ app_vmid }} scsi0 {{ app_disk_gb }}G
   register: app_resized

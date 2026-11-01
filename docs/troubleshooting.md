@@ -113,6 +113,28 @@ commands; the daemon ships them to `platform.api_url` + `/api/telemetry`
 with the session token. If `platform.api_url` doesn't resolve from inside
 the range, telemetry silently never arrives.
 
+### Range can't reach `platform.api_url`
+
+The control plane is the app VM's NIC on the **Ludus WAN bridge**
+(e.g. `192.0.2.10` on `vmbr1000`) — not the LAN address. Checklist:
+
+- `platform.api_url` must be an **IPv4 literal on the WAN bridge**
+  (`http://192.0.2.10:8000`) — a hostname emits no Ludus rule and nothing
+  resolves inside ranges.
+- App VM has the second NIC: `qm config <app_vmid> | grep net1` →
+  `bridge=vmbr1000`; inside the guest `ip addr show` lists the range IP
+  (unit `pentrain-range-net` assigns it).
+- The range router must carry the accept rule:
+  `nft list chain ip filter LUDUS_USER_RULES` → expect
+  `10.1.0.0/16 → <api_ip> tcp dport <port> accept`. Missing on a live range
+  → new deploys emit it from the config; a running range can be patched
+  with a direct `nft add rule`.
+- From Kali: `curl http://<api_ip>:<port>/api/health` should return 200 —
+  while `curl https://192.0.2.254:8080` (host/Ludus) stays dead.
+- With the internet toggle ON, Kali reaches the API via a pinned `/32`
+  through the range gateway — check `ip route | grep <api_ip>` exists
+  (added by the uplink bring-up script).
+
 ### Kali internet toggle misbehaves
 
 - Enabling hot-plugs `net1` on `engine.kali_wan_bridge` (default `vmbr0`) —

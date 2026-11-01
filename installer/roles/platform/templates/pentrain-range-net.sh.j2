@@ -1,0 +1,48 @@
+#!/bin/sh
+# pentrAIn range control plane — configure the ludus-WAN nic + lock it down.
+#
+# The range iface is simply "the nic that does not hold the default route":
+# whatever proxmox named it (eth1/ens19/…), it is the one hot-plugged onto the
+# ludus WAN bridge. Idempotent — safe to re-run.
+#
+# Firewall model (docker publishes the platform port via DNAT → FORWARD,
+# so INPUT rules alone cannot scope it):
+#   INPUT:      iface → established + DROP            (host services unreachable)
+#   DOCKER-USER: iface → ACCEPT only ctorigdstport {{ platform_http_port }}, else DROP
+#   FORWARD:    iface → DROP                          (never a range→LAN pivot)
+set -u
+RANGE_IP="{{ app_range_ip }}"
+PORT="{{ platform_http_port }}"
+
+PRIMARY=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+# only real nics: drop lo, the primary nic, and every virtual docker/veth/br
+# iface docker created — what remains is the hot-plugged range nic
+IFACE=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 |
+        grep -vxE "lo|$PRIMARY|docker.*|br-.*|veth.*|wg.*|zt.*" | head -1)
+[ -z "$IFACE" ] && exit 0
+
+ip link set "$IFACE" up
+ip addr replace "$RANGE_IP/{{ app_range_netmask }}" dev "$IFACE"
+
+iptables -N PENTRAIN-RANGE 2>/dev/null
+iptables -F PENTRAIN-RANGE
+iptables -A PENTRAIN-RANGE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A PENTRAIN-RANGE -j DROP
+iptables -C INPUT -i "$IFACE" -j PENTRAIN-RANGE 2>/dev/null ||
+  iptables -I INPUT -i "$IFACE" -j PENTRAIN-RANGE
+
+iptables -N PENTRAIN-RANGE-FWD 2>/dev/null
+iptables -F PENTRAIN-RANGE-FWD
+iptables -A PENTRAIN-RANGE-FWD -p tcp -m conntrack --ctorigdstport "$PORT" -j ACCEPT
+iptables -A PENTRAIN-RANGE-FWD -j DROP
+# DOCKER-USER only exists while docker is up — the plain FORWARD drop below
+# keeps the range locked down either way.
+if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+  iptables -C DOCKER-USER -i "$IFACE" -j PENTRAIN-RANGE-FWD 2>/dev/null ||
+    iptables -I DOCKER-USER -i "$IFACE" -j PENTRAIN-RANGE-FWD
+fi
+# appended AFTER docker's chains — an ACCEPT inside DOCKER-USER already
+# terminated the :8000 path, so this only catches non-docker forward attempts
+# (range → LAN pivot). The default FORWARD policy is DROP anyway; belt on.
+iptables -C FORWARD -i "$IFACE" -o "$PRIMARY" -j DROP 2>/dev/null ||
+  iptables -A FORWARD -i "$IFACE" -o "$PRIMARY" -j DROP

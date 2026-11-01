@@ -232,6 +232,13 @@ The Kali template ships `pentrain-telemetried`: a bash `DEBUG`-trap hook
 drives checkpoints, the activity feed and the coach's context — and is
 explicitly treated as untrusted text in the prompt.
 
+The dial target (`platform.api_url`) is the app VM's address on the Ludus
+WAN bridge (`192.0.2.0/24`, e.g. `192.0.2.10`) — reachable from every range
+VLAN through the router via a declarative `network.rules` ACCEPT emitted
+into each range config, so telemetry and terminal channels work with the
+Kali internet uplink **off**. See
+[ops.md → Range→platform control plane](ops.md#rangeplatform-control-plane).
+
 ## Data model (SQLite, core tables)
 
 ```mermaid
@@ -275,12 +282,17 @@ erDiagram
 ```mermaid
 flowchart LR
     subgraph LAN["Your LAN"]
-        USER[trainee browser] --> APP[pentrain-app]
+        USER[trainee browser] --> APP["pentrain-app :8000"]
         APP -->|LAN only — never expose| WARN["no port-forward;<br/>VPN/rev-proxy for remote"]
+    end
+    subgraph WAN["ludus WAN bridge 192.0.2.0/24"]
+        APPW["app net1 192.0.2.10<br/>only :8000 open"]
     end
     subgraph Range["isolated range /24"]
         KALI --> T[target VMs]
+        KALI & T --> GW[router]
     end
+    GW -. "user-rule: tcp/8000 only<br/>rest stays dropped" .-> APPW
     KALI -. "net1 uplink (opt-in)" .-> LAN
     T -.->|no route| LAN
 ```

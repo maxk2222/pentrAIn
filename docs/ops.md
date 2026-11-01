@@ -105,6 +105,46 @@ sequenceDiagram
   hosts cleanup runs inside the guest.
 - `lan.scope_cidr` bounds what the coach may touch on your LAN (home-lab).
 
+## Range→platform control plane
+
+Telemetry, checkpointing and browser terminals all need the same thing: an
+outbound path from range VMs to the backend — **independent of the Kali
+internet toggle**, which is only real LAN/internet egress.
+
+```mermaid
+flowchart LR
+    subgraph R["isolated range"]
+        K[Kali 10.1.10.5] --> GW["router 10.1.10.254"]
+        T[targets] --> GW
+    end
+    GW -->|"FORWARD: user-rule ACCEPT<br/>vlan all → public tcp/8000"| NAT["masquerade → router WAN"]
+    NAT --> APP["pentrain-app net1<br/>192.0.2.10:8000 @ vmbr1000"]
+    APP -. "only :8000 —<br/>INPUT/FORWARD drop" .-> X["ssh/docker/LAN ✗"]
+```
+
+- **App VM gets a second NIC on the Ludus WAN bridge** (`vmbr1000`,
+  `192.0.2.0/24`) with a static address — `192.0.2.10` by default. One
+  address serves every range VLAN; nothing else on that bridge needs to
+  exist. Provisioned once (`installer` group_vars `app_range_bridge` /
+  `app_range_ip`); the `pentrain-range-net` systemd unit inside the app VM
+  assigns the IP + pins the firewall.
+- **`platform.api_url` is the single source of truth** and must be an IPv4
+  literal the ranges can route to — `http://192.0.2.10:8000` here. From it
+  the backend derives: the Ludus network rule emitted into every range
+  config, the `/32` appended to `engine.testing_allow`, and the static
+  /32 route Kali keeps while its internet uplink owns the default route.
+  A hostname value silently produces **no rule** (ranges have no DNS for it).
+- The range config carries the rule **declaratively**
+  (`network.rules: vlan_src all → vlan_dst public, tcp/<port>, ACCEPT`) —
+  it survives router rebuilds and snapshot rollbacks. Everything else on
+  the WAN side stays `FORWARD`-dropped by Ludus defaults.
+- **App-side guard**: the range NIC accepts only `tcp/<api_port>` (INPUT +
+  DOCKER-USER scoped by `--ctorigdstport`), plus a FORWARD drop — ssh,
+  docker internals and the LAN stay unreachable from ranges.
+- The **internet toggle stays orthogonal**: on = LAN uplink for apt/tools
+  (Kali then reaches the API via the pinned /32 through the range gateway);
+  off = fully isolated except the API.
+
 ## Resets
 
 | | Soft reset | Hard reset |

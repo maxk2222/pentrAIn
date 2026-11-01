@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import structlog
 import yaml
@@ -91,7 +93,31 @@ async def _append_log(db: AsyncSession, session: Session, line: str) -> None:
     await _broadcast(session.id, "deploy_log", {"line": line})
 
 
-def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
+def _api_ip_port(api_url: str | None) -> tuple[str | None, int]:
+    """platform.api_url → (ipv4 host | None, port). Only IPv4 literals can be
+    turned into Ludus network rules — hostnames don't resolve inside ranges."""
+    if not api_url:
+        return None, 8000
+    try:
+        u = urlparse(api_url if "://" in api_url else f"http://{api_url}")
+        host = u.hostname or ""
+        ipaddress.IPv4Address(host)
+        return host, u.port or (443 if u.scheme == "https" else 80)
+    except ValueError:
+        return None, 8000
+
+
+def _merge_testing_allow(allow: list, api_ip: str | None) -> list:
+    """User-configured testing allow list + the platform API's /32 — the
+    range must reach telemetry/terminal even while testing-mode isolates
+    the rest of the WAN."""
+    if api_ip and f"{api_ip}/32" not in allow:
+        return [*allow, f"{api_ip}/32"]
+    return allow
+
+
+def compile_topology(quest: Quest, kali_template: str | None = None,
+                     api_url: str | None = None) -> dict:
     """quest.topology → Ludus range config (subset of Ludus schema we need).
 
     `kali_template` (engine.kali_template setting) overrides the per-quest
@@ -156,7 +182,23 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
     router = {"template": "debian-12-x64-server-template",
               "ram_gb": 2, "ram_min_gb": 1,
               **(topo.get("router") or {})}
-    return {"ludus": vms, "router": router}
+    cfg: dict = {"ludus": vms, "router": router}
+    # platform control plane: ranges are WAN-isolated (FORWARD drop), so the
+    # app VM's address on the ludus "public" bridge needs an explicit accept —
+    # telemetry and the terminal channel both dial this URL. IPv4 literals
+    # only; a hostname rule would never match (no DNS inside the range).
+    api_ip, api_port = _api_ip_port(api_url)
+    if api_ip:
+        cfg["network"] = {"rules": [{
+            "name": "pentrain platform api",
+            "vlan_src": "all",
+            "vlan_dst": "public",
+            "ip_last_octet_dst": int(api_ip.rsplit(".", 1)[1]),
+            "protocol": "tcp",
+            "ports": str(api_port),
+            "action": "ACCEPT",
+        }]}
+    return cfg
 
 
 async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
@@ -248,7 +290,9 @@ async def _deploy(session_id: int) -> None:
                 config = compile_topology(
                     quest,
                     kali_template=await settings_svc.get_setting(
-                        db, "engine.kali_template", "") or None)
+                        db, "engine.kali_template", "") or None,
+                    api_url=await settings_svc.get_setting(
+                        db, "platform.api_url", ""))
                 await _append_log(db, session, yaml.safe_dump(config, sort_keys=False).rstrip())
                 session.range_id = await engine.provider.deploy_range(f"quest-{quest.id}", config)
                 await db.commit()
@@ -350,6 +394,8 @@ async def _finalize(db: AsyncSession, engine, session: Session,
     # kali wan uplink — BEFORE the snapshot so soft reset keeps the net1
     # config. Non-fatal: a missing DHCP lease must not sink the deploy.
     # topology.kali.wan = the quest REQUIRES the uplink (home-lab LAN mode)
+    api_ip, _ = _api_ip_port(
+        await settings_svc.get_setting(db, "platform.api_url", ""))
     want_net = (bool(session.kali_internet)
                 or bool((quest.topology or {}).get("kali", {}).get("wan"))
                 or bool(await settings_svc.get_setting(db, "kali.internet_default", False)))
@@ -358,7 +404,7 @@ async def _finalize(db: AsyncSession, engine, session: Session,
             res = await kali_net_svc.apply_kali_internet(
                 engine, session.kali_vmid,
                 await settings_svc.get_setting(db, "engine.kali_wan_bridge", "vmbr0"),
-                kali_net_svc.target_names_for(quest))
+                kali_net_svc.target_names_for(quest), api_host=api_ip)
             session.kali_internet = True
             # persist the LAN lease — coach scope auto-detect + UI display
             session.kali_wan_ip = res.get("ip") or None
@@ -370,7 +416,8 @@ async def _finalize(db: AsyncSession, engine, session: Session,
 
     # internet isolation + restore point (allow the app/telemetry endpoint)
     if bool(await settings_svc.get_setting(db, "engine.testing_mode", True)):
-        allow = await settings_svc.get_setting(db, "engine.testing_allow", [])
+        allow = list(await settings_svc.get_setting(db, "engine.testing_allow", []))
+        allow = _merge_testing_allow(allow, api_ip)
         await engine.provider.testing_mode(True, allow_ips=allow or None)
     await _append_log(db, session, "[pentrain] snapshotting range (soft-reset point)")
     await engine.provider.snapshot_all(session.range_id or None, SNAP_POST_DEPLOY)
@@ -527,16 +574,19 @@ async def _reset(session_id: int, hard: bool) -> None:
             # the session flag (toggle may have changed after the snapshot)
             if session.kali_vmid:
                 try:
+                    api_ip, _ = _api_ip_port(await settings_svc.get_setting(
+                        db, "platform.api_url", ""))
                     if session.kali_internet:
                         res = await kali_net_svc.apply_kali_internet(
                             engine, session.kali_vmid,
                             await settings_svc.get_setting(
                                 db, "engine.kali_wan_bridge", "vmbr0"),
-                            kali_net_svc.target_names_for(quest) if quest else [])
+                            kali_net_svc.target_names_for(quest) if quest else [],
+                            api_host=api_ip)
                         session.kali_wan_ip = res.get("ip") or session.kali_wan_ip
                     else:
                         await kali_net_svc.remove_kali_internet(
-                            engine, session.kali_vmid)
+                            engine, session.kali_vmid, api_host=api_ip)
                         session.kali_wan_ip = None
                 except Exception as e:
                     await log.awarning("kali internet re-apply failed", error=str(e)[:150])

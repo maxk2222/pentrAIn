@@ -291,3 +291,57 @@ def test_exec_window_rejects_target_injection():
         import pytest
         with pytest.raises(ValidationError):
             CoachExecIn(session_id=1, command="id", window=bad)
+
+
+# ---------------- range→platform control plane ----------------
+
+def test_api_ip_port_parsing():
+    from app.services.sessions import _api_ip_port
+    assert _api_ip_port("http://192.0.2.10:8000") == ("192.0.2.10", 8000)
+    assert _api_ip_port("192.0.2.10:9000") == ("192.0.2.10", 9000)
+    assert _api_ip_port("https://10.0.0.7") == ("10.0.0.7", 443)
+    # hostnames can't become ludus rules (no DNS inside the range)
+    assert _api_ip_port("http://pentrain-app:8000") == (None, 8000)
+    assert _api_ip_port(None) == (None, 8000)
+    assert _api_ip_port("") == (None, 8000)
+
+
+def test_compile_topology_emits_platform_rule():
+    from types import SimpleNamespace
+    from app.services.sessions import compile_topology
+    cfg = compile_topology(SimpleNamespace(topology={}),
+                           api_url="http://192.0.2.10:8000")
+    rules = cfg["network"]["rules"]
+    assert rules == [{
+        "name": "pentrain platform api",
+        "vlan_src": "all", "vlan_dst": "public",
+        "ip_last_octet_dst": 10, "protocol": "tcp",
+        "ports": "8000", "action": "ACCEPT",
+    }]
+    # no IPv4 literal → no network section at all (valid config either way)
+    for bad in ("http://pentrain-app:8000", None, ""):
+        assert "network" not in compile_topology(
+            SimpleNamespace(topology={}), api_url=bad)
+
+
+def test_merge_testing_allow_appends_api():
+    from app.services.sessions import _merge_testing_allow
+    assert _merge_testing_allow([], "192.0.2.10") == ["192.0.2.10/32"]
+    assert _merge_testing_allow(["1.2.3.0/24"], "192.0.2.10") == \
+        ["1.2.3.0/24", "192.0.2.10/32"]
+    # idempotent + None-safe
+    assert _merge_testing_allow(["192.0.2.10/32"], "192.0.2.10") == \
+        ["192.0.2.10/32"]
+    assert _merge_testing_allow(["1.2.3.0/24"], None) == ["1.2.3.0/24"]
+
+
+def test_guest_scripts_pin_api_route():
+    from app.services.kali_net import _guest_bringup, _guest_release
+    b = _guest_bringup("aa:bb:cc:dd:ee:ff", [], api_host="192.0.2.10")
+    assert "API_HOST='192.0.2.10'" in b
+    assert 'route replace "$API_HOST"/32 via "$RDNS" dev eth0' in b
+    r = _guest_release("aa:bb:cc:dd:ee:ff", api_host="192.0.2.10")
+    assert 'ip route del "$API_HOST"/32' in r
+    # without an api host the guards stay inert (empty var, [ -n ] skips)
+    b2 = _guest_bringup("aa:bb:cc:dd:ee:ff", [])
+    assert "API_HOST=''" in b2

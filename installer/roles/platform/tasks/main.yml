@@ -1,9 +1,9 @@
 ---
 # Deploy the pentrAIn platform inside the app VM: docker + compose stack.
 
-- name: install docker
+- name: install docker + guest agent (qemu-ga gives pve-side guest control)
   ansible.builtin.apt:
-    name: [ca-certificates, curl, gnupg, git, rsync]
+    name: [ca-certificates, curl, gnupg, git, rsync, qemu-guest-agent, iptables]
     state: present
     update_cache: true
 
@@ -66,6 +66,28 @@
   delegate_to: localhost
   become: false
   run_once: true
+
+- name: range control-plane nic config + firewall script
+  ansible.builtin.template:
+    src: pentrain-range-net.sh.j2
+    dest: /usr/local/sbin/pentrain-range-net.sh
+    mode: "0755"
+  when: app_range_ip | default('') | length > 0
+
+- name: range control-plane systemd unit
+  ansible.builtin.copy:
+    src: pentrain-range-net.service
+    dest: /etc/systemd/system/pentrain-range-net.service
+    mode: "0644"
+  when: app_range_ip | default('') | length > 0
+
+- name: range control-plane unit enabled + applied
+  ansible.builtin.systemd:
+    name: pentrain-range-net
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: app_range_ip | default('') | length > 0
 
 - name: platform env file
   ansible.builtin.template:

@@ -49,6 +49,13 @@ flowchart TB
   hot-plugs `net1` onto `engine.kali_wan_bridge`. Only Kali gets it; targets
   stay unrouted. See [ops.md](ops.md#kali-internet-toggle-mechanics).
 - The app UI is meant for **LAN access only**.
+- Range VMs reach the platform through a **surgically scoped control plane**:
+  a declarative Ludus rule allows `vlan:* → public:<api_port>` to the app
+  VM's WAN-bridge address — nothing else on that bridge. On the app VM the
+  range NIC accepts only the published API port (`INPUT` + `DOCKER-USER`
+  firewall unit) and a FORWARD drop makes it a dead end, never a LAN pivot.
+  Everything reachable is still behind the per-session telemetry token or
+  the admin bearer token.
 
 ## Authentication
 
