@@ -45,13 +45,26 @@ class LudusProvider:
         await self.pve.close()
 
     async def _req(self, method: str, path: str, **kw) -> Any:
-        r = await self._client.request(method, self._base + path, **kw)
-        if r.status_code >= 400:
-            raise LudusError(f"{method} {path} -> {r.status_code}: {r.text[:400]}")
-        try:
-            return r.json()
-        except Exception:
-            return r.text
+        # transient transport faults (ReadTimeout while Ludus is busy, a
+        # dropped connection mid-deploy) must not kill a 30-minute deploy —
+        # retry them; HTTP errors (LudusError) are final and never retried.
+        # Idempotent verbs get three attempts, POST only two.
+        attempts = 2 if method == "POST" else 3
+        for i in range(attempts):
+            try:
+                r = await self._client.request(method, self._base + path, **kw)
+            except httpx.TransportError:
+                if i + 1 < attempts:
+                    await asyncio.sleep(5 * (i + 1))
+                    continue
+                raise
+            if r.status_code >= 400:
+                raise LudusError(f"{method} {path} -> {r.status_code}: {r.text[:400]}")
+            try:
+                return r.json()
+            except Exception:
+                return r.text
+        raise AssertionError("unreachable")
 
     async def _try(self, method: str, *paths: str, **kw) -> Any:
         """Try candidate endpoints (API surface varies across Ludus versions)."""

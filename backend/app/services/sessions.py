@@ -37,6 +37,22 @@ from .engine import get_engine
 from .events import bus, ephemeral_clear, publish_session
 from .flags import new_seed, new_telemetry_token
 
+# pentest/tooling binaries the coach's KALI_TOOLS context reports on —
+# the inventory is probed live post-deploy, so template drift shows up
+# as facts instead of "command not found" surprises
+KALI_TOOL_PROBE = [
+    "nmap", "masscan", "netdiscover", "arp-scan",
+    "gobuster", "feroxbuster", "dirb", "ffuf", "nikto", "wpscan", "sqlmap",
+    "hydra", "john", "hashcat", "medusa",
+    "smbclient", "enum4linux-ng", "nbtscan", "rpcclient", "ldapsearch",
+    "ftp", "nc", "ncat", "socat", "telnet",
+    "ssh", "sshpass", "expect", "sshuttle", "chisel", "proxychains4",
+    "mysql", "mariadb", "psql", "redis-cli", "sqlite3",
+    "rdesktop", "xfreerdp3", "evil-winrm",
+    "curl", "wget", "jq", "python3", "msfconsole",
+    "tcpdump", "tshark", "aircrack-ng", "iw",
+]
+
 log = structlog.get_logger(__name__)
 
 _tasks: dict[int, asyncio.Task] = {}
@@ -239,7 +255,14 @@ async def _deploy(session_id: int) -> None:
                 await _finalize(db, engine, session, quest, st)
             except Exception as e:
                 await log.aexception("deploy failed", session_id=session_id)
-                await _set_state(db, session, SessionState.FAILED, error=str(e))
+                # str() of transport exceptions (httpx.ReadTimeout) is EMPTY —
+                # repr keeps the type name so the error field is never blank.
+                detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+                try:
+                    await _append_log(db, session, f"[pentrain] deploy failed: {detail}")
+                except Exception:
+                    pass
+                await _set_state(db, session, SessionState.FAILED, error=detail)
     finally:
         _tasks.pop(session_id, None)
 
@@ -304,6 +327,18 @@ async def _finalize(db: AsyncSession, engine, session: Session,
     if session.kali_vmid:
         await _configure_telemetry(db, engine, session, quest)
         await _pin_range_hosts(db, engine, session, quest)
+        # live tool inventory for the coach — stops "command not found"
+        # discoveries mid-run. Non-fatal: QGA may be late on slow boots.
+        try:
+            res = await engine.pve.agent_exec_sh(
+                session.kali_vmid,
+                "for t in " + " ".join(KALI_TOOL_PROBE) +
+                "; do command -v $t >/dev/null 2>&1 && echo $t; done",
+                timeout_s=15)
+            session.kali_tools = (res.get("out") or "").strip()
+            await db.commit()
+        except Exception:
+            pass
 
     # dynamic flags
     quest_flags = (await db.execute(
