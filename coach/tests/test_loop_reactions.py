@@ -387,10 +387,19 @@ async def test_flag_in_output_gets_submit_directive():
         proactive=True)
     assert "FLAG CAPTURED" in r1 and "pentrAIn{abc123def456}" in r1
     assert "submit_flag" in r1
+    # second sight → the coach submits it itself (the model's re-read loop
+    # showed the directive alone doesn't trigger the submit)
     _, r2 = await coach._dispatch(
         {"type": "exec_in_kali", "command": "ssh intern@t cat user.txt"},
         proactive=True)
-    assert "already captured 2x" in r2
+    assert "AUTO-SUBMITTED" in r2 and "correct" in r2
+    assert coach.client.flags == ["pentrAIn{abc123def456}"]
+    # never auto-submit a value twice — even after a rejection
+    coach._flags_submitted["pentrAIn{abc123def456}"] = False
+    _, r3 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat user.txt again"},
+        proactive=True)
+    assert "already attempted" in r3 and len(coach.client.flags) == 1
 
 
 async def test_unseen_flag_submit_is_challenged_once():

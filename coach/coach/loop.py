@@ -82,6 +82,7 @@ class SessionCoach:
         self._out_sigs: dict[str, int] = {}      # exec output signature → count
         self._read_counts: dict[str, int] = {}   # file path → read-type execs
         self._flags_seen: dict[str, int] = {}    # flag value → times shown
+        self._flags_submitted: dict[str, bool] = {}  # flag → accepted
         self._submit_challenged: dict[str, int] = {}  # unverified submits
 
     # ---------- lifecycle ----------
@@ -722,16 +723,22 @@ class SessionCoach:
 
     # ---------- action dispatch ----------
 
-    def _scan_flags(self, out: str) -> str:
+    _FLAG_PLACEHOLDER_RE = re.compile(
+        r"^pentrAIn\{(?:\.{2,}|x{3,}|example|flag|your[-_ ]?flag.*|"
+        r"flag[-_ ]?here|<.*>)\}$", re.I)
+
+    async def _scan_flags(self, out: str) -> str:
         """flag-on-sight: a pentrAIn{...} in tool output IS the flag —
         per-session values make guessing impossible, so the only correct
-        move is submit_flag NOW. The model otherwise re-reads the same
-        output 4x to 'confirm' it (seen live: 3 identical ssh re-reads
-        after the flag was already on screen). Returns the directive to
-        append to the tool result and remembers seen values so invented
-        submits can be challenged."""
+        move is submit_flag NOW. First sight gets a directive; the SECOND
+        sight means the model is re-reading instead of submitting (seen
+        live: 5 identical flag re-reads), so we submit it ourselves —
+        real flags are correct anyway, wrong submits are already counted
+        by the backend either way."""
         note = ""
         for fv in set(re.findall(r"pentrAIn\{[^}\s]+\}", out or "")):
+            if self._FLAG_PLACEHOLDER_RE.match(fv):
+                continue
             n = self._flags_seen.get(fv, 0) + 1
             self._flags_seen[fv] = n
             if n == 1:
@@ -739,10 +746,31 @@ class SessionCoach:
                          f"it NOW (flag values are per-session; a wrong "
                          f"submit is impossible). Do not re-run commands "
                          f"to re-confirm it.")
+            elif fv not in self._flags_submitted:
+                try:
+                    r = await self.client.submit_flag(self.sid, fv)
+                except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                    r = {"error": f"transport {type(e).__name__}"}
+                ok = bool(r.get("correct"))
+                self._flags_submitted[fv] = ok
+                if ok:
+                    verdict = "correct — flag solved"
+                    if r.get("all_solved"):
+                        verdict += "; all_solved — quest complete"
+                else:
+                    verdict = f"rejected ({r.get('error') or 'wrong value'})"
+                note += (f"\nAUTO-SUBMITTED {fv} → {verdict}. It appeared "
+                         f"{n}x in output — re-reading is pure waste, move "
+                         f"on to the NEXT objective.")
+                await self.client.send_chat(
+                    self.sid,
+                    f"Auto-submitted flag `{fv}` (seen {n}x) → **{verdict}**",
+                    kind="action_report", meta=self._draft_meta())
             else:
-                note += (f"\n{fv} again — already captured {n}x. If it is "
-                         f"not submitted yet, call submit_flag NOW; "
-                         f"further re-reads are pure waste.")
+                prev = ("accepted" if self._flags_submitted.get(fv)
+                        else "rejected")
+                note += (f"\n{fv} — submission already attempted ({prev}); "
+                         f"stop re-reading it and move on.")
         return note
 
     async def _dispatch(self, a: dict, *, proactive: bool = False) -> tuple[bool, str]:
@@ -916,7 +944,7 @@ class SessionCoach:
                             r"\b(?:python3?|bash|sh|perl|ruby|node)\s+(/?\S+)", cmd)
                         if rm:
                             self._run_exits[rm.group(1)] = code
-                    result += self._scan_flags(out)
+                    result += await self._scan_flags(out)
                     if typed and code == 0 and out.strip():
                         # output-signature dedup: re-reads/re-greps of the same
                         # data return byte-identical output — the command-text
@@ -960,7 +988,7 @@ class SessionCoach:
                         f"({type(e).__name__}) — the input may still have "
                         f"reached the pane; probe before re-typing")
                 out = res.get("out") or res.get("error") or res.get("err") or ""
-                result = (out[:1900] or "input sent") + self._scan_flags(out)
+                result = (out[:1900] or "input sent") + await self._scan_flags(out)
                 # keep the interactive fast-path alive while the pane is
                 # still held (inside an ssh/ftp/vim session remote commands
                 # must ALL go through type_in_pane — at LLM cadence, not
@@ -1003,6 +1031,7 @@ class SessionCoach:
                         f"(Submitting the same value again confirms it.)")
                 await self.client.send_activity(self.sid, "submitting flag…")
                 res = await self.client.submit_flag(self.sid, val)
+                self._flags_submitted[val] = bool(res.get("correct"))
                 verdict = ("correct — flag solved" if res.get("correct")
                            else f"rejected ({res.get('error') or 'wrong value'})")
                 result = f"submit {val[:80]} → {verdict}"

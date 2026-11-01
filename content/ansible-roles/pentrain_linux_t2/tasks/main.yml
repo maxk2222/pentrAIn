@@ -32,7 +32,6 @@
       2. restore /srv/backup with rsync
       3. check cron status: sudo -l  (ops can run find as root for file checks)
     mode: "0644"
-    mtime: preserve
 
 # anonymous ftp mirrors the draft into the lan — the pre-auth leak the
 # quest needs (ftp anonymous@<host>, get restore-notes.txt)
