@@ -8,6 +8,18 @@ Two prompts:
 from __future__ import annotations
 
 import time
+from pathlib import Path
+
+# curated environment knowledge (tool inventory, shell quirks, recipes) —
+# loaded once into the system prompt so it stays in the cacheable prefix.
+# Versioned with the coach, updated from live-test lessons.
+def _knowledge() -> str:
+    try:
+        p = Path(__file__).parent / "knowledge" / "kali-environment.md"
+        return p.read_text(encoding="utf-8")[:6000]
+    except OSError:
+        return ""
+
 
 SYSTEM_BASE = """\
 You are pentrAIn — an adaptive penetration-testing coach embedded beside the \
@@ -131,7 +143,8 @@ SYSTEM = SYSTEM_BASE + FORMAT_JSON
 
 
 def system_prompt(tools_active: bool) -> str:
-    return SYSTEM_BASE + (FORMAT_TOOLS if tools_active else FORMAT_JSON)
+    return SYSTEM_BASE + (FORMAT_TOOLS if tools_active else FORMAT_JSON) + (
+        "\n\n" + _knowledge() if _knowledge() else "")
 
 
 def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
@@ -151,6 +164,18 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
           if q.get("scope") else []),
         f"BRIEF: {q.get('briefing', '')[:1200]}",
         f"COACH_NOTES: {q.get('coach_context', '')[:800]}",
+        # reference cards: tool syntax + methodology for THIS track/quest —
+        # authored spoiler-free for trainees, doubles as the coach's
+        # knowledge base (stops smbclient-interactive and --ssl-mode drift)
+        *([f"TRACK_REFERENCE:\n{q['track_cheatsheet'][:1500]}"]
+          if q.get("track_cheatsheet") else []),
+        *([f"QUEST_REFERENCE:\n{q['cheatsheet'][:1500]}"]
+          if q.get("cheatsheet") else []),
+        # live tool inventory probed post-deploy — absent = NOT installed,
+        # don't waste turns discovering it
+        *([f"KALI_TOOLS (probed at deploy — anything missing is NOT installed): "
+           f"{ctx['session_tools'].replace(chr(10), ' ')}"]
+          if ctx.get("session_tools") else []),
         f"TRAINEE_LEVEL(track): {level}",
         f"TRIGGER: {reason} (urgency={urgency}, escalation_stage={min(2, stage)})",
         f"FLAGS: {[(f['key'], f.get('name', ''), f['solved']) for f in ctx['flags']]}",
@@ -199,7 +224,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "needs an interactive remote program. After planting an async "
             "trigger (cron/wildcard), poll its output file with the SAME "
             "tool until the result appears — do NOT wander to a different "
-            "attack before checking whether it fired.")
+            "attack before checking whether it fired. Bound every command "
+            "that could hang — `curl --max-time 20`, `nmap -T4 --max-retries "
+            "2`, `nc -w 5` — an unbounded one wedges the pane and burns "
+            "turns on a C-c.")
         if s.get("subagents_enabled"):
             parts.append(
                 "SUBAGENTS: enabled — delegate INDEPENDENT subtasks to "

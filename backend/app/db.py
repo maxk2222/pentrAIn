@@ -79,7 +79,8 @@ def _additive_columns(conn) -> None:
         "attempts": {"assistance": "JSON NOT NULL DEFAULT '{}'"},
         "sessions": {"kali_internet": "INTEGER NOT NULL DEFAULT 0",
                      "kali_wan_ip": "TEXT",
-                     "subagents_enabled": "INTEGER NOT NULL DEFAULT 0"},
+                     "subagents_enabled": "INTEGER NOT NULL DEFAULT 0",
+                     "kali_tools": "TEXT NOT NULL DEFAULT ''"},
     }
     existing_tables = set(inspect(conn).get_table_names())
     for table, cols in wanted.items():

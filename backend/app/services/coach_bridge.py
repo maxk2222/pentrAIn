@@ -27,6 +27,7 @@ from ..models.domain import (
     Session,
     SessionState,
     TelemetryEvent,
+    Track,
     UserProfile,
 )
 from .engine import get_engine
@@ -51,6 +52,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
     if not session:
         return {}
     quest = await db.get(Quest, session.quest_id)
+    track = await db.get(Track, quest.track_slug) if quest else None
     flags = (await db.execute(select(Flag).where(Flag.quest_id == session.quest_id))).scalars().all()
     solved = {
         r.flag_key for r in (await db.execute(
@@ -151,7 +153,13 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             # home-lab mode: authorized LAN scope + mode marker for prompts
             "scope": scope,
             "mode": "lan-assessment" if scope else None,
+            # reference cards — tool syntax + methodology the model otherwise
+            # has to recall (and gets wrong: --ssl-mode on mariadb, interactive
+            # smbclient instead of -c)
+            "cheatsheet": quest.cheatsheet_md or "",
+            "track_cheatsheet": (track.cheatsheet_md if track else ""),
         },
+        "session_tools": session.kali_tools or "",
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
                    "solved": f.key in solved} for f in flags],
         "checkpoints_hit": sorted(checkpoints),

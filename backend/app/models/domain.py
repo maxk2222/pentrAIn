@@ -118,6 +118,7 @@ class Session(Base):
     coach_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     kali_internet: Mapped[bool] = mapped_column(Boolean, default=False)  # net1→wan bridge attached
     kali_wan_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)  # LAN lease on net1 — scope auto-detect
+    kali_tools: Mapped[str] = mapped_column(Text, default="")  # live `command -v` probe results
     # L4 parallel worker agents (spawn_agent → tmux windows w1..w3)
     subagents_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
