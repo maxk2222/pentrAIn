@@ -567,7 +567,7 @@ async def _configure_telemetry(db: AsyncSession, engine, session: Session,
     the agents. HOST= names the box so the backend can tell kali-side commands
     from commands typed inside a target SSH session."""
     api_url = await settings_svc.get_setting(db, "platform.api_url", "http://pentrain-app:8000")
-    boxes = [("kali", session.kali_vmid)] + _linux_target_vmids(session, quest)
+    boxes = [("kali", session.kali_vmid), *_linux_target_vmids(session, quest)]
     for host, vmid in boxes:
         if not vmid:
             continue
@@ -587,7 +587,7 @@ async def _pin_range_hosts(db: AsyncSession, engine, session: Session,
     script = _range_hosts_script(quest)
     if not script:
         return
-    boxes = [("kali", session.kali_vmid)] + _linux_target_vmids(session, quest)
+    boxes = [("kali", session.kali_vmid), *_linux_target_vmids(session, quest)]
     for host, vmid in boxes:
         if not vmid:
             continue

@@ -244,7 +244,7 @@ async def test_l4_stall_gets_one_corrective_return():
             SeqLlm.seq += 1
             return {"content": "", "actions": acts, "tool_calls": [],
                     "raw": {"usage": {"total_tokens": 10}}}
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     coach.llm = SeqLlm()
@@ -281,7 +281,7 @@ async def test_l4_busy_pane_gets_interactive_return():
             # password accepted but the pane stays inside ssh — still busy
             return {"out": "student@target01:~$ ", "visible": True,
                     "busy": True}
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.client = BusyClient()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
@@ -300,7 +300,7 @@ async def test_l4_busy_pane_gets_interactive_return():
 async def test_type_in_pane_clears_interactive_when_shell_returns():
     """The fast-path must end when our input returns the pane to a local
     shell — otherwise every reflect tick burns follow-up turns forever."""
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     coach._pane_interactive = True
@@ -308,7 +308,7 @@ async def test_type_in_pane_clears_interactive_when_shell_returns():
         async def type_in_pane(self, sid, text):
             return {"out": "root@kali:~# ", "visible": True, "busy": False}
     coach.client = ShellClient()
-    did, res = await coach._dispatch(
+    did, _res = await coach._dispatch(
         {"type": "type_in_pane", "text": "exit"}, proactive=True)
     assert did and coach._pane_interactive is False
 
@@ -342,7 +342,7 @@ async def test_repeat_output_gets_settled_note():
         async def exec_in_kali(self, sid, command):
             return {"out": "21/tcp open  ftp\n22/tcp open  ssh",
                     "exitcode": 0, "visible": True}
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.client = SameClient()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
@@ -356,7 +356,7 @@ async def test_repeat_output_gets_settled_note():
     assert "identical" in r2 and "DIFFERENT action" in r2
     # the soft note is a hint — the 4th read of the SAME path is denied
     # outright (the model 'perfected' re-greps live instead of acting)
-    _, r3 = await coach._dispatch(
+    _, _r3 = await coach._dispatch(
         {"type": "exec_in_kali", "command": "grep -i open /tmp/nmap.txt"},
         proactive=True)
     did, r4 = await coach._dispatch(
@@ -364,7 +364,7 @@ async def test_repeat_output_gets_settled_note():
         proactive=True)
     assert not did and "denied" in r4 and "ALREADY_DONE" in r4
     # a different path still reads fine
-    did, r5 = await coach._dispatch(
+    did, _r5 = await coach._dispatch(
         {"type": "exec_in_kali", "command": "cat /etc/passwd"},
         proactive=True)
     assert did
@@ -378,7 +378,7 @@ async def test_flag_in_output_gets_submit_directive():
         async def exec_in_kali(self, sid, command):
             return {"out": "intern\npentrAIn{abc123def456}", "exitcode": 0,
                     "visible": True}
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.client = FlagClient()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
@@ -413,12 +413,12 @@ async def test_unseen_flag_submit_is_challenged_once():
     did, r1 = await coach._dispatch(
         {"type": "submit_flag", "value": "pentrAIn{invented}"}, proactive=True)
     assert not did and "unverified" in r1 and not c.flags
-    did, r2 = await coach._dispatch(
+    did, _r2 = await coach._dispatch(
         {"type": "submit_flag", "value": "pentrAIn{invented}"}, proactive=True)
     assert did and c.flags == ["pentrAIn{invented}"]
     # a flag that WAS seen in output submits without challenge
     coach._flags_seen["pentrAIn{real}"] = 1
-    did, r3 = await coach._dispatch(
+    did, _r3 = await coach._dispatch(
         {"type": "submit_flag", "value": "pentrAIn{real}"}, proactive=True)
     assert did and c.flags[-1] == "pentrAIn{real}"
 
@@ -861,7 +861,7 @@ def test_written_files_detects_heredoc_and_filters():
 
 async def test_rewrite_same_path_appends_directive():
     """Second write to the same path → tool result carries a RUN directive."""
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     cmd = "cat > /root/solve.py << 'EOF'\nimport x\nEOF"
     _v1, r1 = await coach._dispatch({"type": "exec_in_kali", "command": cmd})
@@ -924,8 +924,9 @@ async def test_context_operator_directive_at_l4():
     """User chat at L4 must surface as OPERATOR_DIRECTIVE in the takeover
     context — session 30 showed the model ignoring operator nudges for ~7
     turns because they only existed as role=user history entries."""
-    from coach.prompts import build_context_msg
     import time
+
+    from coach.prompts import build_context_msg
     coach, _ = _coach()
     coach.ctx["session"]["autonomy_level"] = 4
     st = coach.state
@@ -966,7 +967,7 @@ async def test_inturn_chain_feeds_tool_results_back():
     """A tool_call's result must go straight back into the SAME turn — the
     next llm.chat sees the exec output instead of waiting ~90s for the
     next reflect tick."""
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     coach.llm = ScriptLlm([
@@ -992,7 +993,7 @@ async def test_inturn_chain_feeds_tool_results_back():
 async def test_chain_stops_on_no_work_calls():
     """send_chat/none-only responses end the chain — the model decided to
     talk, not to act; forcing another call would burn tokens for prose."""
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     coach.llm = ScriptLlm([
@@ -1005,7 +1006,7 @@ async def test_chain_stops_on_no_work_calls():
 
 
 async def test_chain_respects_chain_max():
-    coach, c = _coach({"coach": {"takeover_chain_max": 3}, "llm": {}})
+    coach, _c = _coach({"coach": {"takeover_chain_max": 3}, "llm": {}})
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     exec_resp = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
@@ -1019,7 +1020,7 @@ async def test_chain_respects_chain_max():
 async def test_chain_preempted_by_pending_chat():
     """A buffered trainee message must release the llm lock after the
     current sub-call — chat answers can't queue behind a 12-call chain."""
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
     exec_resp = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],

@@ -310,7 +310,7 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
                             {"out": out[-600:]}, status="ok")
         if session_id:
             await publish_session(session_id, "coach_activity", {
-                "active": True, "text": f"typing input in the pane",
+                "active": True, "text": "typing input in the pane",
                 "output": out[-1500:]}, sticky=True)
         return {"out": out, "visible": True, "exitcode": None,
                 "current_command": cur, "busy": busy}

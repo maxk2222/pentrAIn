@@ -807,7 +807,7 @@ class SessionCoach:
 
     _FLAG_PLACEHOLDER_RE = re.compile(
         r"^pentrAIn\{(?:\.{2,}|x{3,}|example|flag|your[-_ ]?flag.*|"
-        r"flag[-_ ]?here|<.*>)\}$", re.I)
+        r"flag[-_ ]?here|<.*>)\}$", re.IGNORECASE)
 
     async def _scan_flags(self, out: str) -> str:
         """flag-on-sight: a pentrAIn{...} in tool output IS the flag —
@@ -831,7 +831,7 @@ class SessionCoach:
             elif fv not in self._flags_submitted:
                 try:
                     r = await self.client.submit_flag(self.sid, fv)
-                except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                except (TimeoutError, httpx.HTTPError) as e:
                     r = {"error": f"transport {type(e).__name__}"}
                 ok = bool(r.get("correct"))
                 self._flags_submitted[fv] = ok
@@ -966,7 +966,7 @@ class SessionCoach:
                         self.sid, f"typing `{cmd[:110]}` in Kali")
                     try:
                         res = await self.client.exec_in_kali(self.sid, cmd)
-                    except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                    except (TimeoutError, httpx.HTTPError) as e:
                         # backend/qga hiccup — surface as a tool RESULT so the
                         # model can check/retry next turn instead of the whole
                         # turn dying on an unhandled transport error
@@ -1064,7 +1064,7 @@ class SessionCoach:
                            or a.get("content") or "")
                 try:
                     res = await self.client.type_in_pane(self.sid, text_in)
-                except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                except (TimeoutError, httpx.HTTPError) as e:
                     return spoke, (
                         f"error: type transport failed "
                         f"({type(e).__name__}) — the input may still have "

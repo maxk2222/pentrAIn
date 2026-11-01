@@ -298,7 +298,7 @@ async def test_ludus_deploy_recreates_missing_range():
         if path.endswith("/testing/stop"):
             return httpx.Response(200, json={})
         if path.endswith("/ranges/create"):
-            body = httpx.QueryParams() or None
+            httpx.QueryParams()  # parse check — body unused
             return httpx.Response(200, json={"rangeID": "quest-x"})
         if path.endswith("/user/default-range"):
             return httpx.Response(200, json={})
@@ -353,6 +353,6 @@ async def test_ludus_deploy_range_409_ok_when_range_exists():
                       _pve(lambda r: httpx.Response(404)))
     p._client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://ludus:8080/api/v2")
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         # PUT /range/config retry still 404s → error surfaces (not swallowed)
         await p.deploy_range("quest-y", {"ludus": []})

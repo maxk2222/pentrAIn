@@ -219,8 +219,9 @@ class _TmuxPve:
 async def test_visible_exec_batched_guest_calls():
     """One exec_in_kali used to cost ~12 sequential QGA calls; the batched
     probe/send design must stay near ~4 so chained turns run at LLM pace."""
-    from app.services.coach_bridge import exec_visible_in_kali
     from types import SimpleNamespace
+
+    from app.services.coach_bridge import exec_visible_in_kali
     pve = _TmuxPve()
     engine = SimpleNamespace(pve=pve)
     res = await exec_visible_in_kali(engine, 100, "id", timeout_s=10)
@@ -235,6 +236,7 @@ async def test_type_in_pane_batched_guest_calls(db):
     """type_in_pane used 4 guest calls + a 1.2s blind wait; batched it must
     be 2 calls with a short settle."""
     from types import SimpleNamespace
+
     from app.services import coach_bridge
     s = Session(quest_id="q", state="ready", kali_vmid=100)
     s.autonomy_level = 4
