@@ -158,10 +158,11 @@ regeneration: [ops.md — wireless labs](ops.md#wireless-hwsim-labs).
 > read-only probes, and a shared action budget — but the ROE is on you:
 > only devices you own, no DoS, no aggressive brute force.
 
-### 👑 Capstone — `capstone` (1)
+### 👑 Capstone — `capstone` (2)
 
 | Quest | Tier | Focus |
 |---|---|---|
+| Nordmarkt Feinkost | 2 | Single-box engagement: web enum → backup leak → foothold → internal API cmd-injection → DB LOAD_FILE → cron privesc → written report |
 | Nordwind Logistics | 3 | Full engagement: recon → source leak → foothold → two pivots → API compromise → DB creds → hash crack → privesc → written report |
 
 > [!NOTE]

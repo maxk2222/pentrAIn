@@ -1,0 +1,6 @@
+#!/bin/sh
+# legacy order exporter — prints canned CSV; the API wraps it in a shell call.
+echo "order_id,item,qty,total"
+echo "1001,feinkost-box-altes-land,2,59.80"
+echo "1002,sommertracht-honig-500g,6,45.00"
+echo "1003,holunder-sirup-05l,3,20.70"

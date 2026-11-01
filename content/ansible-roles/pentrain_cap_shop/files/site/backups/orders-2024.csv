@@ -1,0 +1,9 @@
+order_id,date,customer,item,qty,total
+1001,2024-03-12,hofladen-muehlenweg,feinkost-box-altes-land,2,59.80
+1002,2024-03-19,bistro-an-der-au,sommertracht-honig-500g,6,45.00
+1003,2024-04-02,cafe-deichblick,holunder-sirup-05l,3,20.70
+1004,2024-04-18,hofladen-muehlenweg,feinkost-box-altes-land,4,119.60
+1005,2024-05-03,marktkiosk-sued,kaeseplatte-raucheredition,5,64.50
+1006,2024-05-21,bistro-an-der-au,sommertracht-honig-500g,12,90.00
+1007,2024-06-09,cafe-deichblick,feinkost-box-altes-land,1,29.90
+1008,2024-06-27,wohltat-catering,holunder-sirup-05l,24,165.60

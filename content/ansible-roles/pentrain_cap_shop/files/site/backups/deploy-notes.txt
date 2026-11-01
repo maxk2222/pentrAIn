@@ -1,0 +1,9 @@
+deploy notes — shop01 (kirsten)
+
+- shop site is dockerized now — nginx serves :80 straight out of
+  /opt/shop/site. don't hand-edit the container, edit the tree on the host.
+- DO NOT remove /backups/ until marketing pulls the last import —
+  the deploy tarball in there still holds the current config.env.
+- cron backup: /opt/shop/backup.sh — still on the 2-min staging schedule
+  on prod too. don't "fix" the schedule without asking me first.
+- api token + ssh creds rotate after go-live. it's on the list. probably.

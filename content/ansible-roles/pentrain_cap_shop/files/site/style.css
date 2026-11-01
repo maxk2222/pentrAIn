@@ -1,0 +1,41 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #f7f4ee;
+  color: #2e2a24;
+}
+header {
+  background: #3d5a3f;
+  color: #f7f4ee;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+header h1 { margin: 0 0 .4rem; font-size: 2rem; }
+.tagline { margin: 0; opacity: .85; }
+main { max-width: 720px; margin: 2.5rem auto; padding: 0 1rem; }
+.products {
+  display: grid;
+  gap: 1rem;
+}
+article {
+  background: #fff;
+  border: 1px solid #e3dccf;
+  border-radius: 8px;
+  padding: 1.1rem 1.25rem;
+}
+article h2 { margin: 0 0 .35rem; font-size: 1.15rem; color: #3d5a3f; }
+article strong { color: #7a4e1d; }
+.note {
+  margin-top: 2rem;
+  font-size: .9rem;
+  color: #6f675a;
+  border-top: 1px dashed #cfc5b0;
+  padding-top: 1rem;
+}
+footer {
+  text-align: center;
+  padding: 1.5rem 1rem 2.5rem;
+  font-size: .8rem;
+  color: #8a8172;
+}
