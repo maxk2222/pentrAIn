@@ -135,3 +135,18 @@ def test_hidden_form_inputs_become_findings():
     # name-first ordering also parses
     d2 = parse_output("curl x", "<input name='csrf' value='abc' type=\"hidden\">")
     assert any(f.startswith("form:csrf=") for f in d2["findings"])
+
+
+def test_env_secrets_and_endpoints_become_facts():
+    from coach.percept import parse_output
+    out = ("DEPLOY_USER=deploy\nDEPLOY_PASS=Nordm#arkt!25\n"
+           "API_TOKEN=nm-api-9f3d77c1\nAPI_URL=http://172.18.0.4:9000\n"
+           "HOME=/root\nPATH=/usr/bin:/bin")
+    d = parse_output("cat config.env", out)
+    pairs = {(c["user"], c["secret"]) for c in d["creds"]}
+    assert ("API_TOKEN", "nm-api-9f3d77c1") in pairs
+    assert ("DEPLOY_PASS", "Nordm#arkt!25") in pairs
+    assert not any(c["user"] in ("HOME", "PATH") for c in d["creds"])
+    assert any("endpoint:API_URL=http://172.18.0.4:9000" == f
+               for f in d["findings"])
+    assert "172.18.0.4" in d["ips"]

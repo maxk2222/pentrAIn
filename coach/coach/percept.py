@@ -60,6 +60,18 @@ _GETENT = re.compile(
 # enum4linux / rpcclient user dumps: "user: svc-backup"
 _ENUM_USER = re.compile(r"^(?:user|account|sid-user)[:=]\s*([\w.\\-]{1,48})\s*$",
                         re.IGNORECASE)
+# env/config-style secrets — `API_TOKEN=x`, `DEPLOY_PASS=y`, `DB_PASSWORD=z`.
+# Looted config.env/dotenv backups are the canonical capstone foothold and
+# the generic user/pass pair misses them (no "user" keyword nearby).
+_ENV_SECRET = re.compile(
+    r"\b([A-Z][A-Z0-9_]{1,38}(?:TOKEN|PASS|PASSWORD|SECRET|APIKEY|API_KEY|"
+    r"AUTH|CRED)[A-Z0-9_]*)\s*=\s*['\"]?([^\s'\";}]{3,80})")
+# env-style endpoint assignments — `API_URL=http://172.17.0.4:9000` etc.
+# The bare IP already lands in ips; the finding carries WHICH service the
+# internal URL belongs to so it reads as a lead, not noise.
+_ENV_URL = re.compile(
+    r"\b([A-Z][A-Z0-9_]{1,38}(?:URL|URI|ENDPOINT)[A-Z0-9_]*)\s*=\s*['\"]?"
+    r"((?:https?|ftp|socks[45])://[^\s'\";}]+)")
 
 
 def _p_nmap(out: str, d: dict) -> None:
@@ -110,6 +122,15 @@ def _p_generic(out: str, d: dict) -> None:
         if nm and len(d["findings"]) < 8:
             d["findings"].append(
                 f"form:{nm.group(1)}={(vm.group(1) if vm else '')[:64]}")
+    # env/config secrets & internal endpoints — the lead the model must
+    # chase (capstone s46: API_TOKEN+API_URL sat in config.env unseen for
+    # 30min while docker/nginx dead ends burned turns)
+    for m in _ENV_SECRET.finditer(out):
+        d["creds"].append({"user": m.group(1), "secret": m.group(2),
+                           "host": None})
+    for m in _ENV_URL.finditer(out):
+        if len(d["findings"]) < 8:
+            d["findings"].append(f"endpoint:{m.group(1)}={m.group(2)[:80]}")
 
 
 _HIDDEN_TAG = re.compile(
