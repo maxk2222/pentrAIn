@@ -30,8 +30,22 @@ class TrajLog:
     def record(self, **kw) -> None:
         kw.setdefault("ts", round(time.time(), 2))
         with contextlib.suppress(Exception):  # logging must never break a turn
-            self._fh.write(json.dumps(kw, ensure_ascii=False,
-                                      default=str)[:8000] + "\n")
+            line = json.dumps(kw, ensure_ascii=False, default=str)
+            if len(line) > 12000:
+                # oversized record (huge action list) — shrink, keep it valid:
+                # drop middle actions, keep head+tail, never slice mid-JSON
+                acts = kw.get("actions")
+                if isinstance(acts, list) and len(acts) > 8:
+                    kw["actions"] = acts[:4] + [{"t": "…", "arg": "",
+                                                "res": f"{len(acts) - 6} "
+                                                "actions elided",
+                                                "denied": False}] + acts[-2:]
+                    line = json.dumps(kw, ensure_ascii=False, default=str)
+                if len(line) > 16000:
+                    line = json.dumps({"kind": "oversized",
+                                       "bytes": len(line),
+                                       "ts": kw.get("ts")})
+            self._fh.write(line + "\n")
 
     def close(self) -> None:
         with contextlib.suppress(Exception):

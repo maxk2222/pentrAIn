@@ -246,7 +246,7 @@ class SessionCoach:
         for c in self.state.commands:
             if c.from_coach and c.command in covered:
                 continue
-            self.facts.observe_command(c.command, from_coach=c.from_coach)
+            self.facts.observe_command(c.command)
             if c.exit_code is not None:
                 self.facts.mark_run_exit(c.exit_code)
         # exec/type outputs (backend keeps them in CoachAction.result) add
@@ -1030,9 +1030,13 @@ class SessionCoach:
                               args=args, reason=result[7:].strip()[:300])
             report = getattr(self.client, "log_denial", None)
             if report:
-                asyncio.create_task(report(
-                    self.sid, str(a.get("type") or "?"), args,
-                    result[7:].strip()))
+                async def _audit() -> None:
+                    try:
+                        await report(self.sid, str(a.get("type") or "?"),
+                                     args, result[7:].strip())
+                    except Exception as e:   # audit must never break a turn
+                        await log.adebug("denial audit failed", error=str(e))
+                asyncio.create_task(_audit())
         return spoke, result
 
     async def _dispatch_inner(self, a: dict, *, proactive: bool = False,
@@ -1349,7 +1353,7 @@ class SessionCoach:
                         and not self._submit_challenged.get(val)):
                     self._submit_challenged[val] = 1
                     return spoke, (
-                        f"unverified: `{val[:80]}` never appeared in any "
+                        f"denied: unverified `{val[:80]}` never appeared in any "
                         f"exec/type output this session — invented flags can "
                         f"never match (values are per-session) and wrong "
                         f"submits count. Re-read the file/output where the "
@@ -1509,10 +1513,11 @@ class SessionCoach:
                     f"{int(time.monotonic() - w.started)}s) — task: "
                     f"\"{w.task[:80]}\"")
         merged = ""
-        if w.report and status == "done":
+        if w.report:
             # structured report → shared facts (knowledge-graph merge):
             # JSON first; a prose report still yields creds/hosts via the
-            # generic parser instead of rotting as context text
+            # generic parser instead of rotting as context text. Done AND
+            # killed/error reports both merge — partial results are facts too
             parsed = percept.parse_worker_report(w.report)
             if parsed:
                 n = self.facts.apply_worker_report(wid, parsed)

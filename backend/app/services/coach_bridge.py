@@ -663,7 +663,9 @@ async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
         status_counts[a.status] = status_counts.get(a.status, 0) + 1
         if a.status == "denied":
             reason = str((a.result or {}).get("reason")
-                         or (a.result or {}).get("error") or "?")[:120]
+                         or (a.result or {}).get("error")
+                         or ("guardrail" if (a.result or {}).get("denied")
+                             else "?"))[:120]
             deny_reasons[reason] = deny_reasons.get(reason, 0) + 1
         if a.tool == "exec_in_kali":
             if a.status == "ok":

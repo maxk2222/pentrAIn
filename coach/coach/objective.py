@@ -58,7 +58,8 @@ def next_objective(ctx: dict, facts, st) -> tuple[str, str]:
     targets = (ctx.get("quest") or {}).get("targets") or []
     for c in f.untested_creds():
         h = targets[0] if targets else {}
-        where = h.get("name") or (h.get("ip") or "?").split("/")[0]
+        where = (h.get("name") or (h.get("ip") or "").split("/")[0]
+                 or next(iter(f.hosts), "the first host you see"))
         return ("access", (f"try cred `{c.user}/{c.secret}` (from "
                           f"{c.source or 'output'}) on {where} — ssh, smb "
                           "or the service it's for"))
@@ -90,7 +91,7 @@ def next_objective(ctx: dict, facts, st) -> tuple[str, str]:
             svcs = "/".join(sorted({s.split()[0] for s in
                                     h.ports.values()})[:3])
             return ("foothold", (f"attack {svcs or 'services'} on "
-                                f"{h.label() or h.ip} — no validated cred "
+                                f"{h.label()} — no validated cred "
                                 "yet"))
         # access exists → grind toward the next open flag
         keys = ", ".join(x.get("key") or "?" for x in _open_flags(ctx)[:3])

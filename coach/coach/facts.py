@@ -81,7 +81,6 @@ class HostFact:
     names: set[str] = field(default_factory=set)
     ports: dict[int, str] = field(default_factory=dict)
     scans: int = 0            # recon commands aimed at this host
-    note: str = ""            # worker findings land here
 
     def label(self) -> str:
         name = min(self.names) if self.names else ""
@@ -190,7 +189,7 @@ class FactsDB:
 
     # ---------- observation paths ----------
 
-    def observe_command(self, cmd: str, *, from_coach: bool = False) -> None:
+    def observe_command(self, cmd: str) -> None:
         """Telemetry command — no output visible. Books write/run attempts as
         pending; mark_run_exit() confirms them when command_result lands."""
         if not cmd:
@@ -331,19 +330,6 @@ class FactsDB:
                 out.append(name)
         return out
 
-    def phase(self, flags_open: int) -> str:
-        """Coarse kill-chain position from facts alone."""
-        if self.creds and any(c.valid_on for c in self.creds):
-            base = "access"
-        elif any(h.ports for h in self.hosts.values()):
-            base = "foothold"
-        elif any(h.scans for h in self.hosts.values()):
-            base = "recon"
-        else:
-            base = "recon"
-        return "objectives" if flags_open == 0 else f"{base}→objectives" \
-            if base == "access" else base
-
     # ---------- render ----------
 
     def render(self, max_chars: int = 1100, *, compact: bool = False) -> str:
@@ -391,11 +377,16 @@ class FactsDB:
         if self.flags:
             accepted = sum(1 for f in self.flags.values() if f.accepted)
             open_vals = [v for v, f in self.flags.items()
-                         if f.seen and not f.accepted]
+                         if f.seen and not f.submitted]
+            rejected = [v for v, f in self.flags.items()
+                        if f.submitted and not f.accepted]
             seg = f"{accepted} accepted" if accepted else ""
             if open_vals:
                 seg += ("; " if seg else "") + \
                     "unsubmitted: " + ", ".join(open_vals[:3])
+            if rejected:
+                seg += ("; " if seg else "") + \
+                    "rejected: " + ", ".join(rejected[:3])
             lines.append("  flags: " + (seg or "seen only"))
         if self.findings and not compact:
             lines.append("  noted: " + " | ".join(self.findings[-6:]))
