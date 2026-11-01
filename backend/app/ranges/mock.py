@@ -173,9 +173,12 @@ class MockPveClient:
         return f"UPID:mock:rollback:{vmid}:{name}"
 
     async def vm_start(self, vmid: int) -> str:
+        self.vms.setdefault(vmid, {"name": f"mock-vm-{vmid}"})["status"] = "running"
         return "UPID:mock:start"
 
     async def vm_stop(self, vmid: int) -> str:
+        if vmid in self.vms:
+            self.vms[vmid]["status"] = "stopped"
         return "UPID:mock:stop"
 
     async def task_status(self, upid: str) -> dict:

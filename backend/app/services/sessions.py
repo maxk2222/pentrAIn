@@ -367,6 +367,26 @@ async def _finalize(db: AsyncSession, engine, session: Session,
         _short(v.name): v.vmid for v in st.vms if v is not kali and v.vmid}
     await _append_log(db, session, f"[pentrain] range RUNNING — kali vmid={session.kali_vmid}")
 
+    # Ludus flips the range to RUNNING while VMs are still booting — every
+    # QGA step below (telemetry, hosts pin, tool probe, net1 hot-plug) needs
+    # the guest up first. Non-fatal: per-step guards still degrade on their own.
+    if session.kali_vmid and getattr(engine, "pve", None):
+        try:
+            pve = engine.pve
+            for _ in range(90):                       # ~3min for slow clones
+                st = (await pve.vm_status(session.kali_vmid)).get("status")
+                if st == "running":
+                    break
+                if st == "stopped":
+                    with contextlib.suppress(Exception):  # locked/starting → keep polling
+                        await pve.vm_start(session.kali_vmid)
+                await asyncio.sleep(2)
+            if not await pve.wait_agent(session.kali_vmid, 120):
+                await _append_log(db, session,
+                                  "[pentrain] kali guest agent slow — QGA steps may warn")
+        except Exception as e:
+            await _append_log(db, session, f"[pentrain] kali boot wait warn: {e!r}")
+
     # telemetry config + short-name resolution on kali and all linux targets
     if session.kali_vmid:
         await _configure_telemetry(db, engine, session, quest)

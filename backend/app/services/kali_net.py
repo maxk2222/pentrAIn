@@ -176,11 +176,16 @@ async def apply_kali_internet(engine, vmid: int, wan_bridge: str = "vmbr0",
     config = await pve.vm_config(vmid)
     if WAN_NET not in config:
         await pve.vm_config_set(vmid, **{WAN_NET: f"virtio,bridge={wan_bridge}"})
-        await asyncio.sleep(2.0)          # let udev settle the hot-plugged nic
-        config = await pve.vm_config(vmid)
+        for _ in range(10):               # hot-plug can lag a still-booting guest
+            await asyncio.sleep(2.0)
+            config = await pve.vm_config(vmid)
+            if WAN_NET in config:
+                break
+    pend = (config.get("pending") or {}).get(WAN_NET) or config.get(f"pending.{WAN_NET}")
     mac = _net_mac(config)
     if not mac:
-        raise RuntimeError(f"{WAN_NET} missing after attach")
+        raise RuntimeError(
+            f"{WAN_NET} attach {'landed in pending — template hotplug off, reboot needed' if pend else 'did not stick'}")
     # Long scripts as exec-args wedge the virtio QGA channel on this host —
     # write the script via guest-file-write, then exec a tiny command.
     await pve.agent_file_write(vmid, "/tmp/pentrain-netup.sh",
