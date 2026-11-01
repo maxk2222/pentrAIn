@@ -83,6 +83,15 @@ only perceived latency changes.
 - Persistent failure → check `engine.pve_*` creds; a **hard reset**
   allocates a new range/VMIDs if the VMID changed under you.
 
+### Terminal tab connects forever / "WebSocket failed"
+
+- `location /api/` in `frontend/nginx.conf` proxies **without** WS upgrade
+  headers — `/api/terminal/` has its own block for exactly that reason. If
+  the frontend container predates the feature, rebuild it:
+  `docker compose -f engine/docker-compose.yml up -d --build`.
+- Verify the route lives: `curl http://<app>/api/terminal/wants/<sid>?token=x`
+  → `{"chans":{}}` means the backend side is fine.
+
 ### Terminal tabs stay "waiting for kali agent"
 
 - The reverse channel lives in `pentrain-telemetried` on the Kali VM — if
