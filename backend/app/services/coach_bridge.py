@@ -113,7 +113,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                 CoachAction.session_id == session_id,
                 CoachAction.tool.in_(["exec_in_kali", "type_in_pane"]),
                 CoachAction.status.in_(["ok", "confirmed"]))
-            .order_by(CoachAction.id.desc()).limit(40))).all() if r[0] or r[1]]
+            .order_by(CoachAction.id.desc()).limit(160))).all() if r[0] or r[1]]
     profile = await db.get(UserProfile, 1)
     # home-lab LAN assessment: scope comes from the lan.scope_cidr setting,
     # falling back to the /24 of the WAN lease stored on the session. Only
