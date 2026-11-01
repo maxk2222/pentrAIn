@@ -150,3 +150,28 @@ def test_env_secrets_and_endpoints_become_facts():
     assert any("endpoint:API_URL=http://172.18.0.4:9000" == f
                for f in d["findings"])
     assert "172.18.0.4" in d["ips"]
+
+
+def test_denials_become_facts():
+    from coach.percept import parse_output
+    d = parse_output("sshpass -p 'x' ssh deploy@shop01 'sudo docker ps'",
+                     "deploy is not in the sudoers file.")
+    assert "denied:sudo@shop01" in d["denials"]
+    d = parse_output("docker ps", "permission denied while trying to "
+                     "connect to the Docker daemon socket")
+    assert "denied:docker@kali" in d["denials"]
+    d = parse_output(
+        "sshpass -p 'x' ssh deploy@shop01 'mysql -h 172.20.1.3 -u root -pY'",
+        "ERROR 1045 (28000): Access denied for user 'root'@'172.20.1.1'")
+    assert "denied:mysql-root@shop01" in d["denials"]
+    d = parse_output("ssh user@10.1.10.5",
+                     "Permission denied (publickey,password).")
+    assert "denied:ssh-auth@10.1.10.5" in d["denials"]
+
+
+def test_denials_skip_generic_permission_noise():
+    from coach.percept import parse_output
+    d = parse_output("find / -name flag 2>&1",
+                     "find: '/root': Permission denied\n"
+                     "find: '/proc/1': Permission denied")
+    assert d["denials"] == []

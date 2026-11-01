@@ -65,6 +65,25 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         r.checkpoint_id for r in (await db.execute(
             select(QuestCheckpoint).where(QuestCheckpoint.session_id == session_id))).scalars().all()
     }
+    # submit outcomes — replayed into FactsDB on coach attach so a restart
+    # can't resurrect already-accepted (or already-rejected) flag values
+    flag_submits = [
+        {"value": r.value, "correct": bool(r.correct)}
+        for r in (await db.execute(
+            select(FlagSubmission.value, FlagSubmission.correct).where(
+                FlagSubmission.session_id == session_id))).all()]
+    # finished worker reports (meta.agent tagged) — a coach restart drops
+    # the roster entirely; replaying the reports merges their findings back
+    worker_reports = [
+        {"agent": r[0], "content": r[1]}
+        for r in (await db.execute(
+            select(func.json_extract(CoachMessage.meta, "$.agent"),
+                   CoachMessage.content).where(
+                CoachMessage.session_id == session_id,
+                CoachMessage.kind == "action_report",
+                func.json_extract(CoachMessage.meta, "$.agent").is_not(None))
+            .order_by(CoachMessage.id.desc()).limit(6))).all()
+        if r[0]]
     telem = (await db.execute(
         select(TelemetryEvent).where(TelemetryEvent.session_id == session_id)
         .order_by(TelemetryEvent.id.desc()).limit(60))).scalars().all()
@@ -188,6 +207,8 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         "coach_commands": coach_cmds,
         "coach_outputs": coach_outs,
         "flag_outs": flag_outs,
+        "flag_submits": flag_submits,
+        "worker_reports": worker_reports,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},
     }

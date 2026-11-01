@@ -39,6 +39,7 @@ def strip_ansi(s: str) -> str:
 #   ports:  {ip: {port: svc}}   open services observed
 #   creds:  [{user,secret,host}] credentials observed
 #   findings: [short strings]   notable lines worth a host note
+#   denials:  [short strings]   dead ends: service/permission refused
 
 _NMAP_REPORT = re.compile(
     r"Nmap scan report for\s+(?:(\S+)\s+)?\(?((?:\d{1,3}\.){3}\d{1,3})\)?")
@@ -72,6 +73,58 @@ _ENV_SECRET = re.compile(
 _ENV_URL = re.compile(
     r"\b([A-Z][A-Z0-9_]{1,38}(?:URL|URI|ENDPOINT)[A-Z0-9_]*)\s*=\s*['\"]?"
     r"((?:https?|ftp|socks[45])://[^\s'\";}]+)")
+
+# permission/service dead ends — recorded as facts so a restart (or a long
+# turn chain) doesn't send the model down paths that already failed.
+# Deliberately narrow: generic "Permission denied" matches find-output noise.
+_SUDOERS = re.compile(r"is not in the sudoers", re.I)
+_DOCKER_DENIED = re.compile(
+    r"permission denied[^.]*docker|Cannot connect to the Docker daemon",
+    re.I)
+_ACCESS_DENIED_USER = re.compile(
+    r"Access denied for user\s+'?([\w.\-]+)'?", re.I)
+_AUTH_FAIL = re.compile(
+    r"Authentication failed|Permission denied \(publickey|"
+    r"Logon failure|Login failed", re.I)
+_SSH_TARGET = re.compile(r"([\w.\-]+)@([\w.\-]+)")
+_MYSQL_H = re.compile(r"\bmysql\b[^\n]*?-h\s*['\"]?(\S+)")
+_SVC_BINARIES = (
+    "mysql", "mariadb", "psql", "redis-cli", "mongosh", "smbclient",
+    "rpcclient", "evil-winrm", "winrm", "ssh", "ftp", "rdp", "xfreerdp")
+
+
+def _denial_host(cmd: str) -> str:
+    """Best-effort host for a denial — the ssh pivot target (first
+    user@host in the command), a mysql -h argument, else the last IP."""
+    m = _SSH_TARGET.search(cmd or "")
+    if m:
+        return m.group(2)
+    mh = _MYSQL_H.search(cmd or "")
+    if mh:
+        return mh.group(1).strip("'\"; ")
+    ips = _IP_RE.findall(cmd or "")
+    return ips[-1] if ips else "kali"
+
+
+def _denial_svc(cmd: str) -> str:
+    cmd = cmd or ""
+    for b in _SVC_BINARIES:
+        if re.search(rf"\b{re.escape(b)}\b", cmd):
+            return b.split("-")[0]
+    return _tool_token(cmd) or "svc"
+
+
+def _p_denials(cmd: str, out: str, d: dict) -> None:
+    h = _denial_host(cmd)
+    svc = _denial_svc(cmd)
+    if _SUDOERS.search(out):
+        d["denials"].append(f"denied:sudo@{h}")
+    if _DOCKER_DENIED.search(out):
+        d["denials"].append(f"denied:docker@{h}")
+    for m in _ACCESS_DENIED_USER.finditer(out):
+        d["denials"].append(f"denied:{svc}-{m.group(1)}@{h}")
+    if _AUTH_FAIL.search(out):
+        d["denials"].append(f"denied:{svc}-auth@{h}")
 
 
 def _p_nmap(out: str, d: dict) -> None:
@@ -162,7 +215,7 @@ def _tool_token(cmd: str) -> str:
 def parse_output(cmd: str, out: str) -> dict:
     """Raw output → facts delta. Never raises: garbage in, empty delta out."""
     d: dict = {"ips": set(), "names": {}, "ports": {}, "creds": [],
-               "findings": []}
+               "findings": [], "denials": []}
     try:
         # an IP in the command line is intent, not discovery — its own error
         # output ("Failed to connect to 10.42.0.5") must not retroactively
@@ -175,6 +228,7 @@ def parse_output(cmd: str, out: str) -> dict:
         if parser:
             parser(out or "", d)
         _p_generic(out or "", d)
+        _p_denials(cmd, out or "", d)
         # dedup creds — a tool parser (hydra host+login) and the generic pair
         # regex can hit the same line; keep the entry carrying a host
         seen: dict[tuple, dict] = {}

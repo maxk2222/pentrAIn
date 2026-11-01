@@ -139,15 +139,23 @@ class BackendClient:
     async def capture_screen(self, session_id: int) -> dict:
         return await self._post("/api/coach/screen", {"session_id": session_id})
 
+    async def log_action(self, session_id: int, tool: str, args: dict,
+                         result: dict, status: str = "ok") -> dict:
+        """Audit row for a coach-internal action the backend never saw —
+        spawn/collect/kill run coach-side only; without this the roster
+        lifecycle is invisible to resync, metrics and debugging."""
+        return await self._post("/api/coach/action", {
+            "session_id": session_id, "tool": tool[:64],
+            "args": args, "result": result, "status": status})
+
     async def log_denial(self, session_id: int, tool: str, args: dict,
                          reason: str) -> dict:
         """Audit row for a coach-side guard denial — the exec/type endpoints
         only see actions that REACH the backend, so guard denials (foreign
         ip, rewrite loop, budget) must self-report or metrics lose them."""
-        return await self._post("/api/coach/action", {
-            "session_id": session_id, "tool": tool[:64],
-            "args": args, "result": {"reason": reason[:300]},
-            "status": "denied"})
+        return await self.log_action(
+            session_id, tool, args, {"reason": reason[:300]},
+            status="denied")
 
     async def report_llm_usage(self, session_id: int | None, model: str,
                                kind: str, usage: dict | None,

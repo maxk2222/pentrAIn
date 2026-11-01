@@ -739,3 +739,31 @@ async def test_session_context_returns_coach_outputs(db_with_packs):
     assert nmap_row["out"] == "22/tcp open ssh"
     assert nmap_row["exitcode"] == 0
     await _abort_done(db, s.id)
+
+
+async def test_session_context_returns_flag_submits_and_worker_reports(db_with_packs):
+    """flag_submits + worker_reports — the resync seeds that keep submitted
+    flags and finished worker findings alive across coach restarts."""
+    from app.services import coach_bridge
+    from app.models.domain import FlagSubmission, CoachMessage
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    db.add(FlagSubmission(session_id=s.id, flag_key="flag-1",
+                          value="pentrAIn{abc}", correct=True))
+    db.add(FlagSubmission(session_id=s.id, flag_key="flag-2",
+                          value="pentrAIn{wrong}", correct=False))
+    db.add(CoachMessage(session_id=s.id, role="coach", kind="action_report",
+                        content='{"summary":"w1 done","creds":[]}',
+                        meta={"agent": "w1"}))
+    db.add(CoachMessage(session_id=s.id, role="coach", kind="action_report",
+                        content="plain exec report", meta={}))
+    await db.commit()
+    ctx = await coach_bridge.session_context(db, s.id)
+    by_val = {f["value"]: f["correct"] for f in ctx["flag_submits"]}
+    assert by_val["pentrAIn{abc}"] is True
+    assert by_val["pentrAIn{wrong}"] is False
+    reports = ctx["worker_reports"]
+    assert len(reports) == 1 and reports[0]["agent"] == "w1"
+    assert "w1 done" in reports[0]["content"]
+    await _abort_done(db, s.id)

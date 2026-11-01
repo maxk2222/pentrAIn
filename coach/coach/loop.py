@@ -27,6 +27,7 @@ from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
 from .facts import FLAG_RE, WRITE_RE, FactsDB
+from . import facts as facts_mod
 from .llm import LlmClient, LlmError
 from .policy import Policy
 from .prompts import build_context_msg, chat_prompt, render_worker_prompt, system_prompt
@@ -44,7 +45,8 @@ LLM_TURN_BUDGET_S = 300    # hard bound for one LLM turn incl. action dispatch;
 # end the chain: the model only wanted to talk or pause)
 _CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
                 "mark_checkpoint", "capture_screen", "suggest_command",
-                "spawn_agent", "collect_agent", "agent_status", "kill_agent"}
+                "spawn_agent", "collect_agent", "agent_status", "kill_agent",
+                "wait"}
 
 
 @dataclass
@@ -59,6 +61,7 @@ class _Worker:
     actions: int = 0
     turns: int = 0
     started: float = 0.0
+    merged: bool = False    # report already flowed into FactsDB
     task_obj: asyncio.Task | None = None
 
 
@@ -100,6 +103,12 @@ class SessionCoach:
         # consecutive execs that never finished — PER PANE: a worker's wedged
         # window must not escalate the parent's counter (and vice versa)
         self._busy_bounces: dict[str, int] = {}
+        # consecutive wait-tool calls per pane — same per-pane rule as
+        # _busy_bounces: a worker's waiting must not count against the parent
+        self._wait_streak: dict[str, int] = {}
+        # set by _llm_turn for the wait tool's budget guard — a sleep into a
+        # dying turn would get cancelled mid-way and its result lost
+        self._turn_deadline: float | None = None
         self._last_capture_ts = 0.0
         self._last_badflag_ack = 0.0
         self._disabled_notice_sent = False
@@ -112,7 +121,8 @@ class SessionCoach:
         # hosts/creds/files/flags + ips_seen; feeds FACTS:, the objective
         # tracker and the anti-loop guards (rebuilt from replay on restart)
         self._out_sigs: dict[str, int] = {}      # exec output signature → count
-        self._read_counts: dict[str, int] = {}   # file path → read-type execs
+        # file read counts live in facts.files[path].reads — persisted via
+        # the coach_outputs replay so the ≥3 re-read guard survives restarts
         self._submit_challenged: dict[str, int] = {}  # unverified submits
         self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
         self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
@@ -263,12 +273,45 @@ class SessionCoach:
             self.facts.observe_output(str(o.get("command") or ""),
                                       str(o.get("out") or ""),
                                       o.get("exitcode"))
+            # seed the output-signature dedup — identical outputs after a
+            # restart must hit "settled facts" immediately, not after two
+            # more repeats (the guard's memory was process-local)
+            if o.get("exitcode") == 0:
+                _out = str(o.get("out") or "")
+                if _out.strip():
+                    sig = hashlib.sha1(
+                        "\n".join(l.strip() for l in _out.splitlines()
+                                  if l.strip())[:1500].encode()
+                    ).hexdigest()[:12]
+                    self._out_sigs[sig] = self._out_sigs.get(sig, 0) + 1
         # seed seen-flag evidence from past tool outputs — after a restart a
         # re-submit of an already-shown flag must not hit the unverified
         # challenge, and an invented value still gets caught
         for o in self.ctx.get("flag_outs") or []:
             for fv in FLAG_RE.findall(str(o)):
                 self.facts.flag_seen(fv)
+        # recorded submit outcomes survive restarts — without this every
+        # re-attach sees the accepted flag as "unsubmitted" and resubmits
+        # (s46 resubmitted flag-1 after every coach restart)
+        for s in self.ctx.get("flag_submits") or []:
+            if isinstance(s, dict) and s.get("value"):
+                self.facts.flag_mark_submitted(
+                    str(s["value"]), bool(s.get("correct")))
+        # finished worker reports persist as agent-tagged messages — merge
+        # them back so a restart doesn't orphan their findings (the roster
+        # itself stays dead; knowledge, not tasks, is what survives)
+        for wr in self.ctx.get("worker_reports") or []:
+            if not isinstance(wr, dict):
+                continue
+            content = str(wr.get("content") or "")
+            parsed = percept.parse_worker_report(content)
+            if parsed:
+                self.facts.apply_worker_report(
+                    str(wr.get("agent") or "w?"), parsed)
+            elif content:
+                self.facts.apply_delta(
+                    percept.parse_output("", content),
+                    source=str(wr.get("agent") or "w?"))
         # stuck/idle clocks seed from the most RECENT liveness signal —
         # not blindly from started_at (a session parked in 'ready' for hours
         # then activated must not look stuck-since-forever)
@@ -711,11 +754,13 @@ class SessionCoach:
         """Draft-safety wrapper — EVERY exit path of a turn (normal return,
         dispatch exception, cancel at the turn budget) must close the UI's
         streaming draft, or an open 'thinking' bubble ghosts forever."""
+        self._turn_deadline = time.monotonic() + LLM_TURN_BUDGET_S
         try:
             return await self._llm_turn_body(
                 user_msg, force_reply=force_reply, proactive=proactive,
                 record_user=record_user)
         finally:
+            self._turn_deadline = None
             await self._close_draft()
 
     async def _close_draft(self) -> None:
@@ -842,11 +887,13 @@ class SessionCoach:
                         if cid := a.get("_call_id"):
                             call_results[cid] = res
                         if did and a.get("type") in ("exec_in_kali", "type_in_pane",
-                                                     "submit_flag", "check_flag"):
+                                                     "submit_flag", "check_flag",
+                                                     "wait"):
                             worked = True
                         arg = (a.get("command") or a.get("text")
                                or a.get("content") or a.get("value")
-                               or a.get("task") or a.get("reason") or "")
+                               or a.get("task") or a.get("why")
+                               or a.get("reason") or "")
                         acts.append({"t": a.get("type"),
                                      "arg": str(arg)[:200],
                                      "res": (res or "")[:240],
@@ -1136,6 +1183,8 @@ class SessionCoach:
         level = self.state.autonomy_level
         spoke = False
         result = "ok"
+        if t != "wait":
+            self._wait_streak[window or "main"] = 0
 
         # workers are exec-only — a model emitting an unoffered tool through a
         # worker context gets a hard deny (defense-in-depth; the tool schema
@@ -1225,27 +1274,21 @@ class SessionCoach:
                     # variants instead of connecting to the found service).
                     # The output-sig NOTE below is only a hint — the 4th
                     # read of the SAME path is denied before typing.
-                    read_tgt = None
-                    if re.match(
-                            r"^\s*(?:sudo\s+)?(?:cat|less|more|head|tail|grep|"
-                            r"egrep|fgrep|awk|sed|cut|sort|uniq|wc|strings|"
-                            r"file|ls|ll|xxd|od|diff)\b", cmd):
-                        paths = re.findall(
-                            r"(?<![\w.-])/(?:[\w.+-]+/)*[\w.+-]+", cmd)
-                        if paths:
-                            read_tgt = max(paths, key=len)
-                            n = self._read_counts.get(read_tgt, 0)
-                            if n >= 3:
-                                await log.ainfo("reread denied",
-                                                session=self.sid, path=read_tgt,
-                                                reads=n, cmd=cmd[:120])
-                                return spoke, (
-                                    f"denied: {read_tgt} was already read "
-                                    f"{n}x with the same result — its contents "
-                                    f"are settled facts (see ALREADY_DONE). "
-                                    f"Take a DIFFERENT action toward the flag: "
-                                    f"connect to a discovered service, use "
-                                    f"credentials you found, or submit a flag.")
+                    read_tgt = facts_mod.read_target(cmd)
+                    if read_tgt:
+                        rf = self.facts.files.get(read_tgt)
+                        n = rf.reads if rf else 0
+                        if n >= 3:
+                            await log.ainfo("reread denied",
+                                            session=self.sid, path=read_tgt,
+                                            reads=n, cmd=cmd[:120])
+                            return spoke, (
+                                f"denied: {read_tgt} was already read "
+                                f"{n}x with the same result — its contents "
+                                f"are settled facts (see ALREADY_DONE). "
+                                f"Take a DIFFERENT action toward the flag: "
+                                f"connect to a discovered service, use "
+                                f"credentials you found, or submit a flag.")
                     bad_ip = self._foreign_ip(cmd)
                     if bad_ip:
                         known = [f"{t.get('name')}={t.get('ip')}"
@@ -1305,9 +1348,6 @@ class SessionCoach:
                         self.state.add_command(time.time(), cmd,
                                                from_coach=True)
                         self.state.commands[-1].exit_code = code
-                        if read_tgt:
-                            self._read_counts[read_tgt] = (
-                                self._read_counts.get(read_tgt, 0) + 1)
                         # perceptor: normalize the model-facing reply and feed
                         # the facts store (ports/creds/hosts/files) in one pass
                         result = (percept.normalize(
@@ -1545,6 +1585,71 @@ class SessionCoach:
             result = self._agent_status()
         elif t == "kill_agent":
             result = self._kill_agent(a)
+        elif t == "wait":
+            if level < 4:
+                result = f"denied: autonomy level {level} < 4"
+            else:
+                try:
+                    n = int(float(a.get("seconds") or a.get("content") or 30))
+                except (TypeError, ValueError):
+                    n = 30
+                cap = int(self.cfg.get("coach", {}).get("wait_max_s", 180))
+                n = max(1, min(n, cap))
+                # don't sleep into a dying turn — the outer wait_for budget
+                # would cancel mid-wait and the model never sees the result.
+                # A worker waits against ITS OWN time cap, not the parent's
+                # (both can run concurrently — the flag is parent-turn state)
+                if window:
+                    w = self._workers.get(window)
+                    deadline = (w.started + float(
+                        self.cfg.get("coach", {}).get(
+                            "worker_time_cap_s", 300))) if w else None
+                else:
+                    deadline = self._turn_deadline
+                left = (deadline - time.monotonic()) if deadline else None
+                if left is not None and left < 20:
+                    result = ("error: too little turn budget left for a wait "
+                              "— act now or end the turn instead")
+                else:
+                    if left is not None:
+                        n = min(n, int(left) - 10)
+                    why = (a.get("why") or "").strip()[:120]
+                    where = f"[{window}] " if window else ""
+                    await self.client.send_activity(
+                        self.sid,
+                        f"{where}waiting {n}s" + (f" — {why}" if why else ""),
+                        agent=window or "main")
+                    rep = (f"{where}**Waiting {n}s**"
+                           + (f" — {why}" if why else ""))
+                    await self.client.send_chat(
+                        self.sid, rep, kind="action_report",
+                        meta=self._msg_meta(window))
+                    self._record_reply(rep)
+                    spoke = True
+                    t_wait = time.monotonic()
+                    aborted = False
+                    # sliced like collect_agent — an operator message must
+                    # preempt the pause instead of queueing behind it
+                    while time.monotonic() - t_wait < n:
+                        if self.state.pending_chat:
+                            aborted = True
+                            break
+                        await asyncio.sleep(
+                            min(2.0, n - (time.monotonic() - t_wait)))
+                    actual = int(time.monotonic() - t_wait)
+                    if aborted:
+                        result = (f"wait aborted after {actual}s — operator "
+                                  "message pending; handle the message first")
+                    else:
+                        result = (f"waited {actual}s — pane and facts "
+                                  "unchanged; re-check the condition now")
+                    key = window or "main"
+                    streak = self._wait_streak.get(key, 0) + 1
+                    self._wait_streak[key] = streak
+                    if streak >= 3:
+                        result += (f" NOTE: {streak} consecutive waits — if "
+                                   "the condition still isn't met, reconsider "
+                                   "the approach instead of waiting longer")
         # "none" or unknown → silence (reason captured above as working memory)
         if t == "none":
             result = "noted"
@@ -1591,6 +1696,11 @@ class SessionCoach:
         self._workers[wid] = w
         self._push_agents()
         w.task_obj = asyncio.create_task(self._worker_loop(w))
+        # audit: the roster lifecycle is coach-internal — without a row the
+        # backend (and any post-restart resync) never knew workers existed
+        asyncio.create_task(self.client.log_action(
+            self.sid, "spawn_agent", {"worker_id": wid, "task": task[:200]},
+            {"spawned": wid}))
         return (f"spawned {wid} — \"{task[:120]}\". It works autonomously on "
                 f"its own pane ({wid}); continue your own work and read its "
                 f"report with collect_agent(\"{wid}\") when you need it.")
@@ -1626,23 +1736,15 @@ class SessionCoach:
             return (f"{wid} still running ({w.actions} actions, "
                     f"{int(time.monotonic() - w.started)}s) — task: "
                     f"\"{w.task[:80]}\"")
+        # reports merge at finish time (_finish_worker) — collect reads the
+        # text; if the worker is somehow still unmerged (killed race), do it
         merged = ""
         if w.report:
-            # structured report → shared facts (knowledge-graph merge):
-            # JSON first; a prose report still yields creds/hosts via the
-            # generic parser instead of rotting as context text. Done AND
-            # killed/error reports both merge — partial results are facts too
-            parsed = percept.parse_worker_report(w.report)
-            if parsed:
-                n = self.facts.apply_worker_report(wid, parsed)
-                bits = [f"{n['creds']} creds", f"{n['ports']} ports",
-                        f"{n['findings']} findings"]
-                merged = ("\n[merged into FACTS: "
-                          + ", ".join(bits) + "]")
-            else:
-                self.facts.apply_delta(
-                    percept.parse_output("", w.report), source=wid)
-                merged = "\n[prose report — extracted facts where possible]"
+            note = self._merge_worker_report(w)
+            merged = f"\n{note}" if note else "\n[facts already merged]"
+        asyncio.create_task(self.client.log_action(
+            self.sid, "collect_agent", {"worker_id": wid},
+            {"status": status, "actions": w.actions}))
         return (f"{wid} {status} ({w.actions} actions):\n"
                 f"{w.report or '(no report)'}{merged}")
 
@@ -1668,6 +1770,8 @@ class SessionCoach:
             w.task_obj.cancel()
         w.status = "killed"
         self._push_agents()
+        asyncio.create_task(self.client.log_action(
+            self.sid, "kill_agent", {"worker_id": wid}, {"killed": wid}))
         return f"{wid} killed — its pane ({wid}) keeps its scrollback"
 
     def _kill_all_workers(self) -> None:
@@ -1679,11 +1783,30 @@ class SessionCoach:
         if self._workers:
             self._push_agents()
 
+    def _merge_worker_report(self, w: _Worker) -> str:
+        """Push a finished worker's report into shared facts — runs at
+        finish time so findings exist even if the parent never collects
+        (s46: both worker reports died uncollected). collect_agent then
+        just READS the report instead of merging twice."""
+        if w.merged or not w.report:
+            return ""
+        w.merged = True
+        parsed = percept.parse_worker_report(w.report)
+        if parsed:
+            n = self.facts.apply_worker_report(w.id, parsed)
+            bits = [f"{n['creds']} creds", f"{n['ports']} ports",
+                    f"{n['findings']} findings"]
+            return ("[merged into FACTS: " + ", ".join(bits) + "]")
+        self.facts.apply_delta(
+            percept.parse_output("", w.report), source=w.id)
+        return "[prose report — extracted facts where possible]"
+
     async def _finish_worker(self, w: _Worker) -> None:
-        """Terminal housekeeping for a worker: drop its live indicator, post
-        its report into its own feed (meta.agent routes it there; leftover
-        turn reasoning rides as meta.reasoning like the parent's), then
-        refresh the roster chips."""
+        """Terminal housekeeping for a worker: merge its report into shared
+        facts, drop its live indicator, post the report into its own feed
+        (meta.agent routes it there; leftover turn reasoning rides as
+        meta.reasoning like the parent's), then refresh the roster chips."""
+        self._merge_worker_report(w)
         await self.client.send_activity(self.sid, active=False, agent=w.id)
         if w.report:
             meta = self._msg_meta(w.id)
@@ -1696,7 +1819,8 @@ class SessionCoach:
         touches _history: interleaved tool pairs would corrupt the parent's
         call/result pairing), shared guards/budgets via _dispatch(window)."""
         msgs = [{"role": "system",
-                 "content": render_worker_prompt(self.ctx, w)},
+                 "content": render_worker_prompt(
+                     self.ctx, w, self.facts.render(500, compact=True))},
                 {"role": "user", "content": w.task}]
         cc = self.cfg.get("coach", {})
         turn_cap = int(cc.get("worker_turn_cap", 10))

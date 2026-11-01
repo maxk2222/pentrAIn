@@ -176,3 +176,73 @@ def test_render_compact_keeps_findings():
     out = f.render(400)
     assert len(out) <= 400
     assert "endpoint:API_URL=http://172.18.0.4:9000" in out
+
+
+def test_denials_merge_and_render_blocked():
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.apply_delta({"denials": ["denied:sudo@shop01", "denied:docker@shop01"]})
+    f.apply_delta({"denials": ["denied:sudo@shop01"]})   # dedup
+    out = f.render()
+    assert "blocked:" in out and "sudo@shop01" in out
+    assert f.denials == ["denied:sudo@shop01", "denied:docker@shop01"]
+    # compact render keeps the blocked line — that's the whole point
+    for i in range(12):
+        f.add_host(f"10.1.10.{10 + i}")
+        f.hosts[f"10.1.10.{10 + i}"].ports[80] = "http"
+    out = f.render(400)
+    assert "blocked:" in out and "sudo@shop01" in out
+
+
+def test_reads_count_via_observe_and_survive_replay():
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.observe_output("cat /tmp/config.env", "A=1", 0)
+    # ssh-wrapped read counts too (the old ^-anchored guard missed pivots)
+    f.observe_output("sshpass -p 'x' ssh u@h 'cat /etc/secret.conf'",
+                     "k=v", 0)
+    # writes are NOT reads
+    f.observe_output("cat > /tmp/w.py <<'EOF'\nx\nEOF", "", 0)
+    assert f.files["/tmp/config.env"].reads == 1
+    assert f.files["/etc/secret.conf"].reads == 1
+    assert "/tmp/w.py" not in f.files or f.files["/tmp/w.py"].reads == 0
+
+
+def test_loot_digest_on_secret_yielding_read():
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.observe_output("cat /tmp/config.env",
+                     "DEPLOY_PASS=pw123\nAPI_TOKEN=tok-9\nAPI_URL=http://10.0.0.4:9000", 0)
+    assert any(f.startswith("loot:config.env→") for f in f.findings)
+    tag = next(f for f in f.findings if f.startswith("loot:"))
+    assert "API_TOKEN" in tag or "DEPLOY_PASS" in tag
+    # second read doesn't duplicate the digest
+    f.observe_output("cat /tmp/config.env",
+                     "DEPLOY_PASS=pw123\nAPI_TOKEN=tok-9", 0)
+    assert sum(1 for f in f.findings
+               if f.startswith("loot:config.env")) == 1
+
+
+def test_valid_on_marks_working_credential():
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.observe_output(
+        "sshpass -p 'Nordm#arkt!25' ssh deploy@shop01 'whoami'",
+        "deploy", 0)
+    c = next(c for c in f.creds if c.secret == "Nordm#arkt!25")
+    assert "shop01" in c.valid_on and "shop01" in c.tested_on
+    # mysql cred inside a wrapped command attributes to the -h host, not
+    # the ssh pivot — the bug that hid DB tests behind the wrong host
+    f2 = FactsDB()
+    f2.observe_output(
+        "sshpass -p 'X' ssh deploy@shop01 "
+        "'mysql -h 172.20.1.3 -u root -pGood -e \"select 1\"'", "1", 0)
+    mc = next(c for c in f2.creds if c.user == "root")
+    assert "172.20.1.3" in mc.valid_on
+    # exit 0 but auth-fail output → NOT valid
+    f3 = FactsDB()
+    f3.observe_output(
+        "sshpass -p 'X' ssh deploy@shop01 'mysql -h db -u u -pBad'",
+        "Access denied for user 'u'@'db'", 0)
+    c3 = next(c for c in f3.creds if c.secret == "Bad")
+    assert not c3.valid_on

@@ -48,6 +48,49 @@ _MYSQL_U = re.compile(r"\bmysql\b[^\n]*?-u\s*['\"]?([^\s'\"]{1,64})"
                       r"[^\n]*?-p([^\s'\"]{1,80})")
 _URL_CRED = re.compile(r"\b(\w[\w.-]{0,47}):([^\s:/@]{2,80})@")
 _HYDRA_LP = re.compile(r"\s-l\s+['\"]?([^\s'\"]{1,64})\s+-p\s+['\"]?([^\s'\"]{1,80})")
+_USER_AT_HOST = re.compile(r"([\w.\-]+)@([\w.\-]+)")
+_MYSQL_H = re.compile(r"\bmysql\b[^\n]*?-h\s*['\"]?(\S+)")
+_SMB_SHARE = re.compile(r"//([\w.\-]+)")
+_URL_CRED_HOST = re.compile(r"\w[\w.-]*:[^\s:/@]+@([\w.\-]+)")
+_HYDRA_URI = re.compile(r"(?:ssh|ftp|smb|rdp|mysql|vnc|telnet)://([\w.\-]+)")
+# auth failures in OUTPUT — a command that exits 0 without any of these
+# means the credential in its line actually worked (valid_on)
+_AUTH_FAIL_OUT = re.compile(
+    r"Access denied|Authentication failed|Permission denied \(publickey|"
+    r"Logon failure|Login failed|incorrect password", re.I)
+
+
+def _cmd_creds(cmd: str) -> list[tuple[str, str, str | None]]:
+    """(user, secret, target) triples the command line tests. The target
+    is per-credential: the sshpass pair authenticates against the ssh
+    host while a wrapped `mysql -h` pair is tested on the DATABASE, not
+    the pivot (s46 attributed ssh tests to 172.20.1.3)."""
+    cmd = cmd or ""
+    ssh = _USER_AT_HOST.search(cmd)
+    ssh_host = ssh.group(2) if ssh else None
+    ips = IP_RE.findall(cmd)
+    last_ip = ips[-1] if ips else None
+    pairs: list[tuple[str, str, str | None]] = []
+    for m in _SSHPASS.finditer(cmd):
+        pairs.append(("?", m.group(1), ssh_host or last_ip))
+    for m in _SMB_U.finditer(cmd):
+        share = _SMB_SHARE.search(cmd)
+        pairs.append((m.group(1), m.group(2),
+                      (share.group(1) if share else ssh_host) or last_ip))
+    for m in _MYSQL_U.finditer(cmd):
+        mh = _MYSQL_H.search(cmd)
+        pairs.append((m.group(1), m.group(2),
+                      (mh.group(1).strip("'\"") if mh else ssh_host)
+                      or last_ip))
+    for m in _URL_CRED.finditer(cmd):
+        uh = _URL_CRED_HOST.search(cmd)
+        pairs.append((m.group(1), m.group(2),
+                      (uh.group(1) if uh else ssh_host) or last_ip))
+    for m in _HYDRA_LP.finditer(cmd):
+        hu = _HYDRA_URI.search(cmd)
+        pairs.append((m.group(1), m.group(2),
+                      (hu.group(1) if hu else None) or ssh_host or last_ip))
+    return pairs
 
 _SCRIPT_EXT = re.compile(r"\.(py|sh|pl|rb|php|ps1|lua|js|expect)$")
 _PENDING_TTL = 60.0     # mirrors SessionState.mark_exit freshness guard
@@ -106,7 +149,25 @@ class FileFact:
     writes: int = 0                       # confirmed writes (exit 0)
     attempts: int = 0                     # write commands seen (telemetry)
     runs: int = 0
+    reads: int = 0                        # cat/grep/… hits — re-read guard
     last_exit: int | None = None
+
+
+# read-commands — also matched after a quote/;|& boundary so ssh-wrapped
+# `'cat /etc/x'` counts (the old ^-anchor missed every pivot read on s46)
+READ_CMD = re.compile(
+    r"(?:^|['\";|&]\s*)(?:sudo\s+)?(?:cat|less|more|head|tail|grep|egrep|"
+    r"fgrep|awk|sed|cut|sort|uniq|wc|strings|file|ls|ll|xxd|od|diff)\b")
+_ABS_PATH = re.compile(r"(?<![\w.-])/(?:[\w.+-]+/)*[\w.+-]+")
+
+
+def read_target(cmd: str) -> str | None:
+    """Longest absolute path of a read-command, or None. Write redirects
+    (`cat > f`, heredocs, tee) write — they don't count as reads."""
+    if not READ_CMD.search(cmd or "") or WRITE_RE.search(cmd or ""):
+        return None
+    paths = _ABS_PATH.findall(cmd or "")
+    return max(paths, key=len) if paths else None
 
 
 @dataclass
@@ -124,6 +185,7 @@ class FactsDB:
         self.flags: dict[str, FlagFact] = {}
         self.ips_seen: set[str] = set()
         self.findings: list[str] = []     # bounded misc evidence (enum users)
+        self.denials: list[str] = []      # bounded dead ends (denied:svc@host)
         self._pending: tuple[str, str, float] | None = None  # (path, kind, ts)
         self._seen_cmds: set[str] = set()   # dedup: replay + live overlap
 
@@ -171,22 +233,12 @@ class FactsDB:
             # bookkeeping only — a command-line IP is intent, not discovery;
             # whitelisting it would let a hallucinated IP self-authorize
             self.add_host(ip)
-        tgt = ips[-1] if ips else None
-        if tgt and RECON_RE.search(cmd):
-            h = self.add_host(tgt)
+        if ips and RECON_RE.search(cmd):
+            h = self.add_host(ips[-1])
             if h:
                 h.scans += 1
-        src = (tgt or "cmd")[:40]
-        for m in _SSHPASS.finditer(cmd):
-            self.add_cred("?", m.group(1), src, tested_on=tgt)
-        for m in _SMB_U.finditer(cmd):
-            self.add_cred(m.group(1), m.group(2), src, tested_on=tgt)
-        for m in _MYSQL_U.finditer(cmd):
-            self.add_cred(m.group(1), m.group(2), src, tested_on=tgt)
-        for m in _URL_CRED.finditer(cmd):
-            self.add_cred(m.group(1), m.group(2), src, tested_on=tgt)
-        for m in _HYDRA_LP.finditer(cmd):
-            self.add_cred(m.group(1), m.group(2), src, tested_on=tgt)
+        for user, secret, tgt in _cmd_creds(cmd):
+            self.add_cred(user, secret, (tgt or "cmd")[:40], tested_on=tgt)
 
     # ---------- observation paths ----------
 
@@ -209,6 +261,9 @@ class FactsDB:
                 self.files.setdefault(path, FileFact(path=path,
                                                      kind=_kind(path))).attempts += 1
                 self._pending = (path, "write", time.time())
+        if rt := read_target(cmd):
+            self.files.setdefault(
+                rt, FileFact(path=rt, kind=_kind(rt))).reads += 1
 
     def mark_run_exit(self, code: int) -> None:
         """command_result for a telemetry command — confirm the pending
@@ -248,7 +303,33 @@ class FactsDB:
                     f.runs += 1
                     if code is not None:
                         f.last_exit = code
-            self.apply_delta(parse_output(cmd, strip_ansi(out or "")))
+                if rt := read_target(cmd):
+                    self.files.setdefault(
+                        rt, FileFact(path=rt, kind=_kind(rt))).reads += 1
+            parsed = parse_output(cmd, strip_ansi(out or ""))
+            self.apply_delta(parsed)
+            # loot digest: a file read that yielded secrets/leads leaves a
+            # one-line token digest — the model sees the contents are already
+            # consumed instead of re-cat'ing the file after context loss
+            if (rt := read_target(cmd)) and code == 0:
+                toks = [c["user"] for c in parsed.get("creds") or ()][:3]
+                toks += [str(f).split(":", 1)[1].split("=")[0]
+                         for f in (parsed.get("findings") or ())
+                         if "=" in str(f) and ":" in str(f)][:3]
+                if toks:
+                    base = rt.rsplit("/", 1)[-1]
+                    tag = f"loot:{base}→{','.join(toks)[:48]}"
+                    if not any(f.startswith(f"loot:{base}")
+                               for f in self.findings):
+                        self.findings.append(tag[:80])
+            # a credential test that exits 0 without an auth-failure marker
+            # worked — mark it valid so `tried:` becomes `valid:` and the
+            # model stops stuffing it at unrelated services
+            if (code == 0 and not typed_input
+                    and not _AUTH_FAIL_OUT.search(strip_ansi(out or ""))):
+                for user, secret, host in _cmd_creds(cmd):
+                    if host:
+                        self.add_cred(user, secret, valid_on=host)
         except Exception:      # fact extraction must never break a turn
             log.debug("observe_output failed", cmd=(cmd or "")[:120],
                       exc_info=True)
@@ -276,6 +357,11 @@ class FactsDB:
             if f not in self.findings:
                 self.findings.append(f)
         del self.findings[:-12]           # bounded — enum lists can be long
+        for dn in d.get("denials") or ():
+            dn = str(dn)[:64]
+            if dn not in self.denials:
+                self.denials.append(dn)
+        del self.denials[:-10]
 
     def apply_worker_report(self, worker_id: str, parsed: dict) -> dict:
         """Merge a structured worker report (phase C). Returns merge counts
@@ -336,7 +422,8 @@ class FactsDB:
     def render(self, max_chars: int = 1100, *, compact: bool = False) -> str:
         """FACTS: section for the context message. Cred secrets are kept —
         the agent needs them to type passwords; everything else truncates."""
-        if not (self.hosts or self.creds or self.files or self.flags):
+        if not (self.hosts or self.creds or self.files or self.flags
+                or self.denials):
             return ""
         lines = ["FACTS:"]
         if self.hosts:
@@ -372,6 +459,8 @@ class FactsDB:
                 if f.runs:
                     det += f" {f.runs}r" + \
                         (f"(e{f.last_exit})" if f.last_exit is not None else "")
+                if f.reads:
+                    det += f" {f.reads}rd"
                 parts.append(f"{f.path} {f.kind}({det})" if det
                              else f"{f.path} {f.kind}")
             lines.append("  files: " + " | ".join(parts))
@@ -389,6 +478,11 @@ class FactsDB:
                 seg += ("; " if seg else "") + \
                     "rejected: " + ", ".join(rejected[:3])
             lines.append("  flags: " + (seg or "seen only"))
+        if self.denials:
+            # dead ends deserve permanent space — they are what stops the
+            # model re-trying sudo/docker/mysql paths that already failed
+            blocked = self.denials[-4:] if compact else self.denials[-8:]
+            lines.append("  blocked: " + " | ".join(blocked))
         if self.findings:
             noted = self.findings[-4:] if compact else self.findings[-6:]
             lines.append("  noted: " + " | ".join(noted))

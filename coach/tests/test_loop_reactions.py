@@ -102,6 +102,11 @@ class FakeClient:
     async def report_llm_usage(self, sid, model, kind, usage, latency_ms):
         return {}
 
+    async def log_action(self, sid, tool, args, result, status="ok"):
+        self.logged = getattr(self, "logged", [])
+        self.logged.append({"tool": tool, "args": args, "status": status})
+        return {}
+
 
 def _coach(cfg=None) -> tuple[SessionCoach, FakeClient]:
     c = FakeClient()
@@ -1409,7 +1414,8 @@ async def test_collect_merges_json_report_into_facts():
     await asyncio.sleep(0.2)
     _v, r = await coach._dispatch({"type": "collect_agent",
                                    "worker_id": "w1"})
-    assert "merged into FACTS" in r
+    # the report merged at finish time — collect reads it without re-merging
+    assert "facts already merged" in r
     assert any(c.user == "svc" and c.secret == "s3cr3t"
                for c in coach.facts.creds)
     assert coach.facts.hosts["192.168.3.55"].ports == {445: "smb"}
@@ -1436,7 +1442,10 @@ async def test_collect_prose_report_still_extracts():
     await asyncio.sleep(0.2)
     _v, r = await coach._dispatch({"type": "collect_agent",
                                    "worker_id": "w1"})
-    assert "prose report" in r
+    # prose report extracted at finish; collect just echoes it back —
+    # generic extraction keeps the discovered host from the text
+    assert "facts already merged" in r
+    assert "192.168.3.55" in coach.facts.hosts
     await coach.stop()
 
 
@@ -1571,3 +1580,67 @@ async def test_dropped_history_distills_into_earlier():
     msg = build_context_msg(coach.ctx, coach.state, "t", stage=0,
                             facts=coach.facts)
     assert "EARLIER" in msg
+
+
+async def test_reseed_marks_submitted_flags():
+    """flag_submits in ctx → accepted/rejected values survive restart."""
+    coach, c = _l4_coach()
+    c.ctx["flag_submits"] = [
+        {"value": "pentrAIn{good}", "correct": True},
+        {"value": "pentrAIn{bad}", "correct": False}]
+    await coach.start()
+    assert coach.facts.flags["pentrAIn{good}"].accepted
+    assert coach.facts.flags["pentrAIn{good}"].submitted
+    assert coach.facts.flags["pentrAIn{bad}"].submitted
+    assert not coach.facts.flags["pentrAIn{bad}"].accepted
+    await coach.stop()
+
+
+async def test_reseed_merges_worker_reports():
+    """Finished worker reports flow back into FACTS on re-attach."""
+    coach, c = _l4_coach()
+    c.ctx["worker_reports"] = [{
+        "agent": "w1",
+        "content": '{"summary":"nas enum","creds":[{"user":"svc",'
+                   '"secret":"s3","host":"192.168.3.55"}],'
+                   '"findings":["share readable"]}'}]
+    await coach.start()
+    assert any(cr.secret == "s3" for cr in coach.facts.creds)
+    assert "share readable" in coach.facts.findings
+    await coach.stop()
+
+
+async def test_reseed_fills_out_sigs():
+    """Identical post-restart output hits 'settled facts' immediately."""
+    coach, c = _l4_coach()
+    c.ctx["coach_outputs"] = [
+        {"command": "cat /tmp/x", "out": "same content\nline2", "exitcode": 0}]
+    await coach.start()
+    # sig for the replayed output is already counted once → the next
+    # identical exec reports NOTE: identical output (n>=2)
+    _spoke, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat /tmp/x"})
+    # FakeClient returns 'ok' output — different sig, so run once more
+    # checking the seeded sig directly instead:
+    import hashlib
+    sig = hashlib.sha1(
+        "\n".join(l.strip() for l in "same content\nline2".splitlines()
+                  if l.strip())[:1500].encode()).hexdigest()[:12]
+    assert coach._out_sigs.get(sig, 0) >= 1
+    await coach.stop()
+
+
+async def test_reread_guard_uses_persistent_fact_reads():
+    """Guard counts facts.files[path].reads — survives restarts because
+    the replay feeds observe_output (no more in-memory _read_counts)."""
+    coach, c = _l4_coach()
+    c.ctx["coach_outputs"] = [
+        {"command": "cat /etc/creds.txt", "out": "u=p", "exitcode": 0},
+        {"command": "cat /etc/creds.txt", "out": "u=p", "exitcode": 0},
+        {"command": "cat /etc/creds.txt", "out": "u=p", "exitcode": 0}]
+    await coach.start()
+    assert coach.facts.files["/etc/creds.txt"].reads == 3
+    _spoke, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat /etc/creds.txt"})
+    assert res.startswith("denied:") and "already read 3x" in res
+    await coach.stop()

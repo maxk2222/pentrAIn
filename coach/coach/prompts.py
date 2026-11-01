@@ -64,7 +64,8 @@ you run appears live in a 'pentrain-coach' tmux window on their desktop — \
 keep it short, reversible, and always explain in chat what you're doing. \
 If a command is still running (result says 'pane busy' or timed out), the \
 pane is blocked — interrupt it by calling exec_in_kali with the literal \
-command "C-c" (or "C-d"), or just wait for it. If an exec fails with an \
+command "C-c" (or "C-d"), or let it finish. For a FIXED delay use the wait \
+tool — never type `sleep N` into the pane (it wedges at 60s). If an exec fails with an \
 INFRASTRUCTURE error (guest-agent timeout/not running, VM unreachable — \
 not the command's own stderr), RETRY the same command after a moment; \
 don't just keep checking downstream state (the file/process you were \
@@ -236,9 +237,11 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "ssh host 'cmd' runs with NO TTY — pagers/vim dump-and-exit "
             "instead of opening; force one with `ssh -tt` when the exploit "
             "needs an interactive remote program. After planting an async "
-            "trigger (cron/wildcard), poll its output file with the SAME "
-            "tool until the result appears — do NOT wander to a different "
-            "attack before checking whether it fired. Bound every command "
+            "trigger (cron/wildcard), call wait for the trigger interval "
+            "(cron: 60-120s) — then check the output file ONCE; wait+check "
+            "again until it fires. Do NOT poll the same check in a loop "
+            "and do NOT wander to a different attack before checking "
+            "whether it fired. Bound every command "
             "that could hang — `curl --max-time 20`, `nmap -T4 --max-retries "
             "2`, `nc -w 5` — an unbounded one wedges the pane and burns "
             "turns on a C-c.")
@@ -250,7 +253,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
                 "Reports come back via collect_agent(id) (waits ~40s), live "
                 "state via agent_status, cancel via kill_agent. Workers "
                 "share your command memory, flag evidence and scope guards "
-                "— split work by HOST/TASK, never by sequential steps.")
+                "— split work by HOST/TASK, never by sequential steps. "
+                "A spawn task must carry the ACCESS PATH — host, "
+                "credentials, pivot (`sshpass -p '…' ssh user@host '…'`) — "
+                "the worker sees only what you write into `task`.")
         if (st.operator_directive
                 and time.time() - st.operator_directive_ts < 600):
             parts.append(
@@ -285,7 +291,7 @@ def chat_prompt(question: str) -> str:
         "action first — talking about it doesn't count.")
 
 
-def render_worker_prompt(ctx: dict, w) -> str:
+def render_worker_prompt(ctx: dict, w, facts_txt: str = "") -> str:
     """System prompt for a spawned worker agent — scoped to its task,
     exec-only toolset, last message is the report to the parent."""
     q = ctx.get("quest", {})
@@ -305,10 +311,20 @@ def render_worker_prompt(ctx: dict, w) -> str:
         lines.append(
             f"SCOPE: {scope} — authorized LAN range; only touch in-scope "
             "hosts, never DoS or destructive actions.")
+    if facts_txt:
+        lines += [
+            "",
+            facts_txt,
+            ("^ shared facts at spawn time (creds marked valid: work, "
+             "blocked: are dead ends — do not retry them). Internal-only "
+             "targets may need a pivot: reach them THROUGH a compromised "
+             "host (sshpass … 'cmd'), not directly from Kali."),
+        ]
     lines += [
         "RULES:",
-        ("- You only have exec_in_kali, type_in_pane and none — every exec "
-         "lands on YOUR window automatically."),
+        ("- You only have exec_in_kali, type_in_pane, wait and none — every "
+         "exec lands on YOUR window automatically. `wait` pauses cleanly "
+         "for cron/startup delays instead of polling."),
         ("- exec_in_kali bounces while a foreground program holds the pane → "
          "use type_in_pane for interactive input (passwords, menus, remote "
          "shell lines), or 'C-c' via exec_in_kali to free it."),
