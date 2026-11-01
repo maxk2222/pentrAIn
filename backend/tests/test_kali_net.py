@@ -306,22 +306,14 @@ def test_api_ip_port_parsing():
     assert _api_ip_port("") == (None, 8000)
 
 
-def test_compile_topology_emits_platform_rule():
+def test_compile_topology_no_platform_rule():
+    # the control-plane hole is the testing-mode allow list — a ludus
+    # firewall rule can't express a literal public IP (renders as
+    # "10.1.public.10" and kills the deploy's iptables task)
     from types import SimpleNamespace
     from app.services.sessions import compile_topology
-    cfg = compile_topology(SimpleNamespace(topology={}),
-                           api_url="http://192.0.2.10:8000")
-    rules = cfg["network"]["rules"]
-    assert rules == [{
-        "name": "pentrain platform api",
-        "vlan_src": "all", "vlan_dst": "public",
-        "ip_last_octet_dst": 10, "protocol": "tcp",
-        "ports": "8000", "action": "ACCEPT",
-    }]
-    # no IPv4 literal → no network section at all (valid config either way)
-    for bad in ("http://pentrain-app:8000", None, ""):
-        assert "network" not in compile_topology(
-            SimpleNamespace(topology={}), api_url=bad)
+    cfg = compile_topology(SimpleNamespace(topology={}))
+    assert "network" not in cfg
 
 
 def test_merge_testing_allow_appends_api():

@@ -116,8 +116,7 @@ def _merge_testing_allow(allow: list, api_ip: str | None) -> list:
     return allow
 
 
-def compile_topology(quest: Quest, kali_template: str | None = None,
-                     api_url: str | None = None) -> dict:
+def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
     """quest.topology → Ludus range config (subset of Ludus schema we need).
 
     `kali_template` (engine.kali_template setting) overrides the per-quest
@@ -183,21 +182,13 @@ def compile_topology(quest: Quest, kali_template: str | None = None,
               "ram_gb": 2, "ram_min_gb": 1,
               **(topo.get("router") or {})}
     cfg: dict = {"ludus": vms, "router": router}
-    # platform control plane: ranges are WAN-isolated (FORWARD drop), so the
-    # app VM's address on the ludus "public" bridge needs an explicit accept —
-    # telemetry and the terminal channel both dial this URL. IPv4 literals
-    # only; a hostname rule would never match (no DNS inside the range).
-    api_ip, api_port = _api_ip_port(api_url)
-    if api_ip:
-        cfg["network"] = {"rules": [{
-            "name": "pentrain platform api",
-            "vlan_src": "all",
-            "vlan_dst": "public",
-            "ip_last_octet_dst": int(api_ip.rsplit(".", 1)[1]),
-            "protocol": "tcp",
-            "ports": str(api_port),
-            "action": "ACCEPT",
-        }]}
+    # platform control plane: the range must reach the app VM's address on
+    # the ludus "public" bridge (telemetry + terminal channel dial it).
+    # That is handled by the testing-mode allow list — destination-based
+    # ACCEPTs installed with the isolation at finalize. Ludus rules cannot
+    # express it: vlan_dst=public only renders bare ("! range/16"), and
+    # ip_last_octet_dst interpolates into 10.x.<vlan>.<octet> — literally
+    # "10.1.public.10" — which fails the deploy's firewall task outright.
     return cfg
 
 
@@ -290,9 +281,7 @@ async def _deploy(session_id: int) -> None:
                 config = compile_topology(
                     quest,
                     kali_template=await settings_svc.get_setting(
-                        db, "engine.kali_template", "") or None,
-                    api_url=await settings_svc.get_setting(
-                        db, "platform.api_url", ""))
+                        db, "engine.kali_template", "") or None)
                 await _append_log(db, session, yaml.safe_dump(config, sort_keys=False).rstrip())
                 session.range_id = await engine.provider.deploy_range(f"quest-{quest.id}", config)
                 await db.commit()
