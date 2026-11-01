@@ -63,8 +63,8 @@ async def _session(db, state: str = SessionState.ACTIVE.value,
     return s
 
 
-async def _wait(cond, timeout: float = 2.0) -> None:
-    for _ in range(int(timeout / 0.02)):
+async def _wait(cond, timeout_s: float = 2.0) -> None:
+    for _ in range(int(timeout_s / 0.02)):
         if cond():
             return
         await asyncio.sleep(0.02)
@@ -106,12 +106,12 @@ async def test_pairing_pumps_bytes_and_controls(db):
     user.feed_text(json.dumps({"t": "resize", "cols": 200, "rows": 50}))
     await _wait(lambda: kali.sent_bytes == [b"ls -la\n"])
     await _wait(lambda: user.sent_bytes == [b"total 0\r\n"])
-    await _wait(lambda: any('{"t": "exit", "code": 0}' == t
+    await _wait(lambda: any(t == '{"t": "exit", "code": 0}'
                             for t in user.sent_text))
     await _wait(lambda: any(json.loads(t).get("t") == "resize"
                             for t in kali.sent_text))
-    assert json.loads([t for t in kali.sent_text
-                       if json.loads(t).get("t") == "resize"][0])["cols"] == 200
+    assert json.loads(next(t for t in kali.sent_text
+                           if json.loads(t).get("t") == "resize"))["cols"] == 200
 
     user.disconnect()
     await asyncio.wait_for(utask, timeout=2)

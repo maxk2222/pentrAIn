@@ -21,7 +21,6 @@ import time
 
 import structlog
 from fastapi import WebSocket
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.domain import Session, SessionState
@@ -39,7 +38,7 @@ _END_STATES = {SessionState.ABORTED.value, SessionState.FAILED.value,
 
 
 class _Chan:
-    __slots__ = ("cols", "rows", "opened_at", "user_ws", "kali_ws")
+    __slots__ = ("cols", "kali_ws", "opened_at", "rows", "user_ws")
 
     def __init__(self, cols: int, rows: int) -> None:
         self.cols, self.rows = cols, rows
@@ -229,7 +228,7 @@ def _start_janitor() -> None:
             while True:
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=30.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     ev = None
                 if ev is not None:
                     sid, data = ev.get("session_id"), ev.get("data") or {}

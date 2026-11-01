@@ -8,6 +8,7 @@ survive restarts and stay in sync.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 
 import structlog
@@ -259,10 +260,8 @@ async def _deploy(session_id: int) -> None:
                 # str() of transport exceptions (httpx.ReadTimeout) is EMPTY —
                 # repr keeps the type name so the error field is never blank.
                 detail = f"{type(e).__name__}: {e}" if str(e) else repr(e)
-                try:
+                with contextlib.suppress(Exception):
                     await _append_log(db, session, f"[pentrain] deploy failed: {detail}")
-                except Exception:
-                    pass
                 await _set_state(db, session, SessionState.FAILED, error=detail)
     finally:
         _tasks.pop(session_id, None)
