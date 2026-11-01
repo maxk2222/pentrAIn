@@ -1292,7 +1292,7 @@ def test_subagent_tools_gated_by_flag():
 
 
 async def test_finished_worker_frees_its_slot():
-    coach, c = _l4_coach()
+    coach, _c = _l4_coach()
     coach.cfg["coach"]["max_workers"] = 1
     await coach.start()
     coach.llm = _WorkerScriptLlm()
