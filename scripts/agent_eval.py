@@ -36,9 +36,10 @@ def api(base: str, token: str | None, method: str, path: str, body=None):
             raw = r.read()
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as e:
-        raise SystemExit(f"api {method} {path} -> {e.code}: {e.read()[:300]!r}")
+        raise SystemExit(
+            f"api {method} {path} -> {e.code}: {e.read()[:300]!r}") from e
     except urllib.error.URLError as e:
-        raise SystemExit(f"api {method} {path} -> {e}")
+        raise SystemExit(f"api {method} {path} -> {e}") from e
 
 
 def fmt_ts() -> str:
@@ -134,6 +135,7 @@ def main() -> int:
 
     flags = api(args.base, token, "GET", f"/api/sessions/{sid}/flags")
     usage = api(args.base, token, "GET", "/api/llm/usage?days=1")
+    am = api(args.base, token, "GET", f"/api/sessions/{sid}/agent-metrics")
     lb = api(args.base, token, "GET", f"/api/quests/{args.quest}/leaderboard")
     attempt = next((a for a in (lb.get("history") or [])
                     if a.get("session_id") == sid),
@@ -159,6 +161,34 @@ def main() -> int:
         lines.append(f"| {f['key']} | {f['name']} | {f['points']} | "
                      f"{'yes' if f['solved'] else 'no'} | "
                      f"{flag_ts.get(f['key'], '—')} |")
+    if am:
+        # agent-behavior metrics — the "where exactly did it break" view:
+        # denied reasons surface guard-triggering (foreign ips, rewrite
+        # loops), hallucination counters surface grounding failures
+        tools = " · ".join(f"{k}x{v}" for k, v in am["tool_counts"].items())
+        hal = am["hallucination"]
+        fl = am["flags"]
+        deny_head = "; ".join(
+            f"{r} x{n}" for r, n in
+            list(am["denied"]["reasons"].items())[:4])
+        lines += [
+            "",
+            "## agent metrics",
+            "",
+            f"- actions: {am['actions_total']} in {am['span_s']:.0f}s "
+            f"({tools})",
+            f"- exec ok/error: {am['exec']['ok']}/{am['exec']['error']}",
+            f"- denied: {am['denied']['total']}"
+            + (f" ({deny_head})" if deny_head else ""),
+            (f"- grounding: foreign-ip denies {hal['foreign_ip_denials']}, "
+             f"unverified submits {hal['unverified_flag_submits']}, "
+             f"rejected submits {hal['rejected_flag_submits']}"),
+            (f"- first flag: {fl['first_flag_key']} after "
+             f"{fl['time_to_first_flag_s']}s"
+             if fl.get('first_flag_key') else "- first flag: none"),
+            (f"- llm: {am['llm']['calls']} calls, "
+             f"{am['llm']['total_tokens']} tokens"),
+        ]
     if usage:
         lines += ["", "## LLM usage (last 24h)", "",
                   "```json", json.dumps(usage, indent=2)[:2000], "```"]

@@ -1,0 +1,164 @@
+"""FactsDB — deterministic session memory: extraction, bookkeeping, render."""
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from coach.facts import FactsDB
+
+NMAP_OUT = """
+Nmap scan report for web01 (10.1.10.21)
+Host is up (0.0020s latency).
+PORT     STATE SERVICE
+22/tcp   open  ssh     OpenSSH 9.2p1
+80/tcp   open  http    nginx 1.18.0
+3306/tcp closed mysql
+"""
+
+HYDRA_OUT = """
+[22][ssh] host: 10.1.10.21   login: svc-backup   password: Backup2024!
+1 of 1 target successfully completed
+"""
+
+
+def test_observe_output_nmap_ports_and_names():
+    f = FactsDB()
+    f.observe_output("nmap -sV 10.1.10.21", NMAP_OUT, 0)
+    h = f.hosts["10.1.10.21"]
+    assert h.names == {"web01"}
+    assert h.ports[22].startswith("OpenSSH") and h.ports[80].startswith("nginx")
+    assert 3306 not in h.ports                     # closed ports aren't facts
+    assert "10.1.10.21" in f.ips_seen
+
+
+def test_observe_output_hydra_cred_valid_on_host():
+    f = FactsDB()
+    f.observe_output("hydra -l svc-backup -P wl.txt ssh://10.1.10.21",
+                     HYDRA_OUT, 0)
+    c = f.creds[0]
+    assert c.user == "svc-backup" and c.secret == "Backup2024!"
+    assert c.valid_on == {"10.1.10.21"}
+    # a found cred is never "untested" for the objective tracker
+    assert f.untested_creds() == []
+
+
+def test_cmd_side_cred_marked_tested_on_target():
+    f = FactsDB()
+    f.observe_command("sshpass -p s3cret ssh deploy@10.1.10.22 id")
+    c = f.creds[0]
+    assert c.secret == "s3cret" and c.tested_on == {"10.1.10.22"}
+
+
+def test_generic_cred_pairs_in_loot_output():
+    f = FactsDB()
+    f.observe_output("cat /srv/runbook.txt",
+                     "backup job\nlogin: svc-backup password: Backup2024!\n", 0)
+    assert any(c.secret == "Backup2024!" for c in f.creds)
+
+
+def test_write_run_bookkeeping_from_exec():
+    f = FactsDB()
+    f.observe_output("cat > /root/solve.py << 'EOF'\nx\nEOF", "", 0)
+    f.observe_output("cat > /root/solve.py << 'EOF'\ny\nEOF", "", 0)
+    assert f.files["/root/solve.py"].writes == 2
+    f.observe_output("python3 -u /root/solve.py", "boom", 1)
+    assert f.files["/root/solve.py"].runs == 1
+    assert f.files["/root/solve.py"].last_exit == 1
+
+
+def test_telemetry_pending_write_confirmed_by_result():
+    f = FactsDB()
+    f.observe_command("cat > /tmp/x.sh << 'EOF'\nx\nEOF")
+    f.mark_run_exit(0)
+    f.observe_command("cat > /tmp/x.sh << 'EOF'\ny\nEOF")
+    f.mark_run_exit(0)
+    assert f.files["/tmp/x.sh"].writes == 2
+    # a failed third write is an attempt, not a confirmed write
+    f.observe_command("cat > /tmp/x.sh << 'EOF'\nz\nEOF")
+    f.mark_run_exit(1)
+    assert f.files["/tmp/x.sh"].writes == 2
+
+
+def test_pending_marker_expires():
+    f = FactsDB()
+    f.observe_command("cat > /tmp/y.sh << 'EOF'\nx\nEOF")
+    f._pending = (f._pending[0], f._pending[1], time.time() - 120)
+    f.mark_run_exit(0)
+    assert f.files["/tmp/y.sh"].writes == 0
+
+
+def test_typed_input_no_write_run_bookkeeping():
+    f = FactsDB()
+    f.observe_output("<type> python3 /root/x.py", "", None)
+    assert "/root/x.py" not in f.files
+
+
+def test_recon_scans_counted_per_target():
+    f = FactsDB()
+    f.observe_command("nmap -sV 10.1.10.21")
+    f.observe_command("nmap -p- 10.1.10.21")
+    assert f.hosts["10.1.10.21"].scans == 2
+    # identical command replayed (echo/restart replay) doesn't double-count
+    f.observe_command("nmap -sV 10.1.10.21")
+    assert f.hosts["10.1.10.21"].scans == 2
+
+
+def test_unscanned_lists_only_unprobed_targets():
+    f = FactsDB()
+    targets = [{"name": "web01", "ip": "10.1.10.21"},
+               {"name": "db01", "ip": "10.1.10.33"}]
+    assert f.unscanned(targets) == ["web01", "db01"]
+    f.observe_command("nmap 10.1.10.21")
+    assert f.unscanned(targets) == ["db01"]
+
+
+def test_flags_seen_submitted():
+    f = FactsDB()
+    assert f.flag_seen("pentrAIn{a1}") == 1
+    assert f.flag_seen("pentrAIn{a1}") == 2
+    f.flag_mark_submitted("pentrAIn{a1}", True)
+    assert f.flags["pentrAIn{a1}"].accepted
+
+
+def test_render_compact_sections():
+    f = FactsDB()
+    f.add_host("10.1.10.21", "web01")
+    f.hosts["10.1.10.21"].ports[22] = "OpenSSH 9.2"
+    f.add_cred("svc-backup", "Backup2024!", "runbook")
+    f.observe_output("cat > /root/s.py << 'EOF'\nx\nEOF", "", 0)
+    f.flag_seen("pentrAIn{a1}")
+    out = f.render()
+    assert out.startswith("FACTS:")
+    assert "web01=10.1.10.21" in out and "22:OpenSSH" in out
+    assert "svc-backup/Backup2024! (untested)" in out
+    assert "/root/s.py script(1w)" in out
+    assert "unsubmitted: pentrAIn{a1}" in out
+
+
+def test_render_respects_max_chars():
+    f = FactsDB()
+    for i in range(12):
+        f.add_host(f"10.1.10.{10 + i}")
+        f.hosts[f"10.1.10.{10 + i}"].ports[80] = "http"
+    out = f.render(400)
+    assert len(out) <= 400 and out.startswith("FACTS:")
+
+
+def test_render_empty_when_no_facts():
+    assert FactsDB().render() == ""
+
+
+def test_apply_worker_report_merges():
+    f = FactsDB()
+    n = f.apply_worker_report("w1", {
+        "creds": [{"user": "api", "secret": "tok", "host": "10.1.10.22"}],
+        "hosts": [{"ip": "10.1.10.22", "name": "app01",
+                   "ports": {"8080": "http"}}],
+        "findings": ["app01 leaks /debug"]})
+    assert n["creds"] == 1 and n["ports"] == 1
+    assert f.creds[0].valid_on == {"10.1.10.22"}
+    assert f.hosts["10.1.10.22"].ports[8080] == "http"
+    assert f.hosts["10.1.10.22"].names == {"app01"}

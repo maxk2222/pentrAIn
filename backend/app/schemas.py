@@ -224,6 +224,16 @@ class CoachFlagCheckIn(BaseModel):
     flag_key: str = Field(max_length=64)
 
 
+class CoachActionLogIn(BaseModel):
+    """Coach self-reported action audit (guard denials happen coach-side,
+    before any backend call — without this they never reach the DB)."""
+    session_id: int
+    tool: str = Field(max_length=64)
+    args: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)
+    status: str = Field(default="denied", pattern="^(denied|error)$")
+
+
 class EngineStatusOut(BaseModel):
     mode: str
     health: dict

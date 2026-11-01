@@ -657,3 +657,78 @@ async def test_session_context_carries_reference_and_tools(db_with_packs):
     assert ctx["quest"]["cheatsheet"]                    # quest-local card
     assert ctx["session_tools"] == "nmap\nsmbclient\nmysql"
     await sessions_svc.abort(db, s.id)
+
+
+async def test_agent_metrics_aggregates_audit_trail(db_with_packs):
+    """agent_metrics: tool histogram, denial reasons, hallucination signals
+    and time-to-flag — all from CoachAction/FlagSubmission/LlmUsage rows."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.domain import CoachAction, FlagSubmission, LlmUsage
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    s = await db.get(Session, s.id)
+
+    db.add_all([
+        CoachAction(session_id=s.id, tool="exec_in_kali",
+                    args={"command": "nmap t"}, result={"out": "x"},
+                    status="ok"),
+        CoachAction(session_id=s.id, tool="exec_in_kali",
+                    args={"command": "nmap t2"}, result={"out": "x"},
+                    status="ok"),
+        CoachAction(session_id=s.id, tool="exec_in_kali",
+                    args={"command": "curl http://10.42.0.5"},
+                    result={"reason": "10.42.0.5 is no known target"},
+                    status="denied"),
+        CoachAction(session_id=s.id, tool="type_in_pane",
+                    args={"text": "pw"}, result={"out": "x"}, status="ok"),
+        FlagSubmission(session_id=s.id, flag_key="flag-1",
+                       value="pentrAIn{a}", correct=False,
+                       submitted_at=datetime.now(UTC)),
+        FlagSubmission(session_id=s.id, flag_key="flag-1",
+                       value="pentrAIn{b}", correct=True,
+                       submitted_at=datetime.now(UTC)
+                       + timedelta(seconds=30)),
+        LlmUsage(session_id=s.id, model="m", kind="reflect",
+                 prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    ])
+    await db.commit()
+
+    m = await coach_bridge.agent_metrics(db, s.id)
+    assert m["actions_total"] == 4
+    assert m["tool_counts"]["exec_in_kali"] == 3
+    assert m["tool_counts"]["type_in_pane"] == 1
+    assert m["denied"]["total"] == 1
+    assert m["hallucination"]["foreign_ip_denials"] == 1
+    assert m["hallucination"]["rejected_flag_submits"] == 1
+    assert m["flags"]["accepted"] == 1
+    assert m["flags"]["first_flag_key"] == "flag-1"
+    assert m["flags"]["time_to_first_flag_s"] is not None
+    assert m["llm"]["total_tokens"] == 15
+    assert m["exec"] == {"ok": 2, "error": 0}
+    await sessions_svc.abort(db, s.id)
+
+
+async def test_session_context_returns_coach_outputs(db_with_packs):
+    """coach_outputs replay rows — the FactsDB rebuild path after restart."""
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    await coach_bridge.record_action(
+        db, s.id, "exec_in_kali", {"command": "nmap -sV t"},
+        {"out": "22/tcp open ssh", "exitcode": 0}, status="ok")
+    await coach_bridge.record_action(
+        db, s.id, "type_in_pane", {"text": "hunter2"},
+        {"out": "password:"}, status="ok")
+    ctx = await coach_bridge.session_context(db, s.id)
+    outs = ctx["coach_outputs"]
+    cmds = [o["command"] for o in outs]
+    assert "nmap -sV t" in cmds
+    assert "<type> hunter2" in cmds          # type args fold into <type> form
+    nmap_row = next(o for o in outs if o["command"] == "nmap -sV t")
+    assert nmap_row["out"] == "22/tcp open ssh"
+    assert nmap_row["exitcode"] == 0
+    await sessions_svc.abort(db, s.id)

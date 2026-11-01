@@ -21,8 +21,11 @@ from dataclasses import dataclass
 import httpx
 import structlog
 
+from . import percept
+from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
+from .facts import FLAG_RE, WRITE_RE, FactsDB
 from .llm import LlmClient, LlmError
 from .policy import Policy
 from .prompts import build_context_msg, chat_prompt, render_worker_prompt, system_prompt
@@ -101,16 +104,16 @@ class SessionCoach:
         self._active_draft: str | None = None   # draft_id for send_chat meta
         self._draft_used = False                 # meta attaches only once
         self._turn_reasoning = ""                # reasoning of the in-flight turn
-        self._write_counts: dict[str, int] = {}  # path → writes via exec_in_kali
-        self._run_exits: dict[str, int] = {}     # script path → last exit code
+        self.facts = FactsDB()                   # structured session memory —
+        # hosts/creds/files/flags + ips_seen; feeds FACTS:, the objective
+        # tracker and the anti-loop guards (rebuilt from replay on restart)
         self._out_sigs: dict[str, int] = {}      # exec output signature → count
         self._read_counts: dict[str, int] = {}   # file path → read-type execs
-        self._flags_seen: dict[str, int] = {}    # flag value → times shown
-        self._flags_submitted: dict[str, bool] = {}  # flag → accepted
         self._submit_challenged: dict[str, int] = {}  # unverified submits
         self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
-        self._ips_seen: set[str] = set()         # IPs observed in outputs
         self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
+        self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
+        # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
     # ---------- lifecycle ----------
 
@@ -148,7 +151,8 @@ class SessionCoach:
                        else ipaddress.ip_network(f"{ip}/24", strict=False))
                 if net not in self._allowed_nets:
                     self._allowed_nets.append(net)
-                self._ips_seen.add(ip.split("/")[0])
+                self.facts.ips_seen.add(ip.split("/")[0])
+                self.facts.add_host(ip.split("/")[0], t.get("name") or "")
             except ValueError:
                 pass
         # authorized LAN scope (home-lab): the whole CIDR is fair game AND
@@ -161,7 +165,7 @@ class SessionCoach:
                 net = ipaddress.ip_network(scope, strict=False)
                 if net not in self._allowed_nets:
                     self._allowed_nets.append(net)
-                self._ips_seen.add(scope.split("/")[0])
+                self.facts.ips_seen.add(scope.split("/")[0])
             except ValueError:
                 pass
         esc = self.ctx.get("quest", {}).get("escalation", {})
@@ -232,25 +236,32 @@ class SessionCoach:
             except (TypeError, ValueError):
                 self.state.commands[-1].exit_code = None
             seen_heads.add(cmd[:60])
-        # seed the rewrite guard from replayed history — a restart must not
-        # reset the counters and re-enable the solver-rewrite loop
+        # FactsDB rebuild: replayed command memory feeds the same extraction
+        # paths live events use — guards, creds, hosts and files all survive
+        # a restart. mark_run_exit confirms pending writes/runs in order.
+        # Coach commands covered by coach_outputs are skipped here — their
+        # write/run bookkeeping comes from observe_output below (one count).
+        covered = {str(o.get("command") or "")
+                   for o in (self.ctx.get("coach_outputs") or [])}
         for c in self.state.commands:
-            if c.exit_code is None:
+            if c.from_coach and c.command in covered:
                 continue
-            wm = SessionState._WRITE_RE.search(c.command)
-            if wm and c.exit_code == 0:
-                path = wm.group(1) or wm.group(3)
-                self._write_counts[path] = self._write_counts.get(path, 0) + 1
-            rm = re.search(r"\b(?:python3?|bash|sh|perl|ruby|node)\s+(/?\S+)",
-                           c.command)
-            if rm:
-                self._run_exits[rm.group(1)] = c.exit_code
+            self.facts.observe_command(c.command, from_coach=c.from_coach)
+            if c.exit_code is not None:
+                self.facts.mark_run_exit(c.exit_code)
+        # exec/type outputs (backend keeps them in CoachAction.result) add
+        # parsed facts — ports, creds, hostnames — the command replay can't
+        # see. Chronological replay keeps write/run bookkeeping ordered.
+        for o in reversed(self.ctx.get("coach_outputs") or []):
+            self.facts.observe_output(str(o.get("command") or ""),
+                                      str(o.get("out") or ""),
+                                      o.get("exitcode"))
         # seed seen-flag evidence from past tool outputs — after a restart a
         # re-submit of an already-shown flag must not hit the unverified
         # challenge, and an invented value still gets caught
         for o in self.ctx.get("flag_outs") or []:
-            for fv in re.findall(r"pentrAIn\{[^}\s]+\}", str(o)):
-                self._flags_seen[fv] = self._flags_seen.get(fv, 0) + 1
+            for fv in FLAG_RE.findall(str(o)):
+                self.facts.flag_seen(fv)
         # stuck/idle clocks seed from the most RECENT liveness signal —
         # not blindly from started_at (a session parked in 'ready' for hours
         # then activated must not look stuck-since-forever)
@@ -260,6 +271,7 @@ class SessionCoach:
         self.state.last_progress_ts = max((x for x in seeds if x), default=time.time())
         if self.state.last_activity_ts <= 0:
             self.state.last_activity_ts = self.state.last_progress_ts
+        self._traj = _traj.for_session(self.sid)
         self._ready.set()
         self._task = asyncio.create_task(self._run())
         # a silently-dead run task is the worst failure mode — log its fate
@@ -280,6 +292,8 @@ class SessionCoach:
     async def stop(self) -> None:
         self._stop.set()
         self._kill_all_workers()
+        if self._traj:
+            self._traj.close()
         for t in (self._task, self._chat_task):
             if t:
                 t.cancel()
@@ -442,6 +456,7 @@ class SessionCoach:
                     self.state.add_command(
                         payload.get("ts", time.time()), cmd,
                         payload.get("cwd", ""), payload.get("exit_code"))
+                    self.facts.observe_command(cmd)
                 for cid in self.matcher.check(cmd):
                     if cid not in self.state.checkpoints_hit:
                         self.state.checkpoints_hit.add(cid)
@@ -450,7 +465,9 @@ class SessionCoach:
                         await self._quick_ack(
                             f"Checkpoint: **{self.matcher.name_for(cid)}** — logged.")
             elif kind == "command_result":
-                self.state.mark_exit(int(payload.get("exit_code", 0)))
+                code = int(payload.get("exit_code", 0))
+                self.state.mark_exit(code)
+                self.facts.mark_run_exit(code)
             # heartbeats & other kinds → ignored entirely
 
         # path 2: session/user signals
@@ -595,7 +612,8 @@ class SessionCoach:
                 self._llm_turn(
                     build_context_msg(self.ctx, self.state, decision.reason,
                                       decision.urgency, stage=decision.stage,
-                                      action_budget=budget),
+                                      action_budget=budget,
+                                      facts=self.facts),
                     proactive=True),
                 timeout=LLM_TURN_BUDGET_S)
             # L4 stall correction: a proactive turn that produced NO real work
@@ -625,7 +643,8 @@ class SessionCoach:
                         build_context_msg(self.ctx, self.state, why,
                                           decision.urgency,
                                           stage=decision.stage,
-                                          action_budget=budget),
+                                          action_budget=budget,
+                                          facts=self.facts),
                         proactive=True),
                     timeout=left)
             # continuous agent loop: the last chain DID work — keep the
@@ -689,7 +708,7 @@ class SessionCoach:
             return False
         if record_user:
             self._history.append({"role": "user", "content": record_user[:900]})
-            self._history = trim_history(self._history, HISTORY_CAP)
+            self._history = self._trim_history()
         tools_active = (bool(self.cfg.get("llm", {}).get("use_tools", True))
                         and "no_tools" not in getattr(self.llm, "_compat", set()))
         async with self._llm_lock:
@@ -768,6 +787,7 @@ class SessionCoach:
                     self.sid, self.llm.model, "reflect" if proactive else "chat",
                     resp.get("usage"), resp.get("latency_ms")))
                 call_results: dict[str, str] = {}
+                acts: list[dict] = []
                 await log.ainfo("llm actions", session=self.sid,
                                 proactive=proactive,
                                 actions=[a.get("type") for a in resp["actions"]])
@@ -785,9 +805,26 @@ class SessionCoach:
                         if did and a.get("type") in ("exec_in_kali", "type_in_pane",
                                                      "submit_flag", "check_flag"):
                             worked = True
+                        arg = (a.get("command") or a.get("text")
+                               or a.get("content") or a.get("value")
+                               or a.get("task") or a.get("reason") or "")
+                        acts.append({"t": a.get("type"),
+                                     "arg": str(arg)[:200],
+                                     "res": (res or "")[:240],
+                                     "denied": str(res or "").startswith(
+                                         "denied:")})
                 finally:
                     # whatever happened mid-dispatch — no stale 'working' chip
                     await self.client.send_activity(self.sid, active=False)
+                self._traj.record(
+                    kind="turn", proactive=proactive, chain=chain_len,
+                    reason=str(user_msg)[:160], actions=acts,
+                    tokens=int(usage.get("total_tokens", 0)),
+                    facts={k: len(v) for k, v in
+                           (("hosts", self.facts.hosts),
+                            ("creds", self.facts.creds),
+                            ("files", self.facts.files),
+                            ("flags", self.facts.flags)) if v})
                 calls = resp.get("tool_calls") or []
                 if calls:
                     # replay the exchange faithfully: the model sees its own
@@ -814,7 +851,7 @@ class SessionCoach:
                         }
                         messages.append(tool_msg)
                         self._history.append(dict(tool_msg))
-                    self._history = trim_history(self._history, HISTORY_CAP)
+                    self._history = self._trim_history()
                 # agentic chain: the model issued calls with real effects —
                 # feed their results straight back so act→observe→act runs
                 # at LLM cadence instead of waiting for the next reflect tick
@@ -857,7 +894,34 @@ class SessionCoach:
 
     def _record_reply(self, text: str) -> None:
         self._history.append({"role": "assistant", "content": text[:900]})
-        self._history = trim_history(self._history, HISTORY_CAP)
+        self._history = self._trim_history()
+
+    def _trim_history(self) -> list[dict]:
+        """trim_history + rolling summary: whatever falls off the front is
+        distilled to one line in state.earlier — long-horizon L4 runs keep a
+        trace of their early turns instead of a hard cut (the 'no growing
+        chat log' rule doesn't have to mean 'no memory of it')."""
+        before = self._history
+        after = trim_history(before, HISTORY_CAP)
+        dropped = len(before) - len(after)
+        for m in before[:dropped]:
+            role = m.get("role")
+            if role == "tool":
+                line = f"saw: {(m.get('content') or '')[:90]}"
+            elif role == "assistant" and m.get("tool_calls"):
+                tools = ",".join(
+                    (c.get("function") or {}).get("name") or "?"
+                    for c in m["tool_calls"][:4])
+                line = f"acted: {tools}"
+                if m.get("content"):
+                    line += f" ({m['content'][:50]})"
+            elif role == "assistant":
+                line = f"said: {(m.get('content') or '')[:90]}"
+            else:
+                line = f"trainee: {(m.get('content') or '')[:90]}"
+            self.state.earlier.append(line[:120])
+        self.state.earlier = self.state.earlier[-10:]
+        return after
 
     def _draft_meta(self) -> dict:
         """Attach the active draft_id (+ turn reasoning) to the FIRST message
@@ -887,24 +951,26 @@ class SessionCoach:
         real flags are correct anyway, wrong submits are already counted
         by the backend either way."""
         note = ""
-        self._ips_seen.update(self._IP_RE.findall(out or ""))
-        for fv in set(re.findall(r"pentrAIn\{[^}\s]+\}", out or "")):
+        # IPs observed in output become allowed targets (pivot-safe) — kept
+        # here as well as in observe_output so a bare _scan_flags call (tests,
+        # legacy paths) still relaxes the foreign-ip guard correctly
+        self.facts.ips_seen.update(self._IP_RE.findall(out or ""))
+        for fv in set(FLAG_RE.findall(out or "")):
             if self._FLAG_PLACEHOLDER_RE.match(fv):
                 continue
-            n = self._flags_seen.get(fv, 0) + 1
-            self._flags_seen[fv] = n
+            n = self.facts.flag_seen(fv)
             if n == 1:
                 note += (f"\nFLAG CAPTURED: {fv} — call submit_flag with "
                          f"it NOW (flag values are per-session; a wrong "
                          f"submit is impossible). Do not re-run commands "
                          f"to re-confirm it.")
-            elif fv not in self._flags_submitted:
+            elif not self.facts.flags[fv].submitted:
                 try:
                     r = await self.client.submit_flag(self.sid, fv)
                 except (TimeoutError, httpx.HTTPError) as e:
                     r = {"error": f"transport {type(e).__name__}"}
                 ok = bool(r.get("correct"))
-                self._flags_submitted[fv] = ok
+                self.facts.flag_mark_submitted(fv, ok)
                 if ok:
                     verdict = "correct — flag solved"
                     if r.get("all_solved"):
@@ -919,7 +985,7 @@ class SessionCoach:
                     f"Auto-submitted flag `{fv}` (seen {n}x) → **{verdict}**",
                     kind="action_report", meta=self._draft_meta())
             else:
-                prev = ("accepted" if self._flags_submitted.get(fv)
+                prev = ("accepted" if self.facts.flags[fv].accepted
                         else "rejected")
                 note += (f"\n{fv} — submission already attempted ({prev}); "
                          f"stop re-reading it and move on.")
@@ -942,7 +1008,7 @@ class SessionCoach:
                 continue
             if ip.is_loopback or not (ip.is_private or ip.is_link_local):
                 continue
-            if lit in self._ips_seen:
+            if lit in self.facts.ips_seen:
                 continue
             if any(ip in n for n in self._allowed_nets):
                 continue
@@ -951,6 +1017,26 @@ class SessionCoach:
 
     async def _dispatch(self, a: dict, *, proactive: bool = False,
                         window: str | None = None) -> tuple[bool, str]:
+        """Guard-denial audit: every 'denied:' result self-reports to the
+        backend (exec/type denials that never reach the API would otherwise
+        be invisible to agent-metrics). Fire-and-forget, never blocks."""
+        spoke, result = await self._dispatch_inner(
+            a, proactive=proactive, window=window)
+        if isinstance(result, str) and result.startswith("denied:"):
+            args = {k: v for k, v in (a or {}).items()
+                    if k in ("command", "text", "task", "worker_id",
+                             "value", "flag_key") and isinstance(v, str)}
+            self._traj.record(kind="denial", tool=a.get("type"),
+                              args=args, reason=result[7:].strip()[:300])
+            report = getattr(self.client, "log_denial", None)
+            if report:
+                asyncio.create_task(report(
+                    self.sid, str(a.get("type") or "?"), args,
+                    result[7:].strip()))
+        return spoke, result
+
+    async def _dispatch_inner(self, a: dict, *, proactive: bool = False,
+                              window: str | None = None) -> tuple[bool, str]:
         """Execute one LLM action under autonomy/budget gates.
         Returns (visible_to_trainee, result_text) — the result text becomes the
         `tool` reply the model sees in history, so EVERY action reports an
@@ -1022,11 +1108,12 @@ class SessionCoach:
                     # ran (or ran clean) does NOT need another version — the
                     # model 'perfects' scripts forever otherwise. Deny before
                     # typing anything; a failed run unlocks the next rewrite.
-                    wm = SessionState._WRITE_RE.search(cmd)
+                    wm = WRITE_RE.search(cmd)
                     if wm:
                         path = wm.group(1) or wm.group(3)
-                        n = self._write_counts.get(path, 0)
-                        last = self._run_exits.get(path)
+                        ff = self.facts.files.get(path)
+                        n = ff.writes if ff else 0
+                        last = ff.last_exit if ff else None
                         if n >= 2 and (last is None or last == 0):
                             why = ("ran without error" if last == 0
                                    else "was never executed")
@@ -1116,37 +1203,47 @@ class SessionCoach:
                             self._pane_interactive = False
                     if typed:
                         # the pentrain-coach pane is NOT covered by the shell
-                        # telemetry hook — record our own exec so ALREADY_DONE,
-                        # FILES_WRITTEN and RECON_SATURATED see it (without this
-                        # the model has zero command memory and re-scans blind)
+                        # telemetry hook — record our own exec so ALREADY_DONE
+                        # and RECON_SATURATED see it (without this the model
+                        # has zero command memory and re-scans blind)
                         self.state.add_command(time.time(), cmd,
                                                from_coach=True)
                         self.state.commands[-1].exit_code = code
                         if read_tgt:
                             self._read_counts[read_tgt] = (
                                 self._read_counts.get(read_tgt, 0) + 1)
-                    if code is None:
+                        # perceptor: normalize the model-facing reply and feed
+                        # the facts store (ports/creds/hosts/files) in one pass
+                        result = (percept.normalize(
+                            cmd, out, code,
+                            timed_out=bool(res.get("timed_out"))).reply
+                            or "still running")
+                        self.facts.observe_output(cmd, out, code)
+                    elif code is None:
                         err_hint = res.get("err") or ""
                         if err_hint and err_hint not in out:
                             result = f"{out[:1500]}\n[{err_hint}]"[:1900]
                         else:
                             result = out[:1900] or "still running"
+                        # bounced/denied — the command never ran, but the pane
+                        # snapshot can still show a foreground program's
+                        # findings; parse facts without run/write bookkeeping
+                        if out:
+                            self.facts.apply_delta(
+                                percept.parse_output(
+                                    cmd, percept.strip_ansi(out)))
                     else:
                         result = f"{out[:1900]}\n(exit {code})" if out else f"exit {code}"
-                    # write/run bookkeeping for the rewrite guard above
+                    # write-count note for the rewrite guard above — facts
+                    # already counted this successful write via observe_output
                     if wm and code == 0:
-                        n = self._write_counts.get(path, 0) + 1
-                        self._write_counts[path] = n
+                        ff = self.facts.files.get(path)
+                        n = ff.writes if ff else 0
                         if n >= 2:
                             result += (f"\nNOTE: {path} has now been written "
                                        f"{n} times — the file exists, more "
                                        f"rewrites do not advance the quest. "
                                        f"RUN it (e.g. python3 -u {path}).")
-                    if code is not None:
-                        rm = re.search(
-                            r"\b(?:python3?|bash|sh|perl|ruby|node)\s+(/?\S+)", cmd)
-                        if rm:
-                            self._run_exits[rm.group(1)] = code
                     result += await self._scan_flags(out)
                     # pane-busy escalation: consecutive execs that never
                     # finished (bounced off a held pane or still running)
@@ -1208,7 +1305,10 @@ class SessionCoach:
                         f"({type(e).__name__}) — the input may still have "
                         f"reached the pane; probe before re-typing")
                 out = res.get("out") or res.get("error") or res.get("err") or ""
-                result = (out[:1900] or "input sent") + await self._scan_flags(out)
+                result = (percept.normalize(f"<type> {text_in}", out, None).reply
+                          or "input sent")
+                self.facts.observe_output(f"<type> {text_in}", out, None)
+                result += await self._scan_flags(out)
                 # keep the interactive fast-path alive while the pane is
                 # still held (inside an ssh/ftp/vim session remote commands
                 # must ALL go through type_in_pane — at LLM cadence, not
@@ -1243,8 +1343,9 @@ class SessionCoach:
                 # while the real flag sat in the scrollback). Challenge once;
                 # an identical resubmit goes through so a real-but-uncaptured
                 # read stays possible — invented values just get corrected.
+                ff = self.facts.flags.get(val)
                 if (re.fullmatch(r"pentrAIn\{[^}\s]+\}", val)
-                        and val not in self._flags_seen
+                        and (ff is None or not ff.seen)
                         and not self._submit_challenged.get(val)):
                     self._submit_challenged[val] = 1
                     return spoke, (
@@ -1256,7 +1357,7 @@ class SessionCoach:
                         f"(Submitting the same value again confirms it.)")
                 await self.client.send_activity(self.sid, "submitting flag…")
                 res = await self.client.submit_flag(self.sid, val)
-                self._flags_submitted[val] = bool(res.get("correct"))
+                self.facts.flag_mark_submitted(val, bool(res.get("correct")))
                 verdict = ("correct — flag solved" if res.get("correct")
                            else f"rejected ({res.get('error') or 'wrong value'})")
                 result = f"submit {val[:80]} → {verdict}"
@@ -1407,8 +1508,24 @@ class SessionCoach:
             return (f"{wid} still running ({w.actions} actions, "
                     f"{int(time.monotonic() - w.started)}s) — task: "
                     f"\"{w.task[:80]}\"")
+        merged = ""
+        if w.report and status == "done":
+            # structured report → shared facts (knowledge-graph merge):
+            # JSON first; a prose report still yields creds/hosts via the
+            # generic parser instead of rotting as context text
+            parsed = percept.parse_worker_report(w.report)
+            if parsed:
+                n = self.facts.apply_worker_report(wid, parsed)
+                bits = [f"{n['creds']} creds", f"{n['ports']} ports",
+                        f"{n['findings']} findings"]
+                merged = ("\n[merged into FACTS: "
+                          + ", ".join(bits) + "]")
+            else:
+                self.facts.apply_delta(
+                    percept.parse_output("", w.report), source=wid)
+                merged = "\n[prose report — extracted facts where possible]"
         return (f"{wid} {status} ({w.actions} actions):\n"
-                f"{w.report or '(no report)'}")
+                f"{w.report or '(no report)'}{merged}")
 
     def _agent_status(self) -> str:
         if not self._workers:

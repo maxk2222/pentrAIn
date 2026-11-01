@@ -10,6 +10,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .objective import render as objective_render
+
+
 # curated environment knowledge (tool inventory, shell quirks, recipes) —
 # loaded once into the system prompt so it stays in the cacheable prefix.
 # Versioned with the coach, updated from live-test lessons.
@@ -148,7 +151,8 @@ def system_prompt(tools_active: bool) -> str:
 
 
 def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
-                      *, stage: int = 0, action_budget: int = 50) -> str:
+                      *, stage: int = 0, action_budget: int = 50,
+                      facts=None) -> str:
     """Compact live context for one LLM turn."""
     q = ctx["quest"]; s = ctx["session"]; p = ctx.get("profile", {})
     level = (p.get("track_levels") or {}).get(q["track"], "?")
@@ -173,8 +177,8 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
           if q.get("cheatsheet") else []),
         # live tool inventory probed post-deploy — absent = NOT installed,
         # don't waste turns discovering it
-        *([f"KALI_TOOLS (probed at deploy — anything missing is NOT installed): "
-           f"{ctx['session_tools'].replace(chr(10), ' ')}"]
+        *([(f"KALI_TOOLS (probed at deploy — anything missing is NOT installed): "
+            f"{ctx['session_tools'].replace(chr(10), ' ')}")]
           if ctx.get("session_tools") else []),
         f"TRAINEE_LEVEL(track): {level}",
         f"TRIGGER: {reason} (urgency={urgency}, escalation_stage={min(2, stage)})",
@@ -182,10 +186,18 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         (f"TARGETS: {q.get('targets') or []} — use these exact IPs/hostnames; "
          f"missing ips resolve on kali via getent hosts <name>; never invent "
          f"addresses"),
+        # structured session memory — parsed from command lines and tool
+        # output, not recalled: the model reads FACTS instead of re-deriving
+        # hosts/creds/files/flags from scrollback (stops re-verify loops)
+        *([facts_txt] if (facts_txt := (facts.render(1100) if facts else ""))
+          else []),
+        # deterministic next-step suggestion (mini-PTG) — one concrete
+        # action from open work, so long-horizon runs don't lose the thread
+        *([obj_txt] if (obj_txt := (objective_render(ctx, facts, st)
+                                   if facts else "")) else []),
         f"CHECKPOINTS_HIT: {sorted(st.checkpoints_hit)}",
         f"CHECKPOINTS_OPEN: {[c.get('name') or c.get('id') for c in q.get('checkpoints', []) if c.get('id') not in st.checkpoints_hit]}",
         f"ACTION_BUDGET: {st.exec_count}/{action_budget} execs used",
-        f"TOOLS_TRIED: {sorted(st.tool_diversity())[:30]}",
         "RECENT_TELEMETRY (newest last; `# exit N` = failed, `[coach-ran]` = your own commands):",
     ]
     for line in st.recent_formatted(22):
@@ -197,14 +209,13 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         parts.append(f"DEPLOY_LOG_TAIL: {tail[-400:]}")
     if st.notes:
         parts.append("YOUR_NOTES: " + " | ".join(st.notes[-4:]))
+    if st.earlier:
+        parts.append("EARLIER (dropped history, distilled): "
+                     + " | ".join(st.earlier[-6:]))
     done = st.done_commands()
     if done:
         parts.append("ALREADY_DONE (succeeded — do NOT re-run these):")
         parts.append("  " + "  ||  ".join(d[:80] for d in done))
-    written = st.written_files()
-    if written:
-        parts.append("FILES_WRITTEN (these exist already — run them, "
-                     "don't rewrite): " + ", ".join(written))
     if int(s.get("autonomy_level") or 0) >= 4:
         parts.append(
             "You are the OPERATOR — there is no trainee watching. Pick the "
@@ -305,9 +316,16 @@ def render_worker_prompt(ctx: dict, w) -> str:
         ("- Your steps share the session action budget — never re-run a "
          "command whose result is already known."),
         "",
-        ("When done (or fully blocked): reply with a plain message and NO "
-         "tool call — that message IS your report to the parent coach. "
-         "Include: what you found (hosts/services/versions/creds/evidence "
-         "paths), what failed and why, and the recommended next step."),
+        ("When done (or fully blocked): reply with ONE JSON object and NO "
+         "tool call — that object IS your report to the parent coach, it "
+         "merges straight into shared facts:\n"
+         "{\"summary\": \"one line for the trainee\", "
+         "\"findings\": [\"key evidence, paths, versions\"], "
+         "\"creds\": [{\"user\": \"u\", \"secret\": \"p\", \"host\": \"ip\"}], "
+         "\"hosts\": [{\"ip\": \"10.x\", \"name\": \"h\", "
+         "\"ports\": {\"22\": \"ssh\"}}], "
+         "\"next\": \"recommended next step\"}\n"
+         "Omit empty sections. If you can't produce JSON, plain prose is "
+         "accepted — but structured reports lose nothing."),
     ]
     return "\n".join(lines)

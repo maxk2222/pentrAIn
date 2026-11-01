@@ -22,6 +22,7 @@ from ..schemas import (
     SessionStartIn,
     SubagentsIn,
 )
+from ..services import coach_bridge as coach_bridge_svc
 from ..services import console as console_svc
 from ..services import hoststats as hoststats_svc
 from ..services import kali_net as kali_net_svc
@@ -135,6 +136,17 @@ async def session_metrics(session_id: int, db: AsyncSession = Depends(get_db)):
         except Exception as e:
             out.append({**v, "status": "error", "error": str(e)[:120]})
     return {"ok": True, "vms": out}
+
+
+@router.get("/sessions/{session_id}/agent-metrics")
+async def session_agent_metrics(session_id: int,
+                                db: AsyncSession = Depends(get_db)):
+    """Agent-behavior metrics from the coach audit trail — tool histogram,
+    denial reasons, grounding signals, time-to-flag, token usage."""
+    m = await coach_bridge_svc.agent_metrics(db, session_id)
+    if m is None:
+        raise HTTPException(404, "session not found")
+    return m
 
 
 @router.get("/sessions/{session_id}/metrics/history")

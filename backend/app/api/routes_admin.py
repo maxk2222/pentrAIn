@@ -14,6 +14,7 @@ from ..db import get_db
 from ..models.domain import Attempt, CoachMessage, LlmUsage, Session, SessionState, UserProfile
 from ..schemas import (
     CheckpointIn,
+    CoachActionLogIn,
     CoachActivityIn,
     CoachExecIn,
     CoachFlagCheckIn,
@@ -646,6 +647,17 @@ async def coach_flag_check(body: CoachFlagCheckIn, db: AsyncSession = Depends(ge
 async def coach_checkpoint(body: CheckpointIn, db: AsyncSession = Depends(get_db)):
     await coach_bridge.mark_checkpoint(db, body.session_id, body.checkpoint_id)
     return {"ok": True}
+
+
+@coach_router.post("/action")
+async def coach_action_log(body: CoachActionLogIn,
+                           db: AsyncSession = Depends(get_db)):
+    """Audit-only sink for coach-side guard outcomes — restricted to
+    denied/error so it can never fabricate a successful action row."""
+    a = await coach_bridge.record_action(
+        db, body.session_id, body.tool, body.args, body.result,
+        status=body.status)
+    return {"id": a.id}
 
 
 @coach_router.post("/screen")

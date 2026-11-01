@@ -170,3 +170,40 @@ sequenceDiagram
 ```
 
 Details: [architecture.md — coach event flow](architecture.md#coach-event-flow).
+
+## Memory & perception (facts, perceptor, objectives)
+
+Long-horizon L4 runs can't keep hosts, creds and file state in a growing
+chat log — the coach externalizes them deterministically (no extra LLM
+call):
+
+- **`percept.py` (perceptor)** — normalizes every exec/type result before
+  the model sees it: ANSI stripped, middle elided, exit code tagged; parses
+  tool output (nmap/masscan ports, hydra creds, getent names, generic
+  `login:`/`password` pairs, user lists) into a facts delta.
+- **`facts.py` (FactsDB)** — per-session structured memory: hosts (ports,
+  names, scan counts), credentials (source, tested/validated hosts), files
+  (writes/runs/last exit — the rewrite guard reads this), flags
+  (seen/submitted/accepted), observed IPs (the foreign-IP pivot rule).
+  Rendered as a compact `FACTS:` block in every context message.
+- **`objective.py` (mini-PTG)** — picks ONE concrete next action from open
+  work (unsubmitted flag → unrun/failed script → untested cred → next
+  checkpoint → recon/enum/foothold gap) and renders it as
+  `CURRENT_OBJECTIVE:` — the model stops losing the thread between turns.
+- **Worker reports** — `collect_agent` expects a closing JSON report
+  (`findings`/`creds`/`hosts`/`next`) and merges it into FactsDB; prose
+  reports still yield facts via the generic parser.
+- **Rolling summary** — history is capped; whatever `trim_history` drops is
+  distilled into a bounded `EARLIER:` line list instead of vanishing.
+- **Trajectories** — every LLM sub-turn appends a JSONL record
+  (`PENTRAIN_TRAJ_DIR`, compose volume `pentrain-traj`) for eval and later
+  training data.
+- **Agent metrics** — `GET /api/sessions/{id}/agent-metrics` aggregates the
+  audit trail: tool histogram, denial reasons (coach-side guard denials
+  self-report via `POST /api/coach/action`), grounding signals
+  (foreign-IP denies, unverified/rejected flag submits), time-to-first-flag
+  and token usage — consumed by `scripts/agent_eval.py`.
+
+Everything in `FACTS:`/`CURRENT_OBJECTIVE:` derives from *observed* data
+only — quest YAML internals (`flag.vm`, `file_path`, hidden hints) never
+leak, which keeps blind capstone quests (`cap-t3-nordwind`) honest.

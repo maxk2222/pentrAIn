@@ -397,7 +397,8 @@ async def test_flag_in_output_gets_submit_directive():
     assert "AUTO-SUBMITTED" in r2 and "correct" in r2
     assert coach.client.flags == ["pentrAIn{abc123def456}"]
     # never auto-submit a value twice — even after a rejection
-    coach._flags_submitted["pentrAIn{abc123def456}"] = False
+    coach.facts.flags["pentrAIn{abc123def456}"].submitted = True
+    coach.facts.flags["pentrAIn{abc123def456}"].accepted = False
     _, r3 = await coach._dispatch(
         {"type": "exec_in_kali", "command": "cat user.txt again"},
         proactive=True)
@@ -419,7 +420,7 @@ async def test_unseen_flag_submit_is_challenged_once():
         {"type": "submit_flag", "value": "pentrAIn{invented}"}, proactive=True)
     assert did and c.flags == ["pentrAIn{invented}"]
     # a flag that WAS seen in output submits without challenge
-    coach._flags_seen["pentrAIn{real}"] = 1
+    coach.facts.flag_seen("pentrAIn{real}")
     did, _r3 = await coach._dispatch(
         {"type": "submit_flag", "value": "pentrAIn{real}"}, proactive=True)
     assert did and c.flags[-1] == "pentrAIn{real}"
@@ -886,15 +887,18 @@ async def test_rewrite_guard_denies_third_write_without_failed_run():
     # nothing was typed → no new action_report
     assert len([a for a in c.chats if a.get("kind") == "action_report"]) == n_execs
     # run it, fail → rewrite allowed again
-    c.exec_results = [{"out": "boom", "exitcode": 1}]
+    async def _fail(sid, cmd, window=None):
+        return {"out": "boom", "exitcode": 1, "visible": True}
+    c.exec_in_kali = _fail
     await coach._dispatch({"type": "exec_in_kali", "command": "python3 -u /root/solve.py"})
-    coach._run_exits["/root/solve.py"] = 1        # dispatch recorded the failure
+    # dispatch recorded the failure via facts bookkeeping
+    assert coach.facts.files["/root/solve.py"].last_exit == 1
     _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
     assert not r.startswith("denied:")
 
 
 async def test_start_seeds_write_counts_from_replay():
-    """Coach restart mid-session: replayed writes must seed _write_counts so
+    """Coach restart mid-session: replayed writes must seed facts.files so
     the rewrite guard stays armed — otherwise each restart resets it."""
     ctx = {**FakeClient().ctx,
            "session": {"id": 1, "state": "active", "autonomy_level": 4,
@@ -911,7 +915,7 @@ async def test_start_seeds_write_counts_from_replay():
     coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
     coach.llm = FakeLlm()
     await coach.start(); await coach.stop()
-    assert coach._write_counts["/root/solve.py"] == 2
+    assert coach.facts.files["/root/solve.py"].writes == 2
     # third write denied immediately — no free rewrites after restart
     coach2 = SessionCoach(1, c, {"coach": {}, "llm": {}})
     coach2.llm = FakeLlm()
@@ -1291,6 +1295,63 @@ def test_subagent_tools_gated_by_flag():
     assert "spawn_agent" not in l3
 
 
+async def test_collect_merges_json_report_into_facts():
+    """A worker's closing JSON report lands in the parent FactsDB — creds,
+    hosts, ports — not just as prose in the tool result."""
+    class JsonWorkerLlm(FakeLlm):
+        async def chat(self, messages, **kw):
+            if "worker agent" in (messages[0].get("content") or ""):
+                return {"content": '{"summary": "share found",'
+                        ' "creds": [{"user": "svc", "secret": "s3cr3t",'
+                        '            "host": "192.168.3.55"}],'
+                        ' "hosts": [{"ip": "192.168.3.55", "name": "nas",'
+                        '            "ports": {"445": "smb"}}],'
+                        ' "findings": ["anonymous share readable"],'
+                        ' "next": "mount and loot"}',
+                        "actions": [{"type": "none", "reason": "done"}],
+                        "tool_calls": [],
+                        "raw": {"usage": {"total_tokens": 1}}}
+            return {"content": "", "actions": [{"type": "none"}],
+                    "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+    coach, _c = _l4_coach()
+    await coach.start()
+    coach.llm = JsonWorkerLlm()
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "enum nas"})
+    assert "spawned w1" in r
+    await asyncio.sleep(0.2)
+    _v, r = await coach._dispatch({"type": "collect_agent",
+                                   "worker_id": "w1"})
+    assert "merged into FACTS" in r
+    assert any(c.user == "svc" and c.secret == "s3cr3t"
+               for c in coach.facts.creds)
+    assert coach.facts.hosts["192.168.3.55"].ports == {445: "smb"}
+    assert "anonymous share readable" in coach.facts.findings
+    await coach.stop()
+
+
+async def test_collect_prose_report_still_extracts():
+    """Fallback: a prose report yields facts via the generic parser."""
+    class ProseWorkerLlm(FakeLlm):
+        async def chat(self, messages, **kw):
+            if "worker agent" in (messages[0].get("content") or ""):
+                return {"content": "REPORT: ssh svc:s3cr3t works on "
+                        "192.168.3.55; flag in /root/flag.txt",
+                        "actions": [{"type": "none", "reason": "done"}],
+                        "tool_calls": [],
+                        "raw": {"usage": {"total_tokens": 1}}}
+            return {"content": "", "actions": [{"type": "none"}],
+                    "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+    coach, _c = _l4_coach()
+    await coach.start()
+    coach.llm = ProseWorkerLlm()
+    await coach._dispatch({"type": "spawn_agent", "task": "enum nas"})
+    await asyncio.sleep(0.2)
+    _v, r = await coach._dispatch({"type": "collect_agent",
+                                   "worker_id": "w1"})
+    assert "prose report" in r
+    await coach.stop()
+
+
 async def test_finished_worker_frees_its_slot():
     coach, _c = _l4_coach()
     coach.cfg["coach"]["max_workers"] = 1
@@ -1376,3 +1437,26 @@ async def test_context_includes_reference_and_tool_inventory():
     assert "TRACK_REFERENCE:" in msg and "smbclient -N -L" in msg
     assert "QUEST_REFERENCE:" in msg and "quest-local note" in msg
     assert "KALI_TOOLS" in msg and "mysql" in msg
+
+
+async def test_dropped_history_distills_into_earlier():
+    """HISTORY_CAP overflow must leave a trace — the rolling EARLIER summary
+    keeps long-horizon runs from losing their early turns entirely."""
+    from coach.loop import HISTORY_CAP
+    coach, _c = _coach()
+    for i in range(HISTORY_CAP + 6):
+        coach._record_reply(f"assistant message {i}")
+    assert len(coach._history) <= HISTORY_CAP
+    assert coach.state.earlier
+    assert any(l.startswith("said:") and "message 0" in l
+               for l in coach.state.earlier)
+    # bounded — a 400-turn run can't grow it
+    for i in range(60):
+        coach._record_reply(f"x{i}")
+    assert len(coach.state.earlier) <= 10
+    # and it renders into the context
+    from coach.prompts import build_context_msg
+    coach.state.autonomy_level = 4
+    msg = build_context_msg(coach.ctx, coach.state, "t", stage=0,
+                            facts=coach.facts)
+    assert "EARLIER" in msg

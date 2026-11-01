@@ -38,6 +38,9 @@ class SessionState:
     # latest screenshot description produced by the vision model
     screen_desc: str = ""
     notes: list[str] = field(default_factory=list)               # coach-side observations
+    # rolling summary — what trim_history dropped, distilled to one line per
+    # item so long-horizon runs keep a trace of their early turns
+    earlier: list[str] = field(default_factory=list)
     autonomy_level: int = 2
     coach_enabled: bool = True
     subagents_enabled: bool = False   # L4 parallel worker panes allowed

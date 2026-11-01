@@ -27,6 +27,9 @@ services:
     environment:
       PENTRAIN_BACKEND_URL: http://backend:8000
       PENTRAIN_BACKEND_WS_URL: ws://backend:8000/ws/coach
+      PENTRAIN_TRAJ_DIR: /traj
+    volumes:
+      - pentrain-traj:/traj
     depends_on:
       backend:
         condition: service_healthy
@@ -43,3 +46,4 @@ services:
 
 volumes:
   pentrain-data:
+  pentrain-traj:

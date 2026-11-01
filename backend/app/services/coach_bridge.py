@@ -22,6 +22,7 @@ from ..models.domain import (
     CoachMessage,
     Flag,
     FlagSubmission,
+    LlmUsage,
     Quest,
     QuestCheckpoint,
     Session,
@@ -97,6 +98,22 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                 CoachAction.tool.in_(["exec_in_kali", "type_in_pane"]),
                 func.json_extract(CoachAction.result, "$.out")
                     .like("%pentrAIn{%")))).all() if r[0]]
+    # exec/type results with their output — the coach replays these into its
+    # FactsDB on attach so parsed facts (hosts/ports/creds/files) survive a
+    # restart; commands alone would rebuild only the bookkeeping half
+    coach_outs = [
+        {"command": (f"<type> {r[1]}" if r[1] else (r[0] or "")),
+         "window": r[2], "out": (r[3] or ""), "exitcode": r[4]}
+        for r in (await db.execute(
+            select(func.json_extract(CoachAction.args, "$.command"),
+                   func.json_extract(CoachAction.args, "$.text"),
+                   func.json_extract(CoachAction.args, "$.window"),
+                   func.json_extract(CoachAction.result, "$.out"),
+                   func.json_extract(CoachAction.result, "$.exitcode")).where(
+                CoachAction.session_id == session_id,
+                CoachAction.tool.in_(["exec_in_kali", "type_in_pane"]),
+                CoachAction.status.in_(["ok", "confirmed"]))
+            .order_by(CoachAction.id.desc()).limit(40))).all() if r[0] or r[1]]
     profile = await db.get(UserProfile, 1)
     # home-lab LAN assessment: scope comes from the lan.scope_cidr setting,
     # falling back to the /24 of the WAN lease stored on the session. Only
@@ -169,6 +186,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                       "ts": m.created_at.isoformat() if m.created_at else None} for m in msgs],
         "exec_count": int(action_count),
         "coach_commands": coach_cmds,
+        "coach_outputs": coach_outs,
         "flag_outs": flag_outs,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},
@@ -612,3 +630,94 @@ async def mark_checkpoint(db: AsyncSession, session_id: int, checkpoint_id: str)
         return
     await bus.publish(f"session.{session_id}", {
         "type": "checkpoint", "session_id": session_id, "data": {"checkpoint": checkpoint_id}})
+
+
+async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
+    """Aggregate per-session agent behavior for GET /sessions/{id}/agent-metrics.
+
+    Sources: coach_actions (tool calls incl. self-reported guard denials),
+    flag_submissions (grounding + time-to-flag), llm_usage (tokens). These
+    are the eval metrics from the agent-research roadmap — tool-call
+    accuracy, denial/hallucination signals, recovery, steps-to-success —
+    computed from the audit trail, not inferred from chat logs.
+    """
+    s = await db.get(Session, session_id)
+    if not s:
+        return None
+    actions = (await db.execute(
+        select(CoachAction).where(CoachAction.session_id == session_id)
+        .order_by(CoachAction.id))).scalars().all()
+    subs = (await db.execute(
+        select(FlagSubmission).where(FlagSubmission.session_id == session_id)
+        .order_by(FlagSubmission.id))).scalars().all()
+    usage = (await db.execute(
+        select(LlmUsage).where(LlmUsage.session_id == session_id)
+        )).scalars().all()
+
+    tool_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    deny_reasons: dict[str, int] = {}
+    exec_ok = exec_err = 0
+    for a in actions:
+        tool_counts[a.tool] = tool_counts.get(a.tool, 0) + 1
+        status_counts[a.status] = status_counts.get(a.status, 0) + 1
+        if a.status == "denied":
+            reason = str((a.result or {}).get("reason")
+                         or (a.result or {}).get("error") or "?")[:120]
+            deny_reasons[reason] = deny_reasons.get(reason, 0) + 1
+        if a.tool == "exec_in_kali":
+            if a.status == "ok":
+                exec_ok += 1
+            elif a.status == "error":
+                exec_err += 1
+
+    accepted = [x for x in subs if x.correct]
+    rejected = [x for x in subs if not x.correct]
+    # grounding signals: a submit of a value never observed in tool output
+    # (self-reported by the coach as denied 'never observed in output'),
+    # foreign-ip denials, and rejected submissions
+    unverified_submits = sum(
+        1 for a in actions
+        if a.tool == "submit_flag" and a.status == "denied")
+    foreign_ip_denials = sum(
+        n for r, n in deny_reasons.items() if "known target" in r)
+    t0 = s.ready_at or s.created_at
+    t_first = accepted[0].submitted_at if accepted else None
+    time_to_flag = (
+        round((t_first - t0).total_seconds(), 1)
+        if t_first and t0 else None)
+    span = (
+        round((actions[-1].created_at - actions[0].created_at)
+              .total_seconds(), 1)
+        if len(actions) > 1 and actions[0].created_at else 0.0)
+    return {
+        "session_id": session_id,
+        "actions_total": len(actions),
+        "tool_counts": dict(sorted(tool_counts.items(),
+                                   key=lambda kv: -kv[1])),
+        "status_counts": status_counts,
+        "denied": {
+            "total": status_counts.get("denied", 0),
+            "reasons": dict(sorted(deny_reasons.items(),
+                                   key=lambda kv: -kv[1])[:12]),
+        },
+        "exec": {"ok": exec_ok, "error": exec_err},
+        "hallucination": {
+            "foreign_ip_denials": foreign_ip_denials,
+            "unverified_flag_submits": unverified_submits,
+            "rejected_flag_submits": len(rejected),
+        },
+        "flags": {
+            "submitted": len(subs),
+            "accepted": len(accepted),
+            "first_flag_key": accepted[0].flag_key if accepted else None,
+            "time_to_first_flag_s": time_to_flag,
+        },
+        "llm": {
+            "calls": len(usage),
+            "total_tokens": sum(x.total_tokens for x in usage),
+            "prompt_tokens": sum(x.prompt_tokens for x in usage),
+            "completion_tokens": sum(x.completion_tokens for x in usage),
+        },
+        "span_s": span,
+    }

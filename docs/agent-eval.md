@@ -43,8 +43,13 @@ The script:
    its own (~`coach.takeover_pace_s` between turns).
 5. Polls until `solved` / `failed` / `aborted` (or `--timeout-min`, default
    240, which aborts), printing each flag as it lands.
-6. Emits a markdown report: per-flag solve table, deploy/run durations, LLM
-   token usage for the day.
+6. Emits a markdown report: per-flag solve table, deploy/run durations, an
+   **agent metrics** section (`GET /api/sessions/{id}/agent-metrics` —
+   action counts per tool, denial reasons, grounding signals such as
+   foreign-IP denies and unverified flag submits, time-to-first-flag, token
+   usage), plus the day's LLM usage. Per-turn JSONL trajectories for
+   offline analysis land in the coach container under `/traj` (volume
+   `pentrain-traj`, `PENTRAIN_TRAJ_DIR`).
 
 Useful flags: `--action-budget N`, `--token-budget N`,
 `--deploy-timeout-min`, `--timeout-min`, `--poll-s`, `--no-subagents`,
