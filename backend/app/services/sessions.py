@@ -435,7 +435,8 @@ async def resume_inflight() -> int:
         rows = (await db.execute(
             select(Session).where(Session.state.in_([
                 SessionState.QUEUED.value, SessionState.DEPLOYING.value,
-                SessionState.RESETTING.value])))).scalars().all()
+                SessionState.RESETTING.value,
+                SessionState.ABORTING.value])))).scalars().all()
         ids = [s.id for s in rows]
     for sid in ids:
         _tasks[sid] = asyncio.create_task(_resume(sid))
@@ -466,6 +467,13 @@ async def _resume(session_id: int) -> None:
                 await _append_log(
                     db, session,
                     f"[pentrain] backend restarted — resuming (range {st.state.value})")
+                if session.state == SessionState.ABORTING.value:
+                    # teardown died with the process — finish it now
+                    with contextlib.suppress(Exception):
+                        await engine.provider.destroy_range(session.range_id)
+                    await _set_state(db, session, SessionState.ABORTED,
+                                     ended_at=datetime.now(UTC).replace(tzinfo=None))
+                    return
                 if session.state == SessionState.QUEUED.value or st.state == RangeState.ABSENT:
                     await _deploy(session_id)
                     return
