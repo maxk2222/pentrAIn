@@ -56,7 +56,31 @@ TOOLS: list[dict] = [
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
+    _fn("spawn_agent",
+        "Delegate an INDEPENDENT subtask to a parallel worker agent running "
+        "on its own tmux window (w1..w3) — it executes commands autonomously "
+        "and reports findings back via collect_agent. Use for parallel work "
+        "(e.g. enumerating different hosts/services at once); do NOT spawn "
+        "for sequential steps that depend on each other's results.",
+        {"task": _str("self-contained worker task — what to do and what to "
+                      "report back")}, ["task"]),
+    _fn("collect_agent",
+        "Read a worker's report — waits up to ~40s if it is still running, "
+        "otherwise returns its live status line.",
+        {"worker_id": _str("worker id, e.g. w1")}, ["worker_id"]),
+    _fn("agent_status",
+        "List all workers: id, status, action count, elapsed time, task.", {},
+        []),
+    _fn("kill_agent",
+        "Cancel a running worker before it finishes.",
+        {"worker_id": _str("worker id, e.g. w1")}, ["worker_id"]),
 ]
+
+# tools a spawned worker may call — exec-only: no chat, flags, checkpoints
+# or nested spawns; completion stays with the parent coach.
+WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "none"}
+SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
+                       "kill_agent"}
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
@@ -74,9 +98,16 @@ _LEVEL_TOOLS = {
 }
 
 
-def tools_for_level(level: int) -> list[dict]:
-    allowed = _LEVEL_TOOLS.get(level, _LEVEL_TOOLS[1])
+def tools_for_level(level: int, *, subagents: bool = False) -> list[dict]:
+    allowed = set(_LEVEL_TOOLS.get(level, _LEVEL_TOOLS[1]))
+    if level >= 4 and subagents:
+        allowed |= SUBAGENT_TOOL_NAMES
     return [t for t in TOOLS if t["function"]["name"] in allowed]
+
+
+def worker_tools() -> list[dict]:
+    return [t for t in TOOLS
+            if t["function"]["name"] in WORKER_TOOL_NAMES]
 
 
 # ---------- normalization ----------

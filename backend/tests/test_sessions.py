@@ -609,3 +609,34 @@ async def test_session_context_reports_scope(db_with_packs):
     ctx = await coach_bridge.session_context(db, s2.id)
     assert ctx["quest"]["scope"] is None
     await sessions_svc.abort(db, s2.id)
+
+
+async def test_set_subagents_and_slash_paths(db_with_packs):
+    """set_subagents mirrors set_autonomy — field write, system message,
+    broadcast; the /subagents slash stays out of post_message."""
+    from app.api.routes_streams import _chat_slash
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    assert s.subagents_enabled is False
+
+    s = await sessions_svc.set_subagents(db, s.id, True)
+    assert s.subagents_enabled is True
+
+    r = await _chat_slash(db, s.id, "/subagents")           # status line
+    assert r["id"] < 0
+    r = await _chat_slash(db, s.id, "/subagents off")
+    assert r["id"] < 0
+    s = await db.get(Session, s.id)
+    assert s.subagents_enabled is False
+    r = await _chat_slash(db, s.id, "/subs on")             # alias
+    s = await db.get(Session, s.id)
+    assert s.subagents_enabled is True
+    r = await _chat_slash(db, s.id, "/subagents bogus")     # usage reply
+    assert r["id"] < 0
+
+    s.state = "solved"
+    await db.commit()
+    with pytest.raises(sessions_svc.SessionError, match="locked"):
+        await sessions_svc.set_subagents(db, s.id, True)
+    await sessions_svc.abort(db, s.id)

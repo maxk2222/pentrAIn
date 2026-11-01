@@ -126,6 +126,7 @@ async def chat_history(session_id: int, db: AsyncSession = Depends(get_db),
 
 
 _SLASH_ALIASES = {"/autonomy", "/level", "/mode", "/l"}
+_SLASH_SUBS = {"/subagents", "/subs", "/parallel"}
 _SLASH_LEVELS = {
     "1": 1, "observer": 1, "spectate": 1,
     "2": 2, "mentor": 2, "advisor": 2,
@@ -134,6 +135,10 @@ _SLASH_LEVELS = {
 }
 _SLASH_USAGE = ("Usage: /autonomy <1-4|observer|mentor|copilot|autonomous> "
                 "— switches the coach mode live.")
+_SLASH_SUBS_USAGE = ("Usage: /subagents <on|off> — lets the coach spawn "
+                     "parallel worker panes (w1-w3) in autonomous mode.")
+_SLASH_SUBS_VALS = {"on": True, "1": True, "true": True, "yes": True,
+                    "off": False, "0": False, "false": False, "no": False}
 _slash_echo_ids = itertools.count(1)
 
 
@@ -153,9 +158,33 @@ async def _chat_slash(db: AsyncSession, session_id: int,
     from ..services import sessions as sessions_svc
 
     cmd, _, arg = content.partition(" ")
-    if cmd.lower() not in _SLASH_ALIASES:
+    cmd = cmd.lower()
+    if cmd not in _SLASH_ALIASES and cmd not in _SLASH_SUBS:
         return None
     session = await db.get(Session, session_id)
+    if cmd in _SLASH_SUBS:
+        arg = arg.strip().lower()
+        if not arg:
+            cur = bool(session and session.subagents_enabled)
+            msg = await coach_bridge.post_message(
+                db, session_id, "system", "chat",
+                f"Subagents: {'on' if cur else 'off'}. " + _SLASH_SUBS_USAGE)
+            return {"id": _slash_echo(msg.id)}
+        enabled = _SLASH_SUBS_VALS.get(arg)
+        if enabled is None:
+            msg = await coach_bridge.post_message(
+                db, session_id, "system", "chat",
+                f"Unknown value {arg!r}. " + _SLASH_SUBS_USAGE)
+            return {"id": _slash_echo(msg.id)}
+        try:
+            await sessions_svc.set_subagents(db, session_id, enabled)
+        except sessions_svc.SessionError as e:
+            msg = await coach_bridge.post_message(
+                db, session_id, "system", "chat",
+                f"Subagents unchanged: {e}")
+            return {"id": _slash_echo(msg.id)}
+        # set_subagents already posted the confirmation + broadcast.
+        return {"id": _slash_echo(None)}
     arg = arg.strip().lower()
     if not arg:
         level = session.autonomy_level if session else 0

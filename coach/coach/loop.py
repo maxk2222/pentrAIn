@@ -16,6 +16,7 @@ import hashlib
 import ipaddress
 import re
 import time
+from dataclasses import dataclass
 
 import httpx
 import structlog
@@ -24,9 +25,9 @@ from .client import BackendClient
 from .config import get_config
 from .llm import LlmClient, LlmError
 from .policy import Policy
-from .prompts import build_context_msg, chat_prompt, system_prompt
+from .prompts import build_context_msg, chat_prompt, render_worker_prompt, system_prompt
 from .state import CheckpointMatcher, SessionState
-from .tools import tools_for_level, trim_history, wire_history
+from .tools import WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
 
 log = structlog.get_logger(__name__)
 
@@ -38,7 +39,23 @@ LLM_TURN_BUDGET_S = 300    # hard bound for one LLM turn incl. action dispatch;
 # whose results the model should see immediately (send_chat/offer_hint/none
 # end the chain: the model only wanted to talk or pause)
 _CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
-                "mark_checkpoint", "capture_screen", "suggest_command"}
+                "mark_checkpoint", "capture_screen", "suggest_command",
+                "spawn_agent", "collect_agent", "agent_status", "kill_agent"}
+
+
+@dataclass
+class _Worker:
+    """A spawned parallel subagent — own LLM context, own tmux window
+    (pentrain-coach:wN), exec-only toolset. The parent coach collects its
+    report via collect_agent."""
+    id: str            # "w1".."wN"
+    task: str
+    status: str = "running"   # running|done|failed|killed|timeout
+    report: str = ""
+    actions: int = 0
+    turns: int = 0
+    started: float = 0.0
+    task_obj: asyncio.Task | None = None
 
 
 def _iso_to_epoch(iso: str | None) -> float:
@@ -92,6 +109,7 @@ class SessionCoach:
         self._submit_challenged: dict[str, int] = {}  # unverified submits
         self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
         self._ips_seen: set[str] = set()         # IPs observed in outputs
+        self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
 
     # ---------- lifecycle ----------
 
@@ -107,6 +125,7 @@ class SessionCoach:
         if s.get("state") in ("solved", "aborted", "failed"):
             return False
         self.state.autonomy_level = int(s.get("autonomy_level", 2))
+        self.state.subagents_enabled = bool(s.get("subagents_enabled", False))
         # session toggle AND global coach.enabled gate (settings screen killswitch)
         global_on = bool(self.cfg.get("coach", {}).get("enabled", True))
         self.state.coach_enabled = bool(s.get("coach_enabled", True)) and global_on
@@ -249,8 +268,8 @@ class SessionCoach:
             except asyncio.CancelledError:
                 exc = "cancelled"
             asyncio.get_event_loop().call_soon(
-                log.info, "coach run task ended", session=self.sid,
-                outcome=repr(exc))
+                lambda: log.info("coach run task ended",
+                                 session=self.sid, outcome=repr(exc)))
         self._task.add_done_callback(_on_run_done)
         await log.ainfo("coach attached", session=self.sid,
                         autonomy=self.state.autonomy_level)
@@ -259,6 +278,7 @@ class SessionCoach:
 
     async def stop(self) -> None:
         self._stop.set()
+        self._kill_all_workers()
         for t in (self._task, self._chat_task):
             if t:
                 t.cancel()
@@ -321,6 +341,8 @@ class SessionCoach:
         self.ctx = ctx
         self.state.state = s.get("state", self.state.state)
         self.state.autonomy_level = int(s.get("autonomy_level", self.state.autonomy_level))
+        self.state.subagents_enabled = bool(
+            s.get("subagents_enabled", self.state.subagents_enabled))
         global_on = bool(self.cfg.get("coach", {}).get("enabled", True))
         self.state.coach_enabled = bool(s.get("coach_enabled", True)) and global_on
         self.state.checkpoints_hit = set(ctx.get("checkpoints_hit", []))
@@ -456,12 +478,24 @@ class SessionCoach:
                 self.state.autonomy_level = level
                 if "session" in self.ctx:
                     self.ctx["session"]["autonomy_level"] = level
+                if level < 4:
+                    # downgrade cuts worker privileges mid-flight — stop them
+                    # (ROE: they hold exec rights on the trainee's machine)
+                    self._kill_all_workers()
                 if (level >= 4 > prev
                         and self.state.state == "active"):
                     # switched INTO takeover while the session runs — the
                     # agent should start working almost immediately
                     self._next_reflect = min(self._next_reflect,
                                              time.monotonic() + 1)
+            elif etype == "subagents":
+                # live subagent toggle (/subagents or the UI chip)
+                enabled = bool(data.get("enabled"))
+                self.state.subagents_enabled = enabled
+                if "session" in self.ctx:
+                    self.ctx["session"]["subagents_enabled"] = enabled
+                if not enabled:
+                    self._kill_all_workers()
             elif etype == "flag":
                 if data.get("correct"):
                     self.state.progress()
@@ -695,10 +729,12 @@ class SessionCoach:
             while True:
                 pushed = False
                 last_push = 0.0   # each sub-response streams its own draft
-                # rebuilt per sub-call: an autonomy switch mid-chain (drained
-                # between calls) narrows/widens the toolset immediately
-                tools = (tools_for_level(self.state.autonomy_level)
-                         if tools_active else None)
+                # rebuilt per sub-call: an autonomy/subagents switch mid-chain
+                # (drained between calls) narrows/widens the toolset at once
+                tools = (tools_for_level(
+                    self.state.autonomy_level,
+                    subagents=self.state.subagents_enabled)
+                    if tools_active else None)
                 try:
                     resp = await self.llm.chat(messages, on_delta=on_delta,
                                                tools=tools)
@@ -912,15 +948,25 @@ class SessionCoach:
             return lit
         return None
 
-    async def _dispatch(self, a: dict, *, proactive: bool = False) -> tuple[bool, str]:
+    async def _dispatch(self, a: dict, *, proactive: bool = False,
+                        window: str | None = None) -> tuple[bool, str]:
         """Execute one LLM action under autonomy/budget gates.
         Returns (visible_to_trainee, result_text) — the result text becomes the
         `tool` reply the model sees in history, so EVERY action reports an
-        outcome, including denied ones."""
+        outcome, including denied ones. `window` routes exec/type into a
+        worker's own tmux window (subagent mode)."""
         t = a.get("type")
         level = self.state.autonomy_level
         spoke = False
         result = "ok"
+
+        # workers are exec-only — a model emitting an unoffered tool through a
+        # worker context gets a hard deny (defense-in-depth; the tool schema
+        # already prevents it, this covers drift/compat endpoints)
+        if window and t not in WORKER_TOOL_NAMES:
+            return spoke, ("denied: workers can only run exec_in_kali / "
+                           "type_in_pane — report findings via your last "
+                           "message, the parent coach relays them")
 
         if t == "send_chat":
             content = (a.get("content") or "").strip()[:2000]
@@ -1032,10 +1078,12 @@ class SessionCoach:
                             f"tool output (scan result, getent, logs).")
                     # mark BEFORE the call so telemetry echo is recognized as ours
                     self._coach_cmds.append((cmd, time.time()))
+                    where = f"[{window}] " if window else ""
                     await self.client.send_activity(
-                        self.sid, f"typing `{cmd[:110]}` in Kali")
+                        self.sid, f"{where}typing `{cmd[:110]}` in Kali")
                     try:
-                        res = await self.client.exec_in_kali(self.sid, cmd)
+                        res = await self.client.exec_in_kali(self.sid, cmd,
+                                                             window=window)
                     except (TimeoutError, httpx.HTTPError) as e:
                         # backend/qga hiccup — surface as a tool RESULT so the
                         # model can check/retry next turn instead of the whole
@@ -1058,11 +1106,13 @@ class SessionCoach:
                     # interactive-program tracking: a fresh busy pane means a
                     # prompt (password/menu) may be ticking — the follow-up
                     # re-turn in _reflect_tick must come BEFORE ssh's
-                    # LoginGraceTime kills the attempt
-                    if res.get("busy") or res.get("timed_out"):
-                        self._pane_interactive = True
-                    elif code is not None:
-                        self._pane_interactive = False
+                    # LoginGraceTime kills the attempt. Workers handle their
+                    # own window's busy state via res.busy in their loop.
+                    if window is None:
+                        if res.get("busy") or res.get("timed_out"):
+                            self._pane_interactive = True
+                        elif code is not None:
+                            self._pane_interactive = False
                     if typed:
                         # the pentrain-coach pane is NOT covered by the shell
                         # telemetry hook — record our own exec so ALREADY_DONE,
@@ -1115,13 +1165,13 @@ class SessionCoach:
                                        "are settled (see ALREADY_DONE). Take a "
                                        "DIFFERENT action toward the flag.")
                     if res.get("busy"):
-                        text = f"Could not run `{cmd}` — {res.get('err') or 'pane busy'}"
+                        text = f"{where}Could not run `{cmd}` — {res.get('err') or 'pane busy'}"
                     else:
                         note = ("\n\n*(still running — watch the `pentrain-coach` tmux)*"
                                 if res.get("timed_out")
                                 else "\n\n*(typed live in the `pentrain-coach` tmux)*"
                                 if res.get("visible") else "")
-                        text = f"Executed: `{cmd}`\n```\n{out[-1500:]}\n```{note}"
+                        text = f"{where}Executed: `{cmd}`\n```\n{out[-1500:]}\n```{note}"
                     await self.client.send_chat(self.sid, text, kind="action_report",
                                                 meta=self._draft_meta())
                     self._record_reply(text)
@@ -1133,7 +1183,8 @@ class SessionCoach:
                 text_in = (a.get("text") or a.get("command")
                            or a.get("content") or "")
                 try:
-                    res = await self.client.type_in_pane(self.sid, text_in)
+                    res = await self.client.type_in_pane(self.sid, text_in,
+                                                         window=window)
                 except (TimeoutError, httpx.HTTPError) as e:
                     return spoke, (
                         f"error: type transport failed "
@@ -1145,13 +1196,16 @@ class SessionCoach:
                 # still held (inside an ssh/ftp/vim session remote commands
                 # must ALL go through type_in_pane — at LLM cadence, not
                 # the ~90s tick). Missing field (old backend) → assume busy,
-                # the bounded re-turn cap keeps that harmless.
-                self._pane_interactive = bool(res.get("busy", True))
+                # the bounded re-turn cap keeps that harmless. Workers track
+                # their own pane via res.busy.
+                if window is None:
+                    self._pane_interactive = bool(res.get("busy", True))
                 # interactive input is coach activity too — keep it visible in
                 # command memory (marked so it can't pollute recon/write regexes)
                 self.state.add_command(time.time(), f"<type> {text_in[:80]}",
                                        from_coach=True)
-                rep = (f"Typed into the pane: `{text_in[:90]}`\n"
+                rep = (f"{'[' + window + '] ' if window else ''}"
+                       f"Typed into the pane: `{text_in[:90]}`\n"
                        f"```\n{out[-1200:]}\n```")
                 await self.client.send_chat(self.sid, rep, kind="action_report",
                                             meta=self._draft_meta())
@@ -1240,6 +1294,22 @@ class SessionCoach:
                     result = self.state.screen_desc[:400]
                 else:
                     result = "no screenshot available"
+        elif t == "spawn_agent":
+            result = self._spawn_agent(a)
+            if not result.startswith(("denied:", "error:")):
+                rep = (f"Spawned worker on pane "
+                       f"`{result.split(' — ')[0].split()[-1]}` — "
+                       f"{(a.get('task') or '')[:120]}")
+                await self.client.send_chat(self.sid, rep,
+                                            kind="action_report",
+                                            meta=self._draft_meta())
+                spoke = True
+        elif t == "collect_agent":
+            result = await self._collect_agent(a)
+        elif t == "agent_status":
+            result = self._agent_status()
+        elif t == "kill_agent":
+            result = self._kill_agent(a)
         # "none" or unknown → silence (reason captured above as working memory)
         if t == "none":
             result = "noted"
@@ -1247,6 +1317,172 @@ class SessionCoach:
             self.state.last_nudge_ts = time.time()
             self.state.nudges_sent += 1
         return spoke, result
+
+    # ---------- parallel worker agents (L4 subagents) ----------
+
+    def _spawn_agent(self, a: dict) -> str:
+        """spawn_agent tool — launches a worker task on its own tmux window.
+        Runs coach-internal; the backend only sees the worker's execs."""
+        if self.state.autonomy_level < 4:
+            return "denied: workers need autonomy level 4"
+        if not self.state.subagents_enabled:
+            return "denied: subagents are disabled (/subagents on or the UI chip)"
+        task = (a.get("task") or a.get("content") or "").strip()
+        if not task:
+            return "error: empty task"
+        max_w = int(self.cfg.get("coach", {}).get("max_workers", 3))
+        if max_w < 1:
+            return "denied: workers disabled (coach.max_workers < 1)"
+        running = sum(1 for w in self._workers.values()
+                      if w.status == "running")
+        if running >= max_w:
+            return (f"denied: all {max_w} worker slots busy — "
+                    "collect_agent a finished one first")
+        # slot = pane id — prefer a never-used window; reuse a finished
+        # worker's slot only when all were spawned before (its report is
+        # then overwritten — collect finished workers before respawning)
+        running_ids = {w.id for w in self._workers.values()
+                       if w.status == "running"}
+        ids = [f"w{i}" for i in range(1, max_w + 1)]
+        wid = next((i for i in ids if i not in self._workers),
+                   next(i for i in ids if i not in running_ids))
+        w = _Worker(id=wid, task=task[:500], started=time.monotonic())
+        self._workers[wid] = w
+        w.task_obj = asyncio.create_task(self._worker_loop(w))
+        return (f"spawned {wid} — \"{task[:120]}\". It works autonomously on "
+                f"its own pane ({wid}); continue your own work and read its "
+                f"report with collect_agent(\"{wid}\") when you need it.")
+
+    async def _collect_agent(self, a: dict) -> str:
+        """collect_agent tool — waits (bounded) for a worker's report."""
+        wid = (a.get("worker_id") or a.get("id") or "").strip()
+        w = self._workers.get(wid)
+        if not w:
+            return (f"error: unknown worker {wid!r} — known: "
+                    f"{', '.join(sorted(self._workers)) or 'none'}")
+        if w.status == "running":
+            # wait in slices so operator chat can preempt — a blocking
+            # collect must not hold the turn hostage for the full timeout
+            wait_s = float(self.cfg.get("coach", {}).get("collect_wait_s", 40))
+            deadline = time.monotonic() + wait_s
+            while w.status == "running" and time.monotonic() < deadline:
+                if self.state.pending_chat:
+                    return (f"{wid} still running ({w.actions} actions) — "
+                            "collect later")
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(w.task_obj),
+                        min(2.0, deadline - time.monotonic()))
+                except TimeoutError:
+                    pass
+                except asyncio.CancelledError:
+                    raise
+        status = w.status
+        if status == "running":
+            return (f"{wid} still running ({w.actions} actions, "
+                    f"{int(time.monotonic() - w.started)}s) — task: "
+                    f"\"{w.task[:80]}\"")
+        return (f"{wid} {status} ({w.actions} actions):\n"
+                f"{w.report or '(no report)'}")
+
+    def _agent_status(self) -> str:
+        if not self._workers:
+            return "no workers spawned this session"
+        now = time.monotonic()
+        lines = []
+        for wid in sorted(self._workers):
+            w = self._workers[wid]
+            lines.append(f"{w.id} {w.status} — {w.actions} actions, "
+                         f"{int(now - w.started)}s — \"{w.task[:70]}\"")
+        return "workers:\n" + "\n".join(lines)
+
+    def _kill_agent(self, a: dict) -> str:
+        wid = (a.get("worker_id") or a.get("id") or "").strip()
+        w = self._workers.get(wid)
+        if not w:
+            return f"error: unknown worker {wid!r}"
+        if w.status != "running":
+            return f"{wid} already {w.status}"
+        if w.task_obj:
+            w.task_obj.cancel()
+        w.status = "killed"
+        return f"{wid} killed — its pane ({wid}) keeps its scrollback"
+
+    def _kill_all_workers(self) -> None:
+        for w in self._workers.values():
+            if w.status == "running":
+                w.status = "killed"
+                if w.task_obj:
+                    w.task_obj.cancel()
+
+    async def _worker_loop(self, w: _Worker) -> None:
+        """One worker's act→observe→act loop — private message list (never
+        touches _history: interleaved tool pairs would corrupt the parent's
+        call/result pairing), shared guards/budgets via _dispatch(window)."""
+        msgs = [{"role": "system",
+                 "content": render_worker_prompt(self.ctx, w)},
+                {"role": "user", "content": w.task}]
+        cc = self.cfg.get("coach", {})
+        turn_cap = int(cc.get("worker_turn_cap", 10))
+        time_cap = int(cc.get("worker_time_cap_s", 300))
+        t0 = time.monotonic()
+        last_out = ""
+        try:
+            while (w.turns < turn_cap
+                   and time.monotonic() - t0 < time_cap):
+                resp = await self.llm.chat(msgs, tools=worker_tools())
+                w.turns += 1
+                usage = (resp.get("raw") or {}).get("usage") or {}
+                self.usage["tokens"] += int(usage.get("total_tokens", 0))
+                asyncio.create_task(self.client.report_llm_usage(
+                    self.sid, getattr(self.llm, "model", "?"), "worker",
+                    resp.get("usage"), resp.get("latency_ms")))
+                calls = resp.get("tool_calls") or []
+                call_results: dict[str, str] = {}
+                exec_acts = [a for a in resp["actions"]
+                             if a.get("type") in WORKER_TOOL_NAMES
+                             and a.get("type") != "none"]
+                for a in resp["actions"]:
+                    if a.get("type") == "none" and a.get("reason"):
+                        self.state.notes.append(
+                            f"[{w.id}] {a['reason']}"[:300])
+                        self.state.notes = self.state.notes[-8:]
+                    did, res = await self._dispatch(a, proactive=True,
+                                                  window=w.id)
+                    if did:
+                        w.actions += 1
+                    if cid := a.get("_call_id"):
+                        call_results[cid] = res
+                    last_out = res or last_out
+                if not calls or not exec_acts:
+                    # no tool calls or only 'none' — the worker is done; its
+                    # trailing message IS the report to the parent
+                    w.report = ((resp.get("content") or "").strip()
+                                or last_out[-1500:] or "(finished silently)")
+                    w.status = "done"
+                    return
+                # assistant/tool pairing identical to the parent turn — strict
+                # endpoints reject a tool_call left without its reply
+                msgs.append({"role": "assistant",
+                             "content": (resp.get("content") or None),
+                             "tool_calls": calls})
+                for i, call in enumerate(calls):
+                    cid = call.get("id") or f"call_{i}"
+                    msgs.append({"role": "tool", "tool_call_id": cid,
+                                 "content": call_results.get(
+                                     cid, "error: dropped")[:2000]})
+                msgs = msgs[:1] + msgs[-29:]  # bounded ctx, keep the system prompt
+            w.status = "timeout"
+            w.report = (f"hit worker caps after {w.actions} actions/"
+                        f"{w.turns} turns — {last_out[-800:]}")
+        except asyncio.CancelledError:
+            w.status = "killed"
+            raise
+        except Exception as e:
+            w.status = "failed"
+            w.report = f"worker crashed: {e}"
+            await log.awarning("worker failed", session=self.sid,
+                               worker=w.id, error=str(e))
 
     async def _describe_screen(self, png_b64: str) -> str:
         """Send the screenshot to a vision-capable model for a text description."""

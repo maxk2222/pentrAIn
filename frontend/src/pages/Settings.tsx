@@ -106,6 +106,18 @@ const GROUPS: { title: string; icon: React.ElementType; keys: [string, Spec][] }
         label: "Takeover chain max", type: "int", min: 1, max: 40, step: 1,
         help: "Max LLM calls inside one agent turn — the act→observe→act loop stops here.",
       }],
+      ["coach.max_workers", {
+        label: "Subagent workers", type: "int", min: 1, max: 5, step: 1,
+        help: "Max parallel worker panes (w1..w5) the coach can spawn at autonomy 4 when subagents are on.",
+      }],
+      ["coach.worker_turn_cap", {
+        label: "Worker turn cap", type: "int", min: 2, max: 30, step: 1,
+        help: "Max LLM turns inside one worker task before it reports back.",
+      }],
+      ["coach.worker_time_cap_s", {
+        label: "Worker time cap (s)", type: "int", min: 60, max: 1800, step: 60,
+        help: "Wall-clock limit per worker task.",
+      }],
     ],
   },
   {

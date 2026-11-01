@@ -25,7 +25,7 @@ class FakeClient:
         self.suggestions.append({"command": command, "why": why})
         return {}
 
-    async def exec_in_kali(self, sid, command):
+    async def exec_in_kali(self, sid, command, window=None):
         self.execs.append(command)
         return {"out": "done\n"}
 
@@ -79,7 +79,7 @@ async def test_busy_pane_bounces_without_marking_exec():
     tool result tells the model to interrupt or wait."""
     coach, c = _coach(autonomy=4)
 
-    async def busy(sid, cmd):
+    async def busy(sid, cmd, window=None):
         return {"out": "", "busy": True, "exitcode": None, "visible": True,
                 "err": "pane busy: 'top' is still running — send 'C-c'"}
     c.exec_in_kali = busy
@@ -93,7 +93,7 @@ async def test_busy_pane_bounces_without_marking_exec():
 async def test_timed_out_exec_reports_partial_output():
     coach, c = _coach(autonomy=4)
 
-    async def slow(sid, cmd):
+    async def slow(sid, cmd, window=None):
         return {"out": "partial output", "timed_out": True,
                 "exitcode": None, "visible": True,
                 "err": "still running — pane is now busy"}

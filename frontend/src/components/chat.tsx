@@ -73,10 +73,34 @@ export function AutonomyToggle({ autonomy, onAutonomy }: {
   );
 }
 
-export function ChatPanel({ sessionId, events, autonomy, onAutonomy }: {
+export function SubagentsToggle({ enabled, onToggle }: {
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <button
+      title={enabled
+        ? "Subagents on — the coach can spawn parallel workers on panes w1–w3 (same as /subagents on)"
+        : "Subagents off — enable parallel worker agents (same as /subagents on)"}
+      onClick={() => onToggle(!enabled)}
+      className={cn(
+        "rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer",
+        enabled
+          ? "bg-primary/20 text-primary"
+          : "text-muted hover:bg-surface-2 hover:text-foreground",
+      )}>
+      {enabled ? "Sub·on" : "Sub"}
+    </button>
+  );
+}
+
+export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
+                            subagents, onSubagents }: {
   sessionId: number; events: WsEvent[];
   autonomy?: number;
   onAutonomy?: (level: number) => void;
+  subagents?: boolean;
+  onSubagents?: (enabled: boolean) => void;
 }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
@@ -247,6 +271,9 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy }: {
         <span className="flex items-center gap-2">
           {autonomy !== undefined && onAutonomy && (
             <AutonomyToggle autonomy={autonomy} onAutonomy={onAutonomy} />
+          )}
+          {subagents !== undefined && onSubagents && (
+            <SubagentsToggle enabled={subagents} onToggle={onSubagents} />
           )}
           {thinking && (
             <span className="flex items-center gap-1 text-xs text-muted">

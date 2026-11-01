@@ -20,6 +20,7 @@ from ..schemas import (
     SessionFlagsOut,
     SessionOut,
     SessionStartIn,
+    SubagentsIn,
 )
 from ..services import console as console_svc
 from ..services import hoststats as hoststats_svc
@@ -38,6 +39,7 @@ def _out(s: Session) -> SessionOut:
         id=s.id, quest_id=s.quest_id, state=s.state, kali_vmid=s.kali_vmid,
         autonomy_level=s.autonomy_level, coach_enabled=s.coach_enabled,
         kali_internet=bool(s.kali_internet), kali_wan_ip=s.kali_wan_ip,
+        subagents_enabled=bool(s.subagents_enabled),
         created_at=s.created_at.isoformat() if s.created_at else None,
         ready_at=s.ready_at.isoformat() if s.ready_at else None,
         error=s.error)
@@ -291,6 +293,17 @@ async def set_session_autonomy(session_id: int, body: AutonomyIn,
     """Live autonomy switch — same write the chat /autonomy command uses."""
     try:
         return _out(await sessions_svc.set_autonomy(db, session_id, body.level))
+    except sessions_svc.SessionError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/sessions/{session_id}/subagents", response_model=SessionOut)
+async def set_session_subagents(session_id: int, body: SubagentsIn,
+                                db: AsyncSession = Depends(get_db)):
+    """Live subagent toggle — same write the chat /subagents command uses."""
+    try:
+        return _out(await sessions_svc.set_subagents(db, session_id,
+                                                     body.enabled))
     except sessions_svc.SessionError as e:
         raise HTTPException(409, str(e)) from e
 

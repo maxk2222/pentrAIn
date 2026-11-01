@@ -71,6 +71,7 @@ class SessionOut(BaseModel):
     coach_enabled: bool
     kali_internet: bool = False
     kali_wan_ip: str | None = None
+    subagents_enabled: bool = False
     created_at: str | None
     ready_at: str | None
     error: str | None = None
@@ -82,6 +83,10 @@ class InternetIn(BaseModel):
 
 class AutonomyIn(BaseModel):
     level: int = Field(ge=1, le=4)
+
+
+class SubagentsIn(BaseModel):
+    enabled: bool
 
 
 class SessionStartIn(BaseModel):
@@ -187,14 +192,21 @@ class CoachActivityIn(BaseModel):
     text: str = Field(default="", max_length=200)
 
 
+# tmux window names inside the pentrain-coach session — worker agents run on
+# their own window (w1..w3); pattern keeps tmux target syntax safe.
+_WINDOW_RE = r"^[a-z0-9][a-z0-9-]{0,14}$"
+
+
 class CoachExecIn(BaseModel):
     session_id: int
     command: str
+    window: str | None = Field(default=None, pattern=_WINDOW_RE)
 
 
 class CoachTypeIn(BaseModel):
     session_id: int
     text: str
+    window: str | None = Field(default=None, pattern=_WINDOW_RE)
 
 
 class CheckpointIn(BaseModel):

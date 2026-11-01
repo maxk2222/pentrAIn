@@ -69,10 +69,12 @@ class FakeClient:
     async def send_activity(self, sid, text="", *, active=True):
         self.activities.append((active, text))
 
-    async def exec_in_kali(self, sid, command):
+    async def exec_in_kali(self, sid, command, window=None):
+        self.exec_calls = getattr(self, "exec_calls", [])
+        self.exec_calls.append((command, window))
         return {"out": "ok", "exitcode": 0, "visible": True}
 
-    async def type_in_pane(self, sid, text):
+    async def type_in_pane(self, sid, text, window=None):
         self.typed = getattr(self, "typed", [])
         self.typed.append(text)
         return {"out": "student@target01's password: \nLast login: x", "visible": True}
@@ -271,11 +273,11 @@ async def test_l4_busy_pane_gets_interactive_return():
             return {"content": "", "actions": acts, "tool_calls": [],
                     "raw": {"usage": {"total_tokens": 10}}}
     class BusyClient(FakeClient):
-        async def exec_in_kali(self, sid, command):
+        async def exec_in_kali(self, sid, command, window=None):
             return {"out": "student@target01's password: ",
                     "err": "still running — pane is now busy",
                     "exitcode": None, "visible": True, "timed_out": True}
-        async def type_in_pane(self, sid, text):
+        async def type_in_pane(self, sid, text, window=None):
             self.typed = getattr(self, "typed", [])
             self.typed.append(text)
             # password accepted but the pane stays inside ssh — still busy
@@ -305,7 +307,7 @@ async def test_type_in_pane_clears_interactive_when_shell_returns():
     coach.ctx["session"]["autonomy_level"] = 4
     coach._pane_interactive = True
     class ShellClient(FakeClient):
-        async def type_in_pane(self, sid, text):
+        async def type_in_pane(self, sid, text, window=None):
             return {"out": "root@kali:~# ", "visible": True, "busy": False}
     coach.client = ShellClient()
     did, _res = await coach._dispatch(
@@ -339,7 +341,7 @@ async def test_repeat_output_gets_settled_note():
     be told the facts are settled or it re-derives them forever (the
     nmap-file re-read loop seen live)."""
     class SameClient(FakeClient):
-        async def exec_in_kali(self, sid, command):
+        async def exec_in_kali(self, sid, command, window=None):
             return {"out": "21/tcp open  ftp\n22/tcp open  ssh",
                     "exitcode": 0, "visible": True}
     coach, _c = _coach()
@@ -375,7 +377,7 @@ async def test_flag_in_output_gets_submit_directive():
     directive in the tool result — the model re-read flag files 3-4x to
     'confirm' them instead of submitting (observed live)."""
     class FlagClient(FakeClient):
-        async def exec_in_kali(self, sid, command):
+        async def exec_in_kali(self, sid, command, window=None):
             return {"out": "intern\npentrAIn{abc123def456}", "exitcode": 0,
                     "visible": True}
     coach, _c = _coach()
@@ -440,7 +442,7 @@ async def test_activity_cleared_when_dispatch_raises():
     coach.state.autonomy_level = 4
     coach.llm = FakeLlm(actions=[{"type": "exec_in_kali", "command": "id"}])
 
-    async def boom(sid, cmd):
+    async def boom(sid, cmd, window=None):
         raise RuntimeError("backend gone")
     c.exec_in_kali = boom
     with pytest.raises(RuntimeError):
@@ -698,7 +700,7 @@ async def test_denied_exec_does_not_stale_match():
     mislabeled as coach-issued."""
     coach, c = _coach()
     coach.state.autonomy_level = 4
-    c.exec_in_kali = lambda sid, cmd: _denied()
+    c.exec_in_kali = lambda sid, cmd, window=None: _denied()
     await coach._dispatch({"type": "exec_in_kali", "command": "rm -rf /"})
     assert coach._coach_cmds == []                       # entry removed
     coach.state.last_activity_ts = time.time() - 500
@@ -713,7 +715,7 @@ async def _denied():
 async def test_exec_count_only_on_real_exec():
     coach, c = _coach()
     coach.state.autonomy_level = 4
-    c.exec_in_kali = lambda sid, cmd: _denied()
+    c.exec_in_kali = lambda sid, cmd, window=None: _denied()
     await coach._dispatch({"type": "exec_in_kali", "command": "x"})
     assert coach.state.exec_count == 0
 
@@ -1122,4 +1124,182 @@ async def test_lan_scope_is_enforced_by_ip_guard():
     _v, r = await coach._dispatch({"type": "exec_in_kali",
                                    "command": "curl -sI https://8.8.8.8"})
     assert not r.startswith("denied:")          # public uplink stays open
+    await coach.stop()
+
+
+# ---------------- parallel worker agents (L4 subagents) ----------------
+
+class _WorkerScriptLlm(FakeLlm):
+    """Scripted LLM — worker prompts (system line mentions 'worker agent')
+    get a two-beat script: one exec, then a plain report. Parent calls
+    stay silent so the test sees only worker activity."""
+
+    def __init__(self):
+        super().__init__()
+        self.worker_calls = 0
+
+    async def chat(self, messages, **kw):
+        self.calls.append(messages)
+        if "worker agent" in (messages[0].get("content") or ""):
+            self.worker_calls += 1
+            if self.worker_calls == 1:
+                return {"content": "",
+                        "actions": [{"type": "exec_in_kali",
+                                     "command": "nmap -sV 192.168.3.55",
+                                     "_call_id": "c1"}],
+                        "tool_calls": [{"id": "c1", "type": "function",
+                                        "function": {
+                                            "name": "exec_in_kali",
+                                            "arguments": "{}"}}],
+                        "raw": {"usage": {"total_tokens": 1}}}
+            return {"content": "REPORT: 22/80 open, anonymous share listed",
+                    "actions": [{"type": "none", "reason": "task done"}],
+                    "tool_calls": [],
+                    "raw": {"usage": {"total_tokens": 1}}}
+        return {"content": "", "actions": [{"type": "none"}],
+                "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+
+
+class _StallLlm(FakeLlm):
+    """Worker never finishes — for kill/status/collect-timeout tests."""
+    async def chat(self, messages, **kw):
+        if "worker agent" in (messages[0].get("content") or ""):
+            await asyncio.sleep(60)
+        return {"content": "", "actions": [{"type": "none"}],
+                "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+
+
+def _l4_coach():
+    c = FakeClient()
+    c.ctx["session"]["autonomy_level"] = 4
+    c.ctx["session"]["subagents_enabled"] = True
+    c.ctx["quest"]["targets"] = [{"name": "nas", "ip": "192.168.3.55"}]
+    coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    return coach, c
+
+
+async def test_spawn_runs_worker_on_own_pane_and_reports():
+    coach, c = _l4_coach()
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()   # after start(): it rebuilds llm from cfg
+    _v, r = await coach._dispatch({"type": "spawn_agent",
+                                   "task": "enumerate the NAS"})
+    assert "spawned w1" in r
+    await asyncio.sleep(0.2)            # worker runs its two beats
+    # its exec went to its OWN window — never the parent pane
+    assert ("nmap -sV 192.168.3.55", "w1") in c.exec_calls
+    _v, r = await coach._dispatch({"type": "collect_agent",
+                                   "worker_id": "w1"})
+    assert "w1 done" in r and "REPORT: 22/80" in r
+    await coach.stop()
+
+
+async def test_spawn_denied_when_subagents_off():
+    c = FakeClient()
+    c.ctx["session"]["autonomy_level"] = 4
+    coach = SessionCoach(1, c, {"coach": {}, "llm": {}})
+    await coach.start()
+    coach.llm = FakeLlm()
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "x"})
+    assert r.startswith("denied:")
+    await coach.stop()
+
+
+async def test_worker_cap_denies_over_limit():
+    coach, _c = _l4_coach()
+    coach.cfg["coach"]["max_workers"] = 1
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "a"})
+    assert "spawned w1" in r
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "b"})
+    assert r.startswith("denied:")
+    await coach.stop()
+
+
+async def test_worker_context_blocks_nonexec_tools():
+    coach, _c = _l4_coach()
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    _v, r = await coach._dispatch({"type": "send_chat", "content": "hi"},
+                                  window="w1")
+    assert r.startswith("denied:")      # workers may not talk to the trainee
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "id"}, window="w1")
+    assert not r.startswith("denied:")
+    await coach.stop()
+
+
+async def test_subagents_off_kills_running_workers():
+    coach, _c = _l4_coach()
+    await coach.start()
+    coach.llm = _StallLlm()
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "x"})
+    assert "spawned w1" in r
+    await coach._handle_event({"type": "subagents", "topic": "session.1",
+                               "data": {"enabled": False, "session_id": 1}})
+    assert coach.state.subagents_enabled is False
+    assert coach._workers["w1"].status == "killed"
+    await coach.stop()
+
+
+async def test_autonomy_downgrade_kills_workers():
+    coach, _c = _l4_coach()
+    await coach.start()
+    coach.llm = _StallLlm()
+    await coach._dispatch({"type": "spawn_agent", "task": "x"})
+    await coach._handle_event({"type": "autonomy", "topic": "session.1",
+                               "data": {"level": 3, "session_id": 1}})
+    assert coach._workers["w1"].status == "killed"
+    await coach.stop()
+
+
+async def test_collect_running_returns_status_not_block():
+    coach, _c = _l4_coach()
+    coach.cfg["coach"]["collect_wait_s"] = 0.1
+    await coach.start()
+    coach.llm = _StallLlm()
+    await coach._dispatch({"type": "spawn_agent", "task": "x"})
+    _v, r = await coach._dispatch({"type": "collect_agent",
+                                   "worker_id": "w1"})
+    assert "still running" in r
+    await coach.stop()
+
+
+async def test_agent_status_lists_workers():
+    coach, _c = _l4_coach()
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    _v, r = await coach._dispatch({"type": "agent_status"})
+    assert "no workers" in r
+    await coach._dispatch({"type": "spawn_agent", "task": "x"})
+    _v, r = await coach._dispatch({"type": "agent_status"})
+    assert "w1" in r
+    await coach.stop()
+
+
+def test_subagent_tools_gated_by_flag():
+    from coach.tools import tools_for_level
+    plain = {t["function"]["name"] for t in tools_for_level(4)}
+    assert "spawn_agent" not in plain
+    on = {t["function"]["name"]
+          for t in tools_for_level(4, subagents=True)}
+    assert {"spawn_agent", "collect_agent", "agent_status",
+            "kill_agent"} <= on
+    l3 = {t["function"]["name"]
+          for t in tools_for_level(3, subagents=True)}
+    assert "spawn_agent" not in l3
+
+
+async def test_finished_worker_frees_its_slot():
+    coach, c = _l4_coach()
+    coach.cfg["coach"]["max_workers"] = 1
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "a"})
+    assert "spawned w1" in r
+    await asyncio.sleep(0.2)          # worker finishes its two beats
+    assert coach._workers["w1"].status == "done"
+    _v, r = await coach._dispatch({"type": "spawn_agent", "task": "b"})
+    assert "spawned w1" in r          # the done slot is reusable
     await coach.stop()

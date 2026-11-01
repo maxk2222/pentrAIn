@@ -40,6 +40,7 @@ class SessionState:
     notes: list[str] = field(default_factory=list)               # coach-side observations
     autonomy_level: int = 2
     coach_enabled: bool = True
+    subagents_enabled: bool = False   # L4 parallel worker panes allowed
     state: str = "ready"
 
     def add_command(self, ts: float, command: str, cwd: str = "", exit_code=None,

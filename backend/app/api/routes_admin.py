@@ -622,12 +622,14 @@ async def coach_suggest(body: CoachSuggestIn, db: AsyncSession = Depends(get_db)
 
 @coach_router.post("/exec")
 async def coach_exec(body: CoachExecIn, db: AsyncSession = Depends(get_db)):
-    return await coach_bridge.exec_in_kali(db, body.session_id, body.command)
+    return await coach_bridge.exec_in_kali(db, body.session_id, body.command,
+                                           window=body.window)
 
 
 @coach_router.post("/type")
 async def coach_type(body: CoachTypeIn, db: AsyncSession = Depends(get_db)):
-    return await coach_bridge.type_in_pane(db, body.session_id, body.text)
+    return await coach_bridge.type_in_pane(db, body.session_id, body.text,
+                                           window=body.window)
 
 
 @coach_router.post("/flag")
@@ -688,6 +690,10 @@ async def coach_config(db: AsyncSession = Depends(get_db)):
             "action_budget": await settings_svc.get_setting(db, "coach.action_budget", 50),
             "takeover_pace_s": await settings_svc.get_setting(db, "coach.takeover_pace_s", 10),
             "takeover_chain_max": await settings_svc.get_setting(db, "coach.takeover_chain_max", 12),
+            "max_workers": await settings_svc.get_setting(db, "coach.max_workers", 3),
+            "worker_turn_cap": await settings_svc.get_setting(db, "coach.worker_turn_cap", 10),
+            "worker_time_cap_s": await settings_svc.get_setting(db, "coach.worker_time_cap_s", 300),
+            "collect_wait_s": await settings_svc.get_setting(db, "coach.collect_wait_s", 40),
         },
     }
 

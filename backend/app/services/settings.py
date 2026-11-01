@@ -47,6 +47,10 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.action_budget": (50, False),
     "coach.takeover_pace_s": (10, False),        # min gap between L4 chains
     "coach.takeover_chain_max": (12, False),     # max LLM calls per L4 turn
+    "coach.max_workers": (3, False),             # parallel L4 subagent panes
+    "coach.worker_turn_cap": (10, False),        # LLM turns per worker task
+    "coach.worker_time_cap_s": (300, False),     # wall-clock per worker task
+    "coach.collect_wait_s": (40, False),         # collect_agent block bound
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

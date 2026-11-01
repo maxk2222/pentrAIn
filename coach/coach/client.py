@@ -96,18 +96,22 @@ class BackendClient:
         return await self._post("/api/coach/suggest",
                                 {"session_id": session_id, "command": command, "why": why})
 
-    async def exec_in_kali(self, session_id: int, command: str) -> dict:
+    async def exec_in_kali(self, session_id: int, command: str,
+                           window: str | None = None) -> dict:
         # the backend blocks up to 60s on the tmux marker plus tmux-setup
         # overhead — a 60s client read race kills legit long-running execs
         # (nmap -sV etc.) right at the finish line. 150s clears it.
-        return await self._post("/api/coach/exec",
-                                {"session_id": session_id, "command": command},
-                                timeout=150.0)
+        body = {"session_id": session_id, "command": command}
+        if window:
+            body["window"] = window
+        return await self._post("/api/coach/exec", body, timeout=150.0)
 
-    async def type_in_pane(self, session_id: int, text: str) -> dict:
-        return await self._post("/api/coach/type",
-                                {"session_id": session_id, "text": text},
-                                timeout=30.0)
+    async def type_in_pane(self, session_id: int, text: str,
+                           window: str | None = None) -> dict:
+        body = {"session_id": session_id, "text": text}
+        if window:
+            body["window"] = window
+        return await self._post("/api/coach/type", body, timeout=30.0)
 
     async def submit_flag(self, session_id: int, value: str) -> dict:
         return await self._post("/api/coach/flag",

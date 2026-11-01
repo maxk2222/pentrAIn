@@ -10,7 +10,7 @@ import { useAppStore } from "@/lib/store";
 import { Badge, Button, IconButton, Tabs } from "@/components/ui";
 import { ResizeHandle } from "@/components/resizable";
 import { ConsoleView } from "@/components/console";
-import { ChatPanel, AutonomyToggle } from "@/components/chat";
+import { ChatPanel, AutonomyToggle, SubagentsToggle } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
 import { NotesPanel } from "@/components/notes";
@@ -111,7 +111,8 @@ export function SessionPage() {
         try {
           const ev = JSON.parse(e.data) as WsEvent;
           setEvents((prev) => [...prev.slice(-299), ev]);
-          if (ev.type === "state" || ev.type === "autonomy") {
+          if (ev.type === "state" || ev.type === "autonomy"
+              || ev.type === "subagents") {
             qc.invalidateQueries({ queryKey: ["session", sessionId] });
             qc.invalidateQueries({ queryKey: ["session-flags", sessionId] });
             useAppStore.getState().loadActiveSession();
@@ -230,6 +231,12 @@ export function SessionPage() {
       .catch(() => {});
   }
 
+  function setSubagents(enabled: boolean) {
+    api.post(`/api/sessions/${sessionId}/subagents`, { enabled })
+      .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
+      .catch(() => {});
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
@@ -279,6 +286,10 @@ export function SessionPage() {
           {session?.autonomy_level !== undefined && (
             <AutonomyToggle autonomy={session.autonomy_level}
               onAutonomy={setAutonomy} />
+          )}
+          {session?.subagents_enabled !== undefined && (
+            <SubagentsToggle enabled={session.subagents_enabled}
+              onToggle={setSubagents} />
           )}
           <div className="ml-1 flex items-center gap-0.5 border-l border-border pl-2">
             <IconButton icon={CheckSquare} label="Progress"
@@ -369,7 +380,9 @@ export function SessionPage() {
               style={{ width: widths.chat }}>
               <ChatPanel sessionId={sessionId} events={events}
                 autonomy={session?.autonomy_level}
-                onAutonomy={setAutonomy} />
+                onAutonomy={setAutonomy}
+                subagents={session?.subagents_enabled}
+                onSubagents={setSubagents} />
             </div>
           </>
         ) : (

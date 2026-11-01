@@ -25,7 +25,7 @@ class FakeClient:
     async def suggest_command(self, sid, command, why):
         return {}
 
-    async def exec_in_kali(self, sid, command):
+    async def exec_in_kali(self, sid, command, window=None):
         return {"out": "ok"}
 
     async def mark_checkpoint(self, sid, cid):

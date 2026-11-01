@@ -132,6 +132,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             "id": session.id, "state": session.state,
             "autonomy_level": session.autonomy_level,
             "coach_enabled": session.coach_enabled,
+            "subagents_enabled": bool(session.subagents_enabled),
             "kali_vmid": session.kali_vmid,
             "kali_internet": bool(session.kali_internet),
             "started_at": session.started_at.isoformat() if session.started_at else None,
@@ -203,13 +204,15 @@ async def suggest_command(db: AsyncSession, session_id: int, command: str, why: 
     return action
 
 
-async def exec_in_kali(db: AsyncSession, session_id: int, command: str) -> dict:
+async def exec_in_kali(db: AsyncSession, session_id: int, command: str,
+                       window: str | None = None) -> dict:
     """Execute a command on the session's Kali via qemu-guest-agent.
 
     TAKEOVER (L4) only — copilot-level flows go through suggest_command +
     user confirmation (sessions.suggest_command_confirm runs them itself).
     Commands are also visible to the user — coach shells run in the
-    'pentrain-coach' tmux session on the Kali desktop.
+    'pentrain-coach' tmux session on the Kali desktop. `window` targets a
+    named worker window (w1..w3) for parallel subagents.
     """
     session = await db.get(Session, session_id)
     if not session:
@@ -231,10 +234,13 @@ async def exec_in_kali(db: AsyncSession, session_id: int, command: str) -> dict:
     engine = await get_engine(db)
     try:
         res = await exec_visible_in_kali(engine, session.kali_vmid, command,
-                                         session_id=session_id)
+                                         session_id=session_id, window=window)
         status = "ok" if res.get("exitcode", 0) == 0 else "error"
-        await record_action(db, session_id, "exec_in_kali",
-                            {"command": command}, res, status=status)
+        args = {"command": command}
+        if window:
+            args["window"] = window
+        await record_action(db, session_id, "exec_in_kali", args, res,
+                            status=status)
         return {**res, "status": status}
     except Exception as e:
         await record_action(db, session_id, "exec_in_kali",
@@ -242,7 +248,8 @@ async def exec_in_kali(db: AsyncSession, session_id: int, command: str) -> dict:
         return {"error": str(e), "status": "error"}
 
 
-async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
+async def type_in_pane(db: AsyncSession, session_id: int, text: str,
+                       window: str | None = None) -> dict:
     """Type a line of INPUT into the busy coach pane — TAKEOVER only.
 
     Interactive flows can't go through exec_in_kali: a foreground program
@@ -272,12 +279,14 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
         # attempt looks identical to a fresh failure). One guest call does
         # the probe + both key sends (they queue in order; `send-keys -l`
         # keeps passwords/special chars literal, Enter stays a real key).
+        target = _pane_target(window)
         pre = await engine.pve.agent_exec_sh(
             session.kali_vmid,
-            f"tmux display-message -p -t {COACH_TMUX} "
+            f"{_tmux_ensure_sh(window)}"
+            f"tmux display-message -p -t {target} "
             "'#{history_size} #{cursor_y}'; "
-            f"tmux send-keys -t {COACH_TMUX} -l {shlex.quote(text)}; "
-            f"tmux send-keys -t {COACH_TMUX} Enter", timeout_s=10)
+            f"tmux send-keys -t {target} -l {shlex.quote(text)}; "
+            f"tmux send-keys -t {target} Enter", timeout_s=10)
         try:
             h0, cy0 = (int(x) for x in (pre.get("out") or "").split()[:2])
         except (ValueError, IndexError):
@@ -288,9 +297,9 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str) -> dict:
         nonce = secrets.token_hex(5)
         pane = await engine.pve.agent_exec_sh(
             session.kali_vmid,
-            f"tmux capture-pane -pJ -t {COACH_TMUX} -S - 2>/dev/null; "
+            f"tmux capture-pane -pJ -t {target} -S - 2>/dev/null; "
             f"echo @@FG:{nonce}@@; "
-            f"tmux display-message -p -t {COACH_TMUX} "
+            f"tmux display-message -p -t {target} "
             "'#{pane_current_command}'", timeout_s=10)
         p_out = pane.get("out") or ""
         body, _, cur_part = p_out.rpartition(f"@@FG:{nonce}@@")
@@ -362,9 +371,30 @@ async def check_flag(db: AsyncSession, session_id: int, flag_key: str) -> dict:
 COACH_TMUX = "pentrain-coach"
 
 
+def _pane_target(window: str | None) -> str:
+    """tmux target for a pane — main session window by default, a named
+    worker window (pentrain-coach:w1..w3) for parallel subagents."""
+    return f"{COACH_TMUX}:{window}" if window else COACH_TMUX
+
+
+def _tmux_ensure_sh(window: str | None) -> str:
+    """Shell fragment ensuring the worker window exists — new-window is NOT
+    idempotent (duplicate names allowed), so list-windows|grep guards it.
+    -d keeps the desktop focus on the current window."""
+    if not window:
+        return ""
+    q = shlex.quote(window)
+    return (f"tmux has-session -t {COACH_TMUX} 2>/dev/null "
+            f"|| tmux new-session -d -s {COACH_TMUX}; "
+            f"tmux list-windows -t {COACH_TMUX} -F '#{{window_name}}' "
+            f"| grep -qx {q} "
+            f"|| tmux new-window -d -t {COACH_TMUX} -n {q}; ")
+
+
 async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                                timeout_s: int = 60,
-                               session_id: int | None = None) -> dict:
+                               session_id: int | None = None,
+                               window: str | None = None) -> dict:
     """Run a command INSIDE the 'pentrain-coach' tmux on the Kali desktop so the
     trainee literally watches the coach type. Falls back to a detached guest-agent
     shell when no desktop/tmux exists (agent provisioning still pending, mock, etc).
@@ -376,16 +406,18 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     """
     marker = f"PTN{secrets.token_hex(5)}"
     shells = ("bash", "zsh", "sh", "dash", "ksh", "fish")
-    # ONE guest call for all three probes — session check, foreground command
-    # and last pane line ride in a single QGA round-trip (was 3 sequential
-    # calls ≈ +2 HTTP+agent latencies per exec)
+    target = _pane_target(window)
+    # ONE guest call for all probes — session check, worker-window ensure,
+    # foreground command and last pane line ride in a single QGA round-trip
+    # (was 3 sequential calls ≈ +2 HTTP+agent latencies per exec)
     probe = await engine.pve.agent_exec_sh(
         kali_vmid,
         f"if tmux has-session -t {COACH_TMUX} 2>/dev/null; then "
+        f"{_tmux_ensure_sh(window)}"
         f"echo @@OK:{marker}@@; "
-        f"tmux display-message -p -t {COACH_TMUX} '#{{pane_current_command}}'; "
+        f"tmux display-message -p -t {target} '#{{pane_current_command}}'; "
         f"echo @@SEP:{marker}@@; "
-        f"tmux capture-pane -pt {COACH_TMUX} 2>/dev/null | grep -v '^$' "
+        f"tmux capture-pane -pt {target} 2>/dev/null | grep -v '^$' "
         "| tail -1; "
         f"else echo @@NOSESSION:{marker}@@; fi", timeout_s=10)
     p_out = probe.get("out") or ""
@@ -394,7 +426,8 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
         # provider) — create the channel detached; a later xfce login
         # attaches to the same session
         await engine.pve.agent_exec_sh(
-            kali_vmid, f"tmux new-session -d -s {COACH_TMUX}", timeout_s=10)
+            kali_vmid, f"tmux new-session -d -s {COACH_TMUX}; "
+            f"{_tmux_ensure_sh(window)}", timeout_s=10)
         probe = await engine.pve.agent_exec_sh(
             kali_vmid, f"tmux has-session -t {COACH_TMUX}", timeout_s=10)
         if probe.get("exitcode", 1) != 0:
@@ -412,11 +445,11 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     if re.fullmatch(r"C-[a-z]", command.strip()):
         await engine.pve.agent_exec_sh(
             kali_vmid,
-            f"tmux send-keys -t {COACH_TMUX} {command.strip()}", timeout_s=10)
+            f"tmux send-keys -t {target} {command.strip()}", timeout_s=10)
         await asyncio.sleep(0.4)
         fg = await engine.pve.agent_exec_sh(
             kali_vmid,
-            f"tmux display-message -p -t {COACH_TMUX} "
+            f"tmux display-message -p -t {target} "
             "'#{pane_current_command}'", timeout_s=10)
         now = (fg.get("out") or "").strip()
         state = (f"pane free — shell '{now}' at prompt" if now in shells
@@ -453,15 +486,15 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     n_cmd_lines = command.count("\n") + 1
     await engine.pve.agent_exec_sh(
         kali_vmid,
-        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(f'echo {marker}A')} Enter; "
-        f"tmux send-keys -t {COACH_TMUX} {shlex.quote(command)} Enter",
+        f"tmux send-keys -t {target} {shlex.quote(f'echo {marker}A')} Enter; "
+        f"tmux send-keys -t {target} {shlex.quote(command)} Enter",
         timeout_s=10)
 
     # -J joins wrapped lines so each typed line maps to exactly one pane line;
     # flag order matters — `-ptJ` parses as `-t J` and the capture fails
-    pane_cmd = (f"tmux capture-pane -pJ -t {COACH_TMUX} -S -1500 2>/dev/null "
+    pane_cmd = (f"tmux capture-pane -pJ -t {target} -S -1500 2>/dev/null "
                 "| tail -800")
-    fg_probe = (f"tmux display-message -p -t {COACH_TMUX} "
+    fg_probe = (f"tmux display-message -p -t {target} "
                 "'#{pane_current_command}'")
     # only real marker *output* lines count: `PTN…A` alone, `PTN…B:<digits>`
     begin = re.compile(rf"{re.escape(marker)}A\s*$")
@@ -530,7 +563,7 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                         and not cont_re.search(last_ln)):
                     await engine.pve.agent_exec_sh(
                         kali_vmid,
-                        f"tmux send-keys -t {COACH_TMUX} "
+                        f"tmux send-keys -t {target} "
                         f"{shlex.quote(f'echo {marker}B:$?')} Enter",
                         timeout_s=10)
                     b_sent = True

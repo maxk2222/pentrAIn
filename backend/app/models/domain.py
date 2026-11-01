@@ -118,6 +118,8 @@ class Session(Base):
     coach_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     kali_internet: Mapped[bool] = mapped_column(Boolean, default=False)  # net1→wan bridge attached
     kali_wan_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)  # LAN lease on net1 — scope auto-detect
+    # L4 parallel worker agents (spawn_agent → tmux windows w1..w3)
+    subagents_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

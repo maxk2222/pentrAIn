@@ -198,7 +198,10 @@ class _TmuxPve:
     async def agent_exec_sh(self, vmid, cmd, timeout_s=120):
         self.calls.append(cmd)
         if "@@OK:" in cmd:                       # batched probe
-            return {"out": "@@OK@@\nzsh\n@@SEP@@\n$ ",
+            import re as _re
+            m = _re.search(r"@@OK:(\w+)@@", cmd)
+            tok = m.group(1) if m else ""
+            return {"out": f"@@OK:{tok}@@\nzsh\n@@SEP:{tok}@@\n$ ",
                     "err": "", "exitcode": 0}
         if "send-keys" in cmd and "echo PTN" in cmd:
             # send-batch: echo-marker + command in one call — parse the nonce
@@ -255,3 +258,36 @@ async def test_type_in_pane_batched_guest_calls(db):
         coach_bridge.get_engine = orig
     assert res["visible"]
     assert len(pve.calls) <= 3, pve.calls       # probe+type+enter, capture+fg
+
+
+async def test_exec_window_targets_named_worker_pane():
+    """window=w1 routes every pane op to pentrain-coach:w1 — and the window
+    ensure rides inside the ONE batched probe, not an extra QGA call."""
+    from types import SimpleNamespace
+
+    from app.services.coach_bridge import exec_visible_in_kali
+    pve = _TmuxPve()
+    engine = SimpleNamespace(pve=pve)
+    res = await exec_visible_in_kali(engine, 100, "id", timeout_s=10,
+                                   window="w1")
+    assert res["exitcode"] == 0 and "hello-out" in res["out"]
+    # ensure fragment (list-windows || new-window) inside the ONE probe
+    assert sum("list-windows" in c and "new-window" in c
+               for c in pve.calls) == 1
+    pane_ops = [c for c in pve.calls if "send-keys" in c
+                or "display-message" in c or "capture-pane" in c]
+    assert pane_ops and all("-t pentrain-coach:w1" in c for c in pane_ops)
+
+
+def test_exec_window_rejects_target_injection():
+    """tmux target syntax must stay a bare window name — anything else is
+    a shell/target injection attempt."""
+    from pydantic import ValidationError
+
+    from app.schemas import CoachExecIn
+    CoachExecIn(session_id=1, command="id", window="w1")
+    CoachExecIn(session_id=1, command="id")
+    for bad in ("w-1;rm", "x y", "a:b", "0" * 20, "UPPER"):
+        import pytest
+        with pytest.raises(ValidationError):
+            CoachExecIn(session_id=1, command="id", window=bad)

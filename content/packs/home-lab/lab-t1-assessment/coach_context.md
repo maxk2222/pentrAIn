@@ -79,6 +79,21 @@
 - Write the report INCREMENTALLY (`cat >> ~/lan-report.md` blocks), then
   call check_flag("report") — a single flag completes the quest.
 
+## Parallel workers (SUBAGENTS enabled)
+
+- After discovery, PARALLELIZE per-device enumeration instead of walking
+  hosts serially: `spawn_agent("enumerate services + safe read-only probes
+  on 192.168.3.55 — report open services, versions, access results and
+  evidence paths")` per discovered host.
+- Workers run exec_in_kali on their own tmux window (w1–w3) — each handles
+  its own busy pane; their commands join ALREADY_DONE so the parent sees
+  what already ran.
+- The parent keeps the ROE: the foreign-IP/scope guard applies to worker
+  execs identically, and workers share the session action budget.
+- Collect with `collect_agent("w1")` (waits up to ~40s) when a result is
+  needed for the next step; `agent_status` for an overview. Reports feed
+  the access table + findings — the parent writes them into the report.
+
 ## Common wrong turns
 
 - Scanning eth0 (the isolated range net) — it's empty except the router;

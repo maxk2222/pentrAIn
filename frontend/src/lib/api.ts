@@ -94,7 +94,7 @@ export type SessionState =
 export interface Session {
   id: number; quest_id: string; state: SessionState; kali_vmid: number | null;
   autonomy_level: number; coach_enabled: boolean; kali_internet?: boolean;
-  kali_wan_ip?: string | null;
+  kali_wan_ip?: string | null; subagents_enabled?: boolean;
   created_at: string | null; ready_at: string | null; error: string | null;
 }
 

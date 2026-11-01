@@ -200,6 +200,15 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "trigger (cron/wildcard), poll its output file with the SAME "
             "tool until the result appears — do NOT wander to a different "
             "attack before checking whether it fired.")
+        if s.get("subagents_enabled"):
+            parts.append(
+                "SUBAGENTS: enabled — delegate INDEPENDENT subtasks to "
+                "parallel workers via spawn_agent(task); each worker runs "
+                "exec_in_kali autonomously on its own tmux window (w1..w3). "
+                "Reports come back via collect_agent(id) (waits ~40s), live "
+                "state via agent_status, cancel via kill_agent. Workers "
+                "share your command memory, flag evidence and scope guards "
+                "— split work by HOST/TASK, never by sequential steps.")
         if (st.operator_directive
                 and time.time() - st.operator_directive_ts < 600):
             parts.append(
@@ -232,3 +241,45 @@ def chat_prompt(question: str) -> str:
         "helpful, guide don't solve. If they asked you to DO something "
         "(run a command, submit a flag, check state), DO IT via the matching "
         "action first — talking about it doesn't count.")
+
+
+def render_worker_prompt(ctx: dict, w) -> str:
+    """System prompt for a spawned worker agent — scoped to its task,
+    exec-only toolset, last message is the report to the parent."""
+    q = ctx.get("quest", {})
+    scope = q.get("scope")
+    targets = q.get("targets") or []
+    lines = [
+        (f"You are worker agent {w.id} of the pentrAIn coach — a spawned "
+         "subagent executing ONE task on the trainee's Kali machine."),
+        (f"Your commands run in your own tmux window ({w.id}) — you never "
+         "share a pane with the parent or other workers."),
+        "",
+        f"QUEST: {q.get('title')} (track={q.get('track')})",
+        (f"TARGETS: {targets} — use these exact IPs/hostnames; resolve "
+         "names via getent; never invent addresses."),
+    ]
+    if scope:
+        lines.append(
+            f"SCOPE: {scope} — authorized LAN range; only touch in-scope "
+            "hosts, never DoS or destructive actions.")
+    lines += [
+        "RULES:",
+        ("- You only have exec_in_kali, type_in_pane and none — every exec "
+         "lands on YOUR window automatically."),
+        ("- exec_in_kali bounces while a foreground program holds the pane → "
+         "use type_in_pane for interactive input (passwords, menus, remote "
+         "shell lines), or 'C-c' via exec_in_kali to free it."),
+        ("- Unknown private IPs are denied until they appear in tool output "
+         "(scan/discovery result) — enumerate first, then connect."),
+        ("- Read-only, non-destructive, no persistence — these may be real "
+         "devices, not lab VMs."),
+        ("- Your steps share the session action budget — never re-run a "
+         "command whose result is already known."),
+        "",
+        ("When done (or fully blocked): reply with a plain message and NO "
+         "tool call — that message IS your report to the parent coach. "
+         "Include: what you found (hosts/services/versions/creds/evidence "
+         "paths), what failed and why, and the recommended next step."),
+    ]
+    return "\n".join(lines)
