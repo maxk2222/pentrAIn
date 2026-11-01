@@ -58,6 +58,11 @@ the live probe — anything absent there is NOT installed, don't retry it):
   on EVERY request — a fresh `-c` file per attempt discards the login you
   just did. Verify the login BEFORE exploiting: fetch a protected page
   (`/index.php`), a 302 back to login means the POST failed.
+- Login forms often carry a CSRF token — a silent auth failure (every
+  response is a redirect/empty page despite correct creds) usually means a
+  missing hidden field. Fetch the form, extract it, POST it along:
+  `tok=$(curl -s -c jar LOGIN | grep -oP "user_token' value='\K[^']+")`
+  then `-d "username=..&password=..&user_token=$tok&Login=Login"`.
 - LFI methodology — in this order, never skip the sanity check:
   1. `?page=../../../../etc/passwd` proves traversal works at all
   2. empty page / same page back → ADD more `../` (include() resolves

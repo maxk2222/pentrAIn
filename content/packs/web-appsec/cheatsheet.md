@@ -12,9 +12,13 @@ whatweb http://<ip>/ ; nikto -h http://<ip>/
 ## Session auth via curl
 
 ```bash
-# ONE jar for the whole session — -c writes, -b sends, reuse it everywhere
+# ONE jar for the whole session — -c writes, -b sends, reuse it everywhere.
+# Hidden CSRF fields (user_token / csrf / _token) MUST ride in the POST —
+# fetch the form, extract, submit:
+tok=$(curl -s -c /tmp/jar 'http://<ip>/login.php' \
+      | grep -oP "user_token' value='\K[^']+")
 curl -s -c /tmp/jar -b /tmp/jar 'http://<ip>/login.php' \
-     -d 'username=admin&password=password&Login=Login'
+     -d "username=admin&password=password&user_token=$tok&Login=Login"
 curl -s -b /tmp/jar -o /dev/null -w '%{http_code} %{redirect_url}\n' \
      'http://<ip>/index.php'      # 302→login = failed, 200 = session live
 ```
