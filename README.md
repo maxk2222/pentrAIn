@@ -19,7 +19,7 @@
 <p align="center">
   <img alt="stack" src="https://img.shields.io/badge/stack-FastAPI%20·%20React%2019%20·%20SQLite-1f6feb?style=flat-square" />
   <img alt="engine" src="https://img.shields.io/badge/engine-Proxmox%20VE%20%2B%20Ludus-e9761a?style=flat-square" />
-  <img alt="quests" src="https://img.shields.io/badge/quests-55%20in%208%20tracks-2ea44f?style=flat-square" />
+  <img alt="quests" src="https://img.shields.io/badge/quests-56%20in%209%20tracks-2ea44f?style=flat-square" />
   <img alt="coach" src="https://img.shields.io/badge/coach-4%20autonomy%20levels%20·%20tool%20calling-8250df?style=flat-square" />
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" />
 </p>
@@ -41,9 +41,9 @@ and adapting to how you work.
   <tr>
     <td width="50%">
       <h3>🗺️ Quest library</h3>
-      <b>55 quests in 8 tracks</b> — Linux, web appsec, network recon, AD,
-      forensics, scripting, wireless, home-lab. Tiered progression, exam
-      capstones, staged hints that cost points.
+      <b>56 quests in 9 tracks</b> — Linux, web appsec, network recon, AD,
+      forensics, scripting, wireless, home-lab, capstone. Tiered progression,
+      exam capstones, staged hints that cost points.
     </td>
     <td width="50%">
       <h3>🖥️ Browser workspace</h3>
@@ -197,7 +197,7 @@ flags, coach plumbing, leaderboards — is testable on a laptop.
 | 🚀 [Getting started](docs/getting-started.md) | Install modes, setup wizard, first quest |
 | 🖥️ [Workspace](docs/workspace.md) | Console, panels, flags, resets, Kali internet |
 | 🤖 [AI coach](docs/coach.md) | Autonomy levels, tools, subagents, guardrails |
-| 🗺️ [Tracks & quests](docs/tracks.md) | All 8 tracks, exams, scoring |
+| 🗺️ [Tracks & quests](docs/tracks.md) | All 9 tracks, exams, scoring |
 | 🏗️ [Architecture](docs/architecture.md) | Components, lifecycle, event flows, data model |
 | 🔌 [API reference](docs/api-reference.md) | REST + WebSocket surface |
 | ⚙️ [Configuration](docs/configuration.md) | Every settings key + env var |

@@ -1,0 +1,126 @@
+---
+# cap-t3-nordwind app01 — internal tier. Only reachable from web01 (nft source
+# pin). The inventory API issues HS256 JWTs signed with the SAME app_secret
+# committed to the portal repo; the admin diagnostics endpoint shell-injects
+# its host parameter. config.yml leaks the read-only DB creds for db01.
+# Flag injected post-deploy.
+- name: packages
+  ansible.builtin.apt:
+    name: [python3-flask, python3-yaml, mariadb-client, openssh-server, nftables, sshpass]
+    state: present
+    update_cache: true
+
+- name: api service account (locked password — way in is the API RCE + planted key)
+  ansible.builtin.user:
+    name: api
+    shell: /bin/bash
+    home: /home/api
+    create_home: true
+
+- name: api .ssh dir (key gets planted through the RCE)
+  ansible.builtin.file:
+    path: /home/api/.ssh
+    state: directory
+    owner: api
+    group: api
+    mode: "0700"
+
+- name: service tree
+  ansible.builtin.file:
+    path: /srv/api
+    state: directory
+    owner: root
+    group: api
+    mode: "0750"
+
+- name: inventory-api source
+  ansible.builtin.copy:
+    src: app.py
+    dest: /srv/api/app.py
+    owner: root
+    group: api
+    mode: "0640"
+
+- name: db01 address — same /24, .33
+  ansible.builtin.set_fact:
+    db_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.33"
+
+- name: service config — shared secret reuse + db creds are the finding
+  ansible.builtin.copy:
+    dest: /srv/api/config.yml
+    owner: root
+    group: api
+    mode: "0640"
+    content: |
+      # nordwind inventory service config
+      app_secret: "nw-inv-2024"
+      database:
+        host: "{{ db_ip }}"
+        name: ops
+        user: api_ro
+        pass: "ApiRo#Nrdw24"
+
+- name: systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/inventory-api.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Nordwind inventory API
+      After=network.target
+      [Service]
+      User=api
+      ExecStart=/usr/bin/python3 /srv/api/app.py
+      Restart=always
+      [Install]
+      WantedBy=multi-user.target
+  notify: restart inventory-api
+
+# PasswordAuthentication stays enabled (pack lint requires a password path on
+# sshd-configured VMs) — `api` simply has no password, so the planted key is
+# the only credential that works.
+- name: ssh password auth drop-in (no account has a password set)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
+- name: source IPs on the range /24 (web hop + router)
+  ansible.builtin.set_fact:
+    web_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.31"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
+
+- name: nftables — accept only from web01
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ web_ip }} accept
+          # range router/ansible channel — not a trainee pivot path
+          ip saddr {{ router_ip }} accept
+          counter drop
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: inventory-api running
+  ansible.builtin.systemd:
+    name: inventory-api
+    enabled: true
+    state: started
+    daemon_reload: true

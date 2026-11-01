@@ -1,8 +1,9 @@
 # Tracks & quests
 
-**55 quests across 8 tracks**, organized in tiers 1–3. Every quest ships a
+**56 quests across 9 tracks**, organized in tiers 1–3. Quests ship a
 briefing, coach checkpoints, staged hints and a `defense.md` (what broke, how
-to detect it, how to fix it).
+to detect it, how to fix it) — capstone quests are the exception: they go in
+blind.
 
 ![Quest library](assets/screenshots/04-library.png)
 
@@ -156,6 +157,17 @@ regeneration: [ops.md — wireless labs](ops.md#wireless-hwsim-labs).
 > enforces `lan.scope_cidr` (default: auto-detected /24 from the DHCP lease),
 > read-only probes, and a shared action budget — but the ROE is on you:
 > only devices you own, no DoS, no aggressive brute force.
+
+### 👑 Capstone — `capstone` (1)
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Nordwind Logistics | 3 | Full engagement: recon → source leak → foothold → two pivots → API compromise → DB creds → hash crack → privesc → written report |
+
+> [!NOTE]
+> Capstone quests ship **no hints, no checkpoints, no cheatsheet and no
+> coach briefing** — the engagement letter is all you get. They double as
+> the full-auto agent benchmark: see [agent-eval.md](agent-eval.md).
 
 ## Scoring
 

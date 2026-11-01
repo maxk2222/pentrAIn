@@ -1,0 +1,158 @@
+---
+# cap-t3-nordwind web01 — the exposed tier. Nordwind "deployed" their portal
+# from a git checkout: .git ships in the docroot, autoindex is on, and the
+# history still holds the deploy password + shared APP_SECRET that a later
+# "rotate creds" commit only pretended to remove. Flag injected post-deploy.
+- name: packages
+  ansible.builtin.apt:
+    name: [nginx, git, openssh-server]
+    state: present
+    update_cache: true
+
+- name: deploy account (password lives in git history)
+  ansible.builtin.user:
+    name: deploy
+    password: "{{ 'Nw#Deploy!24' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/deploy
+    create_home: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
+- name: internal note — deploy's post-foothold loot
+  ansible.builtin.copy:
+    dest: /home/deploy/internal-notes.txt
+    content: |
+      deploy — internal scratchpad (NW-114, still "temporary" since March)
+
+      The inventory API moved off the portal host:
+        http://{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.32:8080/api/v1/status
+      It only accepts connections FROM THIS BOX — the app tier drops
+      everything else at the firewall.
+
+      Auth is still the shared app secret from the portal repo
+      (rotation ticket NW-209, pending since forever). The old deploy
+      keypair in the repo history is dead — netops rotated it.
+      The API config on the app host holds the read-only DB creds;
+      the data tier sits one hop deeper and only trusts the app host.
+    owner: deploy
+    mode: "0600"
+
+- name: portal docroot
+  ansible.builtin.file:
+    path: /var/www/portal
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: portal source tree
+  ansible.builtin.copy:
+    src: portal/
+    dest: /var/www/portal
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    directory_mode: "0755"
+
+# Lab-only throwaway keypair — private half lives in git history on this box,
+# public half is authorized NOWHERE (rotated per the story). Harmless decoy.
+- name: staged repo files (pre-rotation versions)
+  ansible.builtin.copy:
+    dest: "/var/www/portal/{{ item.dest }}"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - dest: config.yml
+      content: |
+        # nordwind portal — environment config
+        deploy_user: deploy
+        deploy_pass: "Nw#Deploy!24"
+        app_secret: "nw-inv-2024"        # shared with the inventory service
+        session_ttl: 3600
+    - dest: deploy_id_rsa
+      content: |
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+        QyNTUxOQAAACBYJatZxo1xeiupEn0IivXlH80Du6KxyX2tjHwhc9nqrgAAAJhYJxW6WCcV
+        ugAAAAtzc2gtZWQyNTUxOQAAACBYJatZxo1xeiupEn0IivXlH80Du6KxyX2tjHwhc9nqrg
+        AAAEDeP0pOmCKJf/ZBnm0h3RKnzxIBxQ7gEuaE8ep5rskmAlglq1nGjXF6K6kSfQiK9eUf
+        zQO7orHJfa2MfCFz2equAAAAFWRlcGxveUBub3Jkd2luZC5sb2NhbA==
+        -----END OPENSSH PRIVATE KEY-----
+    - dest: deploy_id_rsa.pub
+      content: >
+        ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFglq1nGjXF6K6kSfQiK9eUfzQO7orHJfa2MfCFz2equ deploy@nordwind.local
+  changed_when: false
+  no_log: true
+
+# Real commit history — the "rotation" is a deletion commit, which is exactly
+# why recovering history is the lesson.
+- name: build the shipped .git history
+  ansible.builtin.shell: |
+    set -e
+    cd /var/www/portal
+    git init -q
+    git config user.email "netops@nordwind.local"
+    git config user.name "nordwind-netops"
+    git add -A
+    git commit -qm "portal + env config"
+    # "scrub" secrets for go-live — history keeps them
+    rm -f deploy_id_rsa deploy_id_rsa.pub
+    printf '# nordwind portal — environment config\n# secrets moved to the vault (ticket NW-209)\ndeploy_user: deploy\nsession_ttl: 3600\n' > config.yml
+    git add -A
+    git commit -qm "rotate creds before go-live (NW-209)"
+    sed -i 's/v2\.1-dev/v2.1/' index.html 2>/dev/null || true
+    git add -A
+    git commit -qm "content pass" || true
+    chown -R www-data:www-data /var/www/portal/.git
+  args:
+    creates: /var/www/portal/.git/HEAD
+  changed_when: false
+
+- name: vhost — docroot is the checkout, autoindex leaks .git listing
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/portal
+    content: |
+      server {
+          listen 80 default_server;
+          root /var/www/portal;
+          index index.html;
+          location / {
+              try_files $uri $uri/ =404;
+              autoindex on;
+          }
+      }
+    mode: "0644"
+
+- name: enable portal vhost
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/portal
+    dest: /etc/nginx/sites-enabled/portal
+    state: link
+  notify: restart nginx
+
+- name: drop the stock default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: restart nginx
+
+- name: nginx serving
+  ansible.builtin.service:
+    name: nginx
+    enabled: true
+    state: started

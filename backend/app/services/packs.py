@@ -137,6 +137,7 @@ TRACK_TITLES = {
     "scripting": ("Scripting & Automation", "Bash and Python glue code, automation and tooling for pentesters.", "terminal", 60),
     "wifi": ("Wireless", "WiFi recon, handshake capture and cracking on a simulated radio lab.", "wifi", 70),
     "home-lab": ("Home Lab", "Authorized assessment of your own LAN — discovery, enumeration, vuln scan, reporting.", "home", 80),
+    "capstone": ("Capstone", "Full engagement simulations — multi-tier networks, chained objectives, zero walkthroughs.", "crown", 90),
 }
 
 

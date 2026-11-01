@@ -49,7 +49,7 @@ KALI_TOOL_PROBE = [
     "ssh", "sshpass", "expect", "sshuttle", "chisel", "proxychains4",
     "mysql", "mariadb", "psql", "redis-cli", "sqlite3",
     "rdesktop", "xfreerdp3", "evil-winrm",
-    "curl", "wget", "jq", "python3", "msfconsole",
+    "curl", "wget", "jq", "python3", "msfconsole", "git",
     "tcpdump", "tshark", "aircrack-ng", "iw",
 ]
 

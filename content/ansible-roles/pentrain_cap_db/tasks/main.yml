@@ -1,0 +1,129 @@
+---
+# cap-t3-nordwind db01 — data tier. Only reachable from app01 (nft source
+# pin). ops.users holds shadow-format hashes for the ops account (crackable
+# with rockyou); the ops user is in group backup, and the root-run backup
+# script is group-writable — classic writable-cron privesc. Flags injected.
+- name: packages
+  ansible.builtin.apt:
+    name: [mariadb-server, openssh-server, nftables]
+    state: present
+    update_cache: true
+
+- name: backup group
+  ansible.builtin.group:
+    name: backup
+    state: present
+
+- name: ops account — password is the crackable DB hash
+  ansible.builtin.user:
+    name: ops
+    password: "{{ 'shadow' | password_hash('sha512') }}"
+    shell: /bin/bash
+    home: /home/ops
+    create_home: true
+    groups: [backup]
+    append: true
+
+- name: ssh password auth
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+  notify: restart sshd
+
+- name: sshd_config.d drop-in wins over cloud-image defaults
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-pentrain-password.conf
+    content: "PasswordAuthentication yes\n"
+    mode: "0644"
+  notify: restart sshd
+
+- name: mariadb reachable beyond localhost (nft does the real gating)
+  ansible.builtin.copy:
+    dest: /etc/mysql/mariadb.conf.d/99-pentrain.cnf
+    mode: "0644"
+    content: |
+      [mysqld]
+      bind-address = 0.0.0.0
+      skip-name-resolve
+      innodb_buffer_pool_size = 64M
+      performance_schema = OFF
+  notify: restart mariadb
+
+- name: mariadb running
+  ansible.builtin.service:
+    name: mariadb
+    enabled: true
+    state: started
+
+- name: source IPs on the range /24 (app hop + router)
+  ansible.builtin.set_fact:
+    app_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.32"
+    router_ip: "{{ ansible_default_ipv4.network.split('.')[0:3] | join('.') }}.254"
+
+- name: ops database, read-only service account, credential table
+  ansible.builtin.command:
+    cmd: >
+      mariadb -e "CREATE DATABASE IF NOT EXISTS ops;
+      CREATE USER IF NOT EXISTS 'api_ro'@'{{ app_ip }}' IDENTIFIED BY 'ApiRo#Nrdw24';
+      GRANT SELECT ON ops.* TO 'api_ro'@'{{ app_ip }}';
+      CREATE TABLE IF NOT EXISTS ops.users
+        (id INT PRIMARY KEY, username VARCHAR(64), pass_hash VARCHAR(128), note VARCHAR(255));
+      INSERT IGNORE INTO ops.users (id, username, pass_hash, note) VALUES
+        (1, 'ops', '{{ 'shadow' | password_hash('sha512') }}', 'on-call ops account'),
+        (2, 'nightly', '{{ 'N1ghtly!Job#xQ9' | password_hash('sha512') }}', 'batch user'),
+        (3, 'deploy', '{{ 'OldDeploy!zz41' | password_hash('sha512') }}', 'legacy');
+      FLUSH PRIVILEGES;"
+  changed_when: false
+  no_log: true   # cmd carries the api_ro password + planted hashes
+
+- name: ops data dir (something to back up)
+  ansible.builtin.copy:
+    dest: /var/lib/ops/README
+    content: "ops datasets land here; archive job tars them nightly.\n"
+    mode: "0644"
+
+- name: backup script — root:backup, group-writable (the privesc)
+  ansible.builtin.copy:
+    dest: /opt/backup/backup.sh
+    owner: root
+    group: backup
+    mode: "0775"
+    content: |
+      #!/bin/sh
+      # nordwind ops archive — runs as root from cron
+      tar czf /var/backups/ops-$(date +%F).tgz /var/lib/ops 2>/dev/null || true
+
+- name: root cron entry
+  ansible.builtin.copy:
+    dest: /etc/cron.d/nordwind-backup
+    mode: "0644"
+    content: |
+      * * * * * root /opt/backup/backup.sh >/dev/null 2>&1
+
+- name: nftables — accept only from app01
+  ansible.builtin.copy:
+    dest: /etc/nftables.conf
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr {{ app_ip }} accept
+          # range router/ansible channel — not a trainee pivot path
+          ip saddr {{ router_ip }} accept
+          counter drop
+        }
+        chain forward { type filter hook forward priority 0; policy accept; }
+        chain output { type filter hook output priority 0; policy accept; }
+      }
+    mode: "0644"
+
+- name: enable nftables
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started

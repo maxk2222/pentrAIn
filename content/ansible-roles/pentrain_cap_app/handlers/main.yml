@@ -1,0 +1,10 @@
+---
+- name: restart sshd
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+
+- name: restart inventory-api
+  ansible.builtin.service:
+    name: inventory-api
+    state: restarted

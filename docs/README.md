@@ -17,7 +17,7 @@
 | 🚀 | [**Getting started**](getting-started.md) | Requirements, install modes, setup wizard, your first quest |
 | 🖥️ | [**The workspace**](workspace.md) | Session UI: console, panels, flags, resets, Kali internet |
 | 🤖 | [**The AI coach**](coach.md) | Autonomy levels, tools, subagents, slash commands, guardrails |
-| 🗺️ | [**Tracks & quests**](tracks.md) | All 8 tracks, progression rules, exams, scoring |
+| 🗺️ | [**Tracks & quests**](tracks.md) | All 9 tracks, progression rules, exams, scoring |
 
 ## Operate
 
@@ -36,6 +36,7 @@
 | 🔌 | [**API reference**](api-reference.md) | REST + WebSocket surface, coach-internal API |
 | 🧪 | [**Development**](development.md) | MockProvider dev loop, tests, project layout |
 | ✍️ | [**Quest authoring**](quest-authoring.md) | `quest.yaml` schema, roles, checkpoints, exam rules |
+| 🏁 | [**Agent eval**](agent-eval.md) | Blind full-auto benchmark runs (`cap-t3-nordwind`) |
 
 ## Design decisions
 

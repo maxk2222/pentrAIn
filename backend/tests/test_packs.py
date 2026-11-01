@@ -95,3 +95,25 @@ flags: [{id: f, name: f, kind: file, vm: nope, file_path: /x}]
 """)
     _found, errors = discover_quests(tmp_path)
     assert any("unknown vm" in e for e in errors)
+
+
+async def test_capstone_quest_is_blind(db):
+    """cap-t3-nordwind is the agent full-auto benchmark: the coach context
+    must carry ZERO authored guidance — no coach notes, no cheatsheets, no
+    hints, no checkpoints. Adding any of those silently downgrades the
+    benchmark into a guided run."""
+    await sync_packs(db, PACKS_DIR)
+    quest = await db.get(Quest, "cap-t3-nordwind")
+    assert quest is not None and quest.track_slug == "capstone"
+    assert quest.coach_context_md == ""
+    assert quest.cheatsheet_md == ""
+    assert quest.hints_cfg == []
+    assert quest.coach_cfg.get("checkpoints") == []
+    # flag names/keys must not leak the solve path (they're in coach context)
+    names = " ".join((await db.execute(
+        select(Flag.name).where(Flag.quest_id == "cap-t3-nordwind")
+    )).scalars().all()).lower()
+    for leak in ("home/", "/root/flag", "ssh", "jwt", "cron", "git"):
+        assert leak not in names, f"flag name leaks solve path: {leak}"
+    track = await db.get(Track, "capstone")
+    assert track is not None and track.cheatsheet_md == ""
