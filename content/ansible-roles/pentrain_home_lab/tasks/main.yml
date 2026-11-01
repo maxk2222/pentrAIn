@@ -15,10 +15,26 @@
       - snmp
       - dnsutils
       - python3-pip
+      - enum4linux        # SMB/NAS user+share+policy enumeration
+      - nfs-common        # showmount + read-only NFS mounts
+      - avahi-utils       # mDNS browse — phones/TVs/casters don't answer nmap
+      - cups-ipp-utils    # ipptool for printer attribute reads
+      - mosquitto-clients # open MQTT brokers on IoT gear
+      - hydra             # own devices only — ROE-gated in the briefing
+      - netcat-openbsd
+      - curl
     state: present
     update_cache: true
   when: ansible_os_family == "Debian"
   failed_when: false   # some names drift between kali releases — never brick deploy
+
+- name: evidence drop dir
+  ansible.builtin.file:
+    path: /home/kali/evidence
+    state: directory
+    owner: kali
+    group: kali
+    mode: "0755"
 
 - name: report skeleton (flag checks structure, not this template)
   ansible.builtin.copy:
@@ -36,6 +52,12 @@
       ## Hosts discovered
       | IP | MAC / vendor | hostname | open ports / services |
       |----|--------------|----------|-----------------------|
+
+      ## Device access
+      what each probe actually reached — anonymous shares, file listings,
+      configs/banners, or "closed, nothing answered" (that counts too).
+      | host | device class | probe | result (evidence in ~/evidence/) |
+      |------|--------------|-------|---------------------------------|
 
       ## Findings
       | severity | host:port | finding | recommendation |

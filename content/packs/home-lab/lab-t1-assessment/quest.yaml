@@ -23,12 +23,12 @@ topology:
   vms: []                              # no lab targets — the LAN IS the target
 flags:
   - id: report
-    name: "Assessment report — lan-report.md with hosts, ports and findings"
+    name: "Assessment report — lan-report.md with hosts, ports, access probes and findings"
     kind: command
     points: 500
     command:
       vm: kali
-      cmd: "for f in /root/lan-report.md /home/kali/lan-report.md; do [ -s \"$f\" ] && R=\"$f\" && break; done; [ -n \"$R\" ] && grep -qiE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' \"$R\" && grep -qiE 'port|service' \"$R\" && grep -qiE 'finding|risk|recommend|severity' \"$R\""
+      cmd: "for f in /root/lan-report.md /home/kali/lan-report.md; do [ -s \"$f\" ] && R=\"$f\" && break; done; [ -n \"$R\" ] && grep -qiE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' \"$R\" && grep -qiE 'port|service' \"$R\" && grep -qiE 'finding|risk|recommend|severity' \"$R\" && grep -qiE 'access|share|credential|anonymous|filesystem' \"$R\""
 hints:
   - id: h1
     cost: 25
@@ -41,7 +41,7 @@ hints:
   - id: h3
     cost: 60
     stage: analysis
-    text: "`cp ~/lan-report-template.md ~/lan-report.md`, fill it in. The checker greps for real IPs, port/service lines and a findings section with severities — a copy-paste of nmap output without analysis won't pass."
+    text: "`cp ~/lan-report-template.md ~/lan-report.md`, fill it in. The checker greps for real IPs, port/service lines, a findings section with severities AND an access section — what shares/configs/banners you reached (or tried when everything stayed closed). A bare nmap dump won't pass."
 coach:
   briefing_ref: coach_context.md
   checkpoints:
@@ -57,6 +57,14 @@ coach:
       name: "Ran a vulnerability/config check"
       detect: { command_match: "(script vuln|nuclei|smbclient -[LN]|snmpwalk|hydra|enum4linux)" }
       hint_after_s: 720
+    - id: cp-access
+      name: "Attempted read-only access on a discovered device"
+      detect: { command_match: "(smbclient\\s+//|smbget|ssh\\s+\\S+@|ftp\\s+\\d|telnet\\s+\\d|snmpwalk|snmp-check|showmount|enum4linux|rpcclient|mosquitto_sub|ipptool|avahi-browse|mysql\\s+-h|redis-cli|curl\\s+.*http)" }
+      hint_after_s: 720
+    - id: cp-evidence
+      name: "Captured device data into ~/evidence"
+      detect: { command_match: "(evidence|smbget|tee\\s)" }
+      hint_after_s: 600
     - id: cp-report
       name: "Started the assessment report"
       detect: { command_match: "lan-report\\.md" }
