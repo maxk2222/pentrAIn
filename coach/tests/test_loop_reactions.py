@@ -1693,3 +1693,33 @@ async def test_worker_prompt_carries_operator_plan():
                                          title="OPERATOR_PLAN"))
     assert "OPERATOR_PLAN" in p and "parent next step" in p
     assert "update_plan" in p        # worker rule line present
+
+
+async def test_coach_enabled_event_pauses_and_resumes():
+    """The /sessions/{id}/coach broadcast must idle the loop live —
+    resync-only would let a 'paused' agent finish its current plan."""
+    coach, c = _l4_coach()
+    await coach.start()
+    assert coach.state.coach_enabled
+    coach._workers["w1"] = _mk_worker()          # pause kills workers
+    ev = lambda en: {"type": "coach_enabled", "topic": "session.1",
+                     "session_id": 1, "data": {"enabled": en}}
+    await coach._handle_event(ev(False))
+    assert not coach.state.coach_enabled
+    assert coach._workers["w1"].status == "killed"
+    assert coach.ctx["session"]["coach_enabled"] is False
+    # a paused coach must not answer chat either — it buffers nothing
+    await coach._handle_event({"type": "coach_message",
+                               "topic": "coach.1", "session_id": 1,
+                               "data": {"role": "user", "content": "hi"}})
+    assert not coach.state.pending_chat
+    await coach._handle_event(ev(True))
+    assert coach.state.coach_enabled
+    assert coach._next_reflect < time.monotonic() + 2   # thinks soon
+    await coach.stop()
+
+
+def _mk_worker():
+    from coach.loop import _Worker
+    import time as _t
+    return _Worker(id="w1", task="t", started=_t.monotonic())

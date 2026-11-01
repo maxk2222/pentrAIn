@@ -583,6 +583,23 @@ class SessionCoach:
                     self.ctx["session"]["subagents_enabled"] = enabled
                 if not enabled:
                     self._kill_all_workers()
+            elif etype == "coach_enabled":
+                # live pause/resume — lands immediately via WS, not on the
+                # next resync. Pause kills workers too: an idle parent with
+                # exec-armed workers isn't paused at all.
+                enabled = bool(data.get("enabled"))
+                if "session" in self.ctx:
+                    self.ctx["session"]["coach_enabled"] = enabled
+                global_on = bool(
+                    self.cfg.get("coach", {}).get("enabled", True))
+                was = self.state.coach_enabled
+                self.state.coach_enabled = enabled and global_on
+                if not self.state.coach_enabled:
+                    self._kill_all_workers()
+                elif not was and self.state.state == "active":
+                    # resume → think soon instead of waiting out the interval
+                    self._next_reflect = min(self._next_reflect,
+                                             time.monotonic() + 1)
             elif etype == "flag":
                 if data.get("correct"):
                     self.state.progress()
