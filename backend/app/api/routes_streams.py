@@ -21,6 +21,7 @@ from ..models.domain import CoachMessage, Session
 from ..services import coach_bridge
 from ..services.console import proxy_console, proxy_vm_console
 from ..services.events import bus, ephemeral_replay
+from ..services.terminal import kali_terminal, user_terminal, wants_for_agent
 from .deps import get_current_user, ws_auth
 
 router = APIRouter(tags=["streams"])
@@ -105,6 +106,39 @@ async def console_vm_ws(websocket: WebSocket, vmid: int,
     if not await ws_auth(websocket, db):
         return
     await proxy_vm_console(db, websocket, vmid)
+
+
+# ---------- browser terminal tabs (kali reverse-channel) ----------
+
+@router.get("/api/terminal/wants/{session_id}")
+async def terminal_wants(session_id: int, token: str | None = None,
+                         db: AsyncSession = Depends(get_db)):
+    """Kali agent polls this (~2s) for channels the UI wants opened.
+    Auth: the session's telemetry_token — same credential telemetried uses."""
+    wants = await wants_for_agent(db, session_id, token)
+    if wants is None:
+        return {"chans": {}}
+    return wants
+
+
+@router.websocket("/api/terminal/kali/{session_id}/{chan_id}")
+async def terminal_kali_ws(websocket: WebSocket, session_id: int,
+                           chan_id: str, db: AsyncSession = Depends(get_db)):
+    """Agent-side data socket — outbound dial from kali telemetried."""
+    await kali_terminal(db, websocket, session_id, chan_id,
+                        websocket.query_params.get("token"))
+
+
+@router.websocket("/api/terminal/{session_id}/{chan_id}")
+async def terminal_user_ws(websocket: WebSocket, session_id: int,
+                           chan_id: str, db: AsyncSession = Depends(get_db)):
+    """User-side terminal socket — registers the want, then pumps."""
+    if not await ws_auth(websocket, db):
+        return
+    cols = int(websocket.query_params.get("cols") or 120)
+    rows = int(websocket.query_params.get("rows") or 32)
+    await user_terminal(db, websocket, session_id, chan_id,
+                        max(20, min(400, cols)), max(5, min(200, rows)))
 
 
 # ---------- user-facing chat REST ----------

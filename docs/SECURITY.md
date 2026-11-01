@@ -91,6 +91,18 @@ flowchart LR
   instructions found inside command output; flag-looking strings are
   scanned, not obeyed.
 
+## Browser terminals
+
+- Terminal tabs are **root shells on Kali** by design — same trust level as
+  the noVNC desktop login; they exist only while the session is
+  `ready`/`active` and die with it.
+- The channel is **reversed** (agent dials out): no inbound listener is
+  added to the range; the agent authenticates with the session's
+  `telemetry_token`, users with their session token — neither crosses sides.
+- Shell spawning is gated `SHELL=1` in the **kali-only** agent config —
+  target VMs run the same daemon without the flag, so the feature cannot be
+  abused to land a shell on a flag-bearing target.
+
 ## Secrets handling
 
 - `llm.api_key`, PVE tokens and the admin hash live server-side

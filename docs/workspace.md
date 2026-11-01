@@ -70,6 +70,37 @@ desktop, full keyboard/mouse.
 The console auto-reconnects when the ticket drops (e.g. after a soft reset —
 the new `ready_at` remounts the view).
 
+## Terminal tabs
+
+The console header is a tab bar: **Desktop** (the noVNC view) plus any number
+of **browser terminals** — real root shells on the Kali VM rendered with
+xterm.js, no SSH client needed.
+
+- **+** opens a new shell tab (up to 8). The dot on each tab shows its state:
+  ● live · ◌ connecting/waiting for the kali agent · ⚠ closed.
+- Tabs keep their state across **page reloads and reconnects** — each tab is
+  a named `tmux` session on kali (`pentrain-web-<chan>`), so reattaching is
+  instant and your scrollback, working directory and running processes survive.
+- Hover a tab for **Move to dock**: the terminal slides into a resizable panel
+  at the bottom so the desktop and the shell are visible at the same time.
+  Multiple terminals can share the dock — it gets its own tab strip.
+
+| Key | Effect |
+|---|---|
+| `Cmd/Ctrl+C` | With a selection → copy. Without → `SIGINT` (`^C`), as usual |
+| `Ctrl+Shift+C` | Always copy the selection |
+| `Cmd/Ctrl+V`, `Ctrl+Shift+V` | Paste into the shell |
+| Paste button (top right) | Clipboard paste for browsers that block key paste |
+
+> [!NOTE]
+> Browser terminals are a **second interactive channel into Kali**, next to
+> the desktop — commands typed here flow through the same telemetry pipeline,
+> so the coach sees them like anything you type in the GUI.
+>
+> The tab only appears when the session is `ready`/`active`. On soft reset the
+> range VMs roll back — terminals reconnect automatically (the tmux sessions
+> are gone, so shells restart fresh).
+
 ## Left panel — Progress
 
 Two tabs:

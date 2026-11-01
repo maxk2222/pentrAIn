@@ -83,6 +83,19 @@ only perceived latency changes.
 - Persistent failure → check `engine.pve_*` creds; a **hard reset**
   allocates a new range/VMIDs if the VMID changed under you.
 
+### Terminal tabs stay "waiting for kali agent"
+
+- The reverse channel lives in `pentrain-telemetried` on the Kali VM — if
+  telemetry works but terminals don't, check the unit there and that
+  `/opt/pentrain-telemetried/telemetried.conf` contains `SHELL=1` (written by
+  the backend at session setup; **target VMs intentionally don't get it**).
+- The agent needs `python3-websockets` (`apt list --installed | grep
+  websockets`) — the `pentrain_kali_agent` role installs it; a stale template
+  predates the feature → rebuild the template.
+- `journalctl -u pentrain-telemetried` shows `pentrain-shell` worker errors.
+- Tabs keep reconnecting after reload — that is the design (tmux persists);
+  a permanent "⚠" dot means the session left `ready`/`active`.
+
 ### No telemetry / checkpoints dead
 
 `pentrain-telemetried.service` on the Kali VM must be running

@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookOpen, Bot, CheckSquare, FileText, NotebookPen, Play, RotateCcw,
-  RotateCw, Square, Wifi,
+  BookOpen, Bot, CheckSquare, FileText, Monitor, NotebookPen, PanelBottom,
+  PanelTop, Play, Plus, RotateCcw, RotateCw, Square, TerminalSquare,
+  Wifi, X,
 } from "lucide-react";
 import { api, wsUrl, type Session, type WsEvent } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, IconButton, Tabs } from "@/components/ui";
 import { ResizeHandle } from "@/components/resizable";
 import { ConsoleView } from "@/components/console";
+import { TerminalView, type TermState } from "@/components/terminal";
 import { ChatPanel, AutonomyToggle, SubagentsToggle } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
@@ -49,6 +51,44 @@ function savePanels(p: Panels) {
 
 const clampWidth = (px: number) => Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(px)));
 
+// ---------- browser terminal tabs ----------
+type TermTab = { chan: string; title: string; docked: boolean };
+type TermPrefs = { tabs: TermTab[]; active: string; dockH: number };
+const DOCK_H_DEFAULT = 260, DOCK_H_MIN = 140, DOCK_H_MAX = 600;
+
+function loadTerms(sessionId: number): TermPrefs {
+  const d: TermPrefs = { tabs: [], active: "desktop", dockH: DOCK_H_DEFAULT };
+  try {
+    const raw = JSON.parse(localStorage.getItem(`pentrain-terms-${sessionId}`) ?? "{}");
+    if (Array.isArray(raw.tabs)) {
+      for (const t of raw.tabs) {
+        if (typeof t?.chan === "string" && /^[a-z0-9-]{4,40}$/.test(t.chan)) {
+          d.tabs.push({
+            chan: t.chan,
+            title: typeof t.title === "string" ? t.title.slice(0, 24) : "Term",
+            docked: !!t.docked,
+          });
+        }
+      }
+    }
+    if (typeof raw.active === "string") d.active = raw.active;
+    if (typeof raw.dockH === "number")
+      d.dockH = Math.min(DOCK_H_MAX, Math.max(DOCK_H_MIN, raw.dockH));
+  } catch { /* defaults */ }
+  if (d.active !== "desktop" && !d.tabs.some((t) => t.chan === d.active && !t.docked))
+    d.active = "desktop";
+  return d;
+}
+
+function saveTerms(sessionId: number, p: TermPrefs) {
+  localStorage.setItem(`pentrain-terms-${sessionId}`, JSON.stringify(p));
+}
+
+const TERM_DOT: Record<TermState, string> = {
+  live: "text-success", waiting: "text-warning",
+  connecting: "text-muted", exited: "text-warning", closed: "text-danger",
+};
+
 function loadWidths(): PanelWidths {
   const w = { ...WIDTH_DEFAULTS };
   try {
@@ -73,6 +113,17 @@ export function SessionPage() {
   const [widths, setWidths] = useState<PanelWidths>(loadWidths);
   const [unread, setUnread] = useState(0);
   const [lazyAsk, setLazyAsk] = useState<"sheet" | "chat" | null>(null);
+  const [termPrefs, setTermPrefs] = useState<TermPrefs>(() => loadTerms(sessionId));
+  const [termStates, setTermStates] = useState<Record<string, TermState>>({});
+  const [activeDock, setActiveDock] = useState<string | null>(null);
+
+  // navigating /session/1 → /session/2 doesn't remount the page — the
+  // useState initializer would leak the other session's tabs without this
+  useEffect(() => {
+    setTermPrefs(loadTerms(sessionId));
+    setTermStates({});
+    setActiveDock(null);
+  }, [sessionId]);
   const wsRef = useRef<WebSocket | null>(null);
 
   const { data: session, isLoading } = useQuery({
@@ -225,6 +276,53 @@ export function SessionPage() {
   const state = session?.state;
   const consoleReady = state === "ready" || state === "active";
 
+  // ---------- terminal tabs ----------
+  const tabs = termPrefs.tabs;
+  const dockedTabs = tabs.filter((t) => t.docked);
+  const mainTabs = tabs.filter((t) => !t.docked);
+  const dockChan = activeDock && dockedTabs.some((t) => t.chan === activeDock)
+    ? activeDock : dockedTabs[0]?.chan ?? null;
+
+  function updateTerms(mut: (p: TermPrefs) => void) {
+    // deep-copy tabs: StrictMode double-invokes updaters — mutating shared
+    // objects would flip flags twice. Copies keep each invocation idempotent.
+    setTermPrefs((prev) => {
+      const next = { ...prev, tabs: prev.tabs.map((t) => ({ ...t })) };
+      mut(next);
+      saveTerms(sessionId, next);
+      return next;
+    });
+  }
+
+  function addTerm() {
+    const chan = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    updateTerms((p) => {
+      p.tabs.push({ chan, title: `Term ${p.tabs.length + 1}`, docked: false });
+      p.active = chan;
+    });
+  }
+
+  function closeTerm(chan: string) {
+    updateTerms((p) => {
+      p.tabs = p.tabs.filter((t) => t.chan !== chan);
+      if (p.active === chan) p.active = "desktop";
+    });
+    if (activeDock === chan) setActiveDock(null);
+    setTermStates((s) => { const n = { ...s }; delete n[chan]; return n; });
+  }
+
+  function toggleDock(chan: string) {
+    const docking = !tabs.find((t) => t.chan === chan)?.docked;
+    updateTerms((p) => {
+      const t = p.tabs.find((t) => t.chan === chan);
+      if (!t) return;
+      t.docked = docking;
+      if (docking && p.active === chan) p.active = "desktop";
+      if (!docking) p.active = chan;
+    });
+    if (docking) setActiveDock(chan);
+  }
+
   function setAutonomy(level: number) {
     api.post(`/api/sessions/${sessionId}/autonomy`, { level })
       .then(() => qc.invalidateQueries({ queryKey: ["session", sessionId] }))
@@ -334,12 +432,73 @@ export function SessionPage() {
         )}
 
         <div className="flex min-w-0 flex-1 flex-col">
+          {consoleReady && (
+            <div className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-surface px-1.5">
+              <button
+                onClick={() => updateTerms((p) => { p.active = "desktop"; })}
+                className={cn(
+                  "flex h-6 items-center gap-1.5 rounded px-2.5 text-xs transition",
+                  termPrefs.active === "desktop"
+                    ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground")}>
+                <Monitor className="h-3.5 w-3.5" /> Desktop
+              </button>
+              {mainTabs.map((t) => (
+                <span key={t.chan}
+                  className={cn(
+                    "group flex h-6 items-center gap-1 rounded pl-2 pr-0.5 text-xs transition",
+                    termPrefs.active === t.chan
+                      ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground")}>
+                  <button className="flex items-center gap-1.5"
+                    onClick={() => updateTerms((p) => { p.active = t.chan; })}>
+                    <TerminalSquare className="h-3.5 w-3.5" />
+                    <span className={TERM_DOT[termStates[t.chan] ?? "connecting"]}>●</span>
+                    {t.title}
+                  </button>
+                  <button title="Move to dock"
+                    onClick={() => toggleDock(t.chan)}
+                    className="rounded p-0.5 text-muted opacity-0 transition hover:text-foreground group-hover:opacity-100">
+                    <PanelBottom className="h-3 w-3" />
+                  </button>
+                  <button title="Close terminal"
+                    onClick={() => closeTerm(t.chan)}
+                    className="rounded p-0.5 text-muted opacity-0 transition hover:text-danger group-hover:opacity-100">
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <button title="New terminal tab" onClick={addTerm}
+                className="ml-0.5 flex h-5 w-5 items-center justify-center rounded
+                  text-muted transition hover:bg-surface-2 hover:text-foreground">
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           <div className="relative min-h-0 flex-1">
             {consoleReady && <LiveStatsOverlay sessionId={sessionId} />}
             {consoleReady ? (
-              // remount on ready_at → after a reset the stale VNC session reconnects
-              <ConsoleView key={`${sessionId}-${session?.ready_at ?? ""}`}
-                sessionId={sessionId} />
+              <>
+                {/* remount on ready_at → after a reset the stale VNC session reconnects;
+                    hidden (not unmounted) on tab switch so RFB + shells stay attached */}
+                <div className={cn("absolute inset-0",
+                  termPrefs.active !== "desktop" && "hidden")}>
+                  <ConsoleView key={`${sessionId}-${session?.ready_at ?? ""}`}
+                    sessionId={sessionId} />
+                </div>
+                {mainTabs.map((t) => (
+                  <div key={t.chan} className={cn("absolute inset-0",
+                    termPrefs.active !== t.chan && "hidden")}>
+                    {/* ready_at in key: after a reset (fresh VM) the terminal
+                        remounts like the console — ws retries alone die
+                        during the deploy gap */}
+                    <TerminalView key={`${t.chan}-${session?.ready_at ?? ""}`}
+                      sessionId={sessionId} chan={t.chan}
+                      visible={termPrefs.active === t.chan}
+                      onStatus={(s) => setTermStates((p) =>
+                        p[t.chan] === s ? p : { ...p, [t.chan]: s })} />
+                  </div>
+                ))}
+              </>
             ) : isLoading ? (
               <div className="grid h-full place-items-center text-sm text-muted">Loading…</div>
             ) : state === "deploying" || state === "queued" || state === "resetting" ? (
@@ -353,6 +512,55 @@ export function SessionPage() {
               </div>
             )}
           </div>
+
+          {dockChan && (
+            <div className="flex shrink-0 flex-col border-t border-border"
+              style={{ height: termPrefs.dockH }}>
+              <ResizeHandle side="top" getWidth={() => termPrefs.dockH}
+                onResize={(px) => updateTerms((p) => {
+                  p.dockH = Math.min(DOCK_H_MAX, Math.max(DOCK_H_MIN, Math.round(px)));
+                })}
+                onReset={() => updateTerms((p) => { p.dockH = DOCK_H_DEFAULT; })} />
+              <div className="flex h-7 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-1.5">
+                {dockedTabs.map((t) => (
+                  <span key={t.chan}
+                    className={cn(
+                      "group flex h-5 items-center gap-1 rounded pl-2 pr-0.5 text-xs transition",
+                      dockChan === t.chan
+                        ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground")}>
+                    <button className="flex items-center gap-1.5"
+                      onClick={() => setActiveDock(t.chan)}>
+                      <TerminalSquare className="h-3 w-3" />
+                      <span className={TERM_DOT[termStates[t.chan] ?? "connecting"]}>●</span>
+                      {t.title}
+                    </button>
+                    <button title="Undock"
+                      onClick={() => toggleDock(t.chan)}
+                      className="rounded p-0.5 text-muted opacity-0 transition hover:text-foreground group-hover:opacity-100">
+                      <PanelTop className="h-3 w-3" />
+                    </button>
+                    <button title="Close terminal"
+                      onClick={() => closeTerm(t.chan)}
+                      className="rounded p-0.5 text-muted opacity-0 transition hover:text-danger group-hover:opacity-100">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="min-h-0 flex-1">
+                {dockedTabs.map((t) => (
+                  <div key={t.chan} className={cn("h-full", dockChan !== t.chan && "hidden")}>
+                    <TerminalView key={`${t.chan}-${session?.ready_at ?? ""}`}
+                      sessionId={sessionId} chan={t.chan}
+                      visible={dockChan === t.chan}
+                      onStatus={(s) => setTermStates((p) =>
+                        p[t.chan] === s ? p : { ...p, [t.chan]: s })} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <NotesPanel sessionId={sessionId} open={panels.notes}
             onToggle={() => togglePanel("notes")} />
         </div>

@@ -45,7 +45,8 @@ KALI_TOOL_PROBE = [
     "gobuster", "feroxbuster", "dirb", "ffuf", "nikto", "wpscan", "sqlmap",
     "hydra", "john", "hashcat", "medusa",
     "smbclient", "enum4linux-ng", "nbtscan", "rpcclient", "ldapsearch",
-    "ftp", "nc", "ncat", "socat", "telnet",
+    "ftp", "nc", "ncat", "socat", "telnet", "tftp", "atftp",
+    "dig", "snmpwalk", "whois",
     "ssh", "sshpass", "expect", "sshuttle", "chisel", "proxychains4",
     "mysql", "mariadb", "psql", "redis-cli", "sqlite3",
     "rdesktop", "xfreerdp3", "evil-winrm",
@@ -607,7 +608,10 @@ async def _configure_telemetry(db: AsyncSession, engine, session: Session,
         if not vmid:
             continue
         conf = (f"TOKEN={session.telemetry_token}\nSESSION={session.id}\n"
-                f"HOST={host}\nAPI={api_url}\n")
+                f"HOST={host}\nAPI={api_url}\n"
+                # SHELL=1 enables the browser-terminal channel — kali only;
+                # targets share the telemetry token and must not offer shells.
+                + ("SHELL=1\n" if host == "kali" else ""))
         try:
             await engine.pve.agent_write_file(vmid, "/etc/pentrain/telemetried.conf", conf)
             await engine.pve.agent_exec_sh(

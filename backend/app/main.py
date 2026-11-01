@@ -45,6 +45,8 @@ async def lifespan(app: FastAPI):
         await sessions_svc.resume_inflight()
     except Exception as e:
         await log.awarning("inflight session resume failed", error=str(e))
+    from .services import terminal as terminal_svc
+    terminal_svc.start()
     yield
     # shutdown: close engine http clients so no connections leak
     from .services import engine as engine_svc

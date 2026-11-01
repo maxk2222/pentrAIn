@@ -59,6 +59,7 @@ Key registry: [configuration.md](configuration.md).
 | POST | `/sessions/{id}/actions/{action_id}/confirm` | `{accept: bool}` — accept/dismiss a `suggest_command` chip (L3) |
 | GET | `/sessions/{id}/console` | Mint a PVE noVNC ticket `{ticket, port, vmid, host}` |
 | GET | `/sessions/{id}/console/clipboard` | Read guest clipboard via QGA |
+| GET | `/terminal/wants/{id}` | Kali agent poll: terminal channels the UI wants (`?token=` = `telemetry_token`) → `{chans: {chan: {cols, rows}}}` |
 | GET | `/sessions/{id}/metrics` | Live per-VM cpu/mem/balloon gauges |
 | GET | `/sessions/{id}/metrics/history` | Time series for the session |
 | GET | `/sessions/{id}/live` | Live aggregate for the stats overlay |
@@ -155,6 +156,14 @@ Key registry: [configuration.md](configuration.md).
 | `/ws/coach` | Coach service | All session events + chat + telemetry — the event feed the policy gate consumes |
 | `/api/console/{id}` | Session console | Bidirectional VNC frames (proxied noVNC) |
 | `/api/console/vm/{vmid}` | Admin console | Same pipe for a standalone VM (template builder) |
+| `/api/terminal/{id}/{chan}` | Terminal tab (user) | xterm frames ↔ kali shell; `?cols=&rows=&token=` |
+| `/api/terminal/kali/{id}/{chan}` | telemetried (kali) | Agent data socket for a channel (`?token=` = `telemetry_token`) |
 
 Coach WS payload `PENTRAIN_COACH_SERVICE_TOKEN` bearer; session console WS
 authenticates via the `ticket` query param minted by `GET …/console`.
+
+Terminal frame protocol (both sockets): **binary frames** = raw PTY bytes;
+**text frames** = JSON control — user→kali `{"t":"resize","cols","rows"}`,
+kali→user `{"t":"exit","code"}` / `{"t":"status","state","msg"}`. Max 8
+channels per session; all channels close when the session leaves
+`ready`/`active`.

@@ -25,6 +25,8 @@
       - python3-pexpect
       - mariadb-client   # mysql client for db-enum quests
       - gobuster
+      - tftp-hpa         # tftp client — net-t2 dns-enum needs it
+      - snmp             # snmpwalk/snmpget — snmp-enum quests
     state: present
   when: ansible_os_family == "Debian"
   failed_when: false   # package names drift; never brick the deploy for them
@@ -89,6 +91,7 @@
     name:
       - tmux
       - sshpass
+      - python3-websockets  # telemetried browser-shell channel
     state: present
 
 - name: core pentest tooling (must exist — every quest assumes these)

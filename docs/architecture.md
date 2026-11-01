@@ -195,6 +195,35 @@ sequenceDiagram
 The admin console for the Kali template builder uses the same pipe with an
 explicit VMID (`/api/console/vm/{vmid}` + `/api/admin/console/vm/{vmid}/ticket`).
 
+## Browser terminals
+
+Terminal tabs are a **second interactive path into Kali** — the Kali VM is
+inbound-isolated, so the connection is *reversed*: the browser opens a user
+WS, which registers a channel "want"; `telemetried` polls the want list and
+dials an outbound data WS; the backend pipes the two sockets.
+
+```mermaid
+sequenceDiagram
+    participant FE as Browser (xterm)
+    participant BE as Backend terminal hub
+    participant AG as telemetried (kali)
+    FE->>BE: WS /api/terminal/{id}/{chan}?cols&rows → want registered
+    AG->>BE: GET /api/terminal/wants/{id} (poll ~2s)
+    BE-->>AG: {chan: {cols, rows}}
+    AG->>BE: WS /api/terminal/kali/{id}/{chan} → paired
+    BE-->>FE: status live — PTY bytes flow both ways
+    Note over AG: tmux new-session -A -s pentrain-web-<chan><br/>survives reconnects + page reloads
+```
+
+- Resize rides in-band as a JSON control frame (`{"t":"resize",…}` →
+  `TIOCSWINSZ`); all other text frames are status (`live`/`exit`/`error`).
+- `want` entries persist until the session leaves `ready`/`active` or the
+  want is idle >5 min, so an agent reconnect re-dials and reattaches the
+  same tmux instead of restarting the shell.
+- Shell access is gated by `SHELL=1` in the kali-only telemetried config —
+  target VMs run the same daemon but never get the flag, so no browser shell
+  lands on a flag-bearing target.
+
 ## Telemetry
 
 The Kali template ships `pentrain-telemetried`: a bash `DEBUG`-trap hook
