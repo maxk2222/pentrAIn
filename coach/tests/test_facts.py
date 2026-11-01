@@ -164,3 +164,15 @@ def test_apply_worker_report_merges():
     assert f.creds[0].valid_on == {"10.1.10.22"}
     assert f.hosts["10.1.10.22"].ports[8080] == "http"
     assert f.hosts["10.1.10.22"].names == {"app01"}
+
+
+def test_render_compact_keeps_findings():
+    f = FactsDB()
+    for i in range(12):
+        f.add_host(f"10.1.10.{10 + i}")
+        f.hosts[f"10.1.10.{10 + i}"].ports[80] = "http"
+    f.apply_worker_report("w1", {
+        "findings": ["endpoint:API_URL=http://172.18.0.4:9000"]})
+    out = f.render(400)
+    assert len(out) <= 400
+    assert "endpoint:API_URL=http://172.18.0.4:9000" in out

@@ -389,8 +389,9 @@ class FactsDB:
                 seg += ("; " if seg else "") + \
                     "rejected: " + ", ".join(rejected[:3])
             lines.append("  flags: " + (seg or "seen only"))
-        if self.findings and not compact:
-            lines.append("  noted: " + " | ".join(self.findings[-6:]))
+        if self.findings:
+            noted = self.findings[-4:] if compact else self.findings[-6:]
+            lines.append("  noted: " + " | ".join(noted))
         out = "\n".join(lines)
         if len(out) > max_chars and not compact:
             out = self.render(max_chars, compact=True)
