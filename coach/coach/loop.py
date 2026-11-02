@@ -347,6 +347,22 @@ class SessionCoach:
         # restarts via coach_actions — without this the model re-derives
         # its multi-step plan from scattered evidence after every restart
         self.state.plan = normalize_plan(self.ctx.get("plan") or [])
+        if not self.state.plan and self.state.autonomy_level >= 4:
+            # deterministic scaffold: s61/s65/s66 each ran 40-70 actions
+            # with zero update_plan calls — seed the checklist from the
+            # flag list so it renders, auto-marks on solves, and remains
+            # the model's to rewrite (rendered as "yours — update via
+            # update_plan")
+            open_flags = [str(f.get("key")) for f in self.ctx.get("flags", [])
+                          if f.get("key") and not f.get("solved")]
+            if open_flags:
+                self.state.plan = normalize_plan(
+                    [{"t": "Recon: enumerate hosts/services & entry points",
+                      "s": "doing"}]
+                    + [{"t": f"Solve flag {k}", "s": "todo"}
+                       for k in open_flags]
+                    + [{"t": "Verify: all flags submitted, wrap up",
+                        "s": "todo"}])
         # a restart doesn't make the plan stale — the staleness nudge only
         # fires when the MODEL hasn't refreshed in-session for a while
         self.state.plan_updated = time.time()
@@ -1282,7 +1298,7 @@ class SessionCoach:
         # thread — the context-block suffix was ignored for 40+ actions on
         # s65. Once per staleness window, parent turns only.
         if (window is None and self.state.autonomy_level >= 4
-                and self.state.exec_count > 15
+                and self.state.exec_count >= 3
                 and time.time() - self._plan_stale_ping > _PLAN_STALE_S):
             age = time.time() - getattr(self.state, "plan_updated", 0.0)
             if not self.state.plan or age > _PLAN_STALE_S:

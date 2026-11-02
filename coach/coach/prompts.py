@@ -159,7 +159,7 @@ _PLAN_STALE_S = 900   # an L4 plan untouched this long is probably forgotten
 def _plan_stale(st, s: dict) -> bool:
     """L4 + real work done + plan empty or >15min old → refresh worth a turn."""
     return (int(s.get("autonomy_level") or 0) >= 4
-            and st.exec_count > 15
+            and st.exec_count >= 3
             and (not st.plan
                  or time.time() - getattr(st, "plan_updated", 0.0)
                  > _PLAN_STALE_S))

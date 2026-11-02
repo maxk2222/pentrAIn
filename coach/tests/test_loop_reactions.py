@@ -1991,3 +1991,67 @@ def _mk_worker():
 
     from coach.loop import _Worker
     return _Worker(id="w1", task="t", started=_t.monotonic())
+
+
+async def test_l4_attach_seeds_plan_scaffold_from_flags():
+    """s61/s65/s66: 40-70 actions, zero update_plan calls — the checklist
+    only works if it exists. At L4 attach with no persisted plan, seed a
+    flag-keyed scaffold the model then owns/rewrites."""
+    coach, c = _l4_coach()
+    c.ctx["flags"] = [{"key": "web-flag", "solved": False},
+                      {"key": "root-flag", "solved": False},
+                      {"key": "old-flag", "solved": True}]
+    await coach.start()
+    texts = [i["t"] for i in coach.state.plan]
+    assert coach.state.plan[0]["s"] == "doing" and "Recon" in texts[0]
+    assert any("web-flag" in t for t in texts)
+    assert any("root-flag" in t for t in texts)
+    assert not any("old-flag" in t for t in texts)      # solved → excluded
+    assert any("Verify" in t for t in texts)
+    await coach.stop()
+
+
+async def test_l2_attach_does_not_seed_plan():
+    coach, c = _coach()
+    c.ctx["flags"] = [{"key": "f1", "solved": False}]
+    await coach.start()
+    assert coach.state.plan == []
+    await coach.stop()
+
+
+async def test_persisted_plan_beats_seed():
+    coach, c = _l4_coach()
+    c.ctx["flags"] = [{"key": "f1", "solved": False}]
+    c.ctx["plan"] = [{"t": "my own roadmap", "s": "doing"}]
+    await coach.start()
+    assert [i["t"] for i in coach.state.plan] == ["my own roadmap"]
+    await coach.stop()
+
+
+async def test_seeded_plan_auto_marks_on_flag_solve():
+    coach, c = _l4_coach()
+    c.ctx["flags"] = [{"key": "web-flag", "solved": False}]
+    await coach.start()
+    async def sub(sid, value):
+        return {"correct": True, "flag_key": "web-flag", "all_solved": False}
+    c.submit_flag = sub
+    coach.facts.flags["pentrAIn{x}"] = facts_mod.FlagFact(seen=1)
+    _, result = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{x}"}, proactive=True)
+    assert any("web-flag" in i["t"] and i["s"] == "done"
+               for i in coach.state.plan)
+    await coach.stop()
+
+
+async def test_missing_plan_note_fires_early():
+    """exec gate dropped to >=3 — the no-roadmap note must not wait for 15
+    execs while the run drifts planless."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.state.exec_count = 3
+    _, result = await coach._dispatch({"type": "none", "reason": "x"})
+    assert "no roadmap" in result
+    coach.state.exec_count = 2
+    coach._plan_stale_ping = 0.0
+    _, result = await coach._dispatch({"type": "none", "reason": "x"})
+    assert "no roadmap" not in result

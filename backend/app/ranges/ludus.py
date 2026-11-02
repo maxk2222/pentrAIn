@@ -233,6 +233,36 @@ class LudusProvider:
                 await self._req("POST", "/testing/allow", json={"allowed": allow_ips})
         except LudusError as e:
             await log.awarning("testing-mode endpoint unavailable", error=str(e))
+        if enable and allow_ips:
+            await self._router_allow(allow_ips)
+
+    async def _router_allow(self, allow_ips: list[str]) -> None:
+        """Install allow-list ACCEPTs directly on the range router via QGA.
+
+        POST /testing/allow can be a silent no-op (observed: LUDUS_TESTING
+        stays empty → every egress connection dies at FORWARD policy DROP,
+        telemetry and terminal channels included). LUDUS_USER_RULES persists
+        the ACCEPTs across testing toggles; replies ride the conntrack
+        ESTABLISHED accept in LUDUS_DEFAULTS.
+        """
+        try:
+            data = await self._req("GET", "/range")
+        except Exception:
+            return
+        router = next((v for v in (data.get("VMs") or data.get("vms") or [])
+                       if v.get("isRouter")), None) if isinstance(data, dict) else None
+        vmid = (router or {}).get("proxmoxID") or (router or {}).get("vmid")
+        if not vmid:
+            return
+        for cidr in allow_ips:
+            rule = f"-d {cidr} -j ACCEPT"
+            cmd = (f"iptables -C LUDUS_USER_RULES {rule} 2>/dev/null || "
+                   f"iptables -I LUDUS_USER_RULES 1 {rule}")
+            try:
+                await self.pve.agent_exec_sh(int(vmid), cmd, timeout_s=15)
+            except Exception as e:
+                await log.awarning("router allow rule install failed",
+                                   vmid=vmid, cidr=cidr, error=str(e))
 
     async def ensure_role(self, role_name: str, *, url: str | None = None, directory: str | None = None) -> None:
         try:

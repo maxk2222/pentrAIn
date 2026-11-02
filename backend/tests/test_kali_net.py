@@ -347,3 +347,57 @@ def test_guest_scripts_pure_ascii():
                    "192.0.2.10").encode("ascii")
     _guest_bringup("bc:24:11:22:33:44", [], None).encode("ascii")
     _guest_release("bc:24:11:22:33:44", "192.0.2.10").encode("ascii")
+
+
+async def test_testing_mode_installs_router_allow_via_qga(monkeypatch):
+    # POST /testing/allow is a silent no-op on ludus 2 (LUDUS_TESTING stays
+    # empty) — testing_mode must also push the ACCEPTs onto the router's
+    # LUDUS_USER_RULES chain through the qemu agent, idempotently.
+    from app.ranges.ludus import LudusProvider
+
+    pve = _FakePve()
+    prov = LudusProvider("https://ludus:8080", "k", pve)
+    calls: list[tuple[str, str]] = []
+
+    async def fake_req(method, path, **kw):
+        calls.append((method, path))
+        if path == "/range":
+            return {"VMs": [{"proxmoxID": 102, "isRouter": True},
+                            {"proxmoxID": 103}]}
+        return {}
+
+    monkeypatch.setattr(prov, "_req", fake_req)
+    await prov.testing_mode(True, allow_ips=["192.0.2.10/32", "10.9.9.9/32"])
+    await prov._client.aclose()
+
+    assert ("POST", "/testing/allow") in calls
+    assert len(pve.sh_calls) == 2
+    for cidr, cmd in zip(["192.0.2.10/32", "10.9.9.9/32"], pve.sh_calls):
+        assert f"iptables -C LUDUS_USER_RULES -d {cidr} -j ACCEPT" in cmd
+        assert f"iptables -I LUDUS_USER_RULES 1 -d {cidr} -j ACCEPT" in cmd
+
+    # idempotent second run still issues the -C||-I form (no dupes live)
+    pve.sh_calls.clear()
+    await prov.testing_mode(True, allow_ips=["192.0.2.10/32"])
+    assert len(pve.sh_calls) == 1
+
+
+async def test_testing_mode_router_allow_survives_missing_router(monkeypatch):
+    from app.ranges.ludus import LudusProvider
+
+    pve = _FakePve()
+    prov = LudusProvider("https://ludus:8080", "k", pve)
+
+    async def fake_req(method, path, **kw):
+        if path == "/range":
+            return {"VMs": [{"proxmoxID": 103}]}
+        return {}
+
+    monkeypatch.setattr(prov, "_req", fake_req)
+    await prov.testing_mode(True, allow_ips=["192.0.2.10/32"])
+    await prov._client.aclose()
+    assert pve.sh_calls == []
+
+    # disable never touches the router
+    await prov.testing_mode(False)
+    assert pve.sh_calls == []
