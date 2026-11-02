@@ -584,11 +584,22 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     # into the process's stdin — programs that read keystrokes (nmap
     # interactive keys, less, top, ssh, vi) EAT the marker line and
     # completion is never detected.
-    n_cmd_lines = command.count("\n") + 1
+    if "\n" in command or len(command) > 180:
+        # multiline/long commands go via guest-file-write + `bash file` —
+        # embedding them in the send-keys guest-exec ARG is exactly what
+        # wedges the virtio channel on this host (see agent_file_write's
+        # docstring; two live qga deaths at heredoc-time in s49/s50)
+        script = f"/tmp/ptn-{marker}.sh"
+        await engine.pve.agent_file_write(
+            kali_vmid, script, command + "\n")
+        typed_line = f"bash {script}"
+    else:
+        typed_line = command
+    n_cmd_lines = typed_line.count("\n") + 1
     await engine.pve.agent_exec_sh(
         kali_vmid,
         f"tmux send-keys -t {target} {shlex.quote(f'echo {marker}A')} Enter; "
-        f"tmux send-keys -t {target} {shlex.quote(command)} Enter",
+        f"tmux send-keys -t {target} {shlex.quote(typed_line)} Enter",
         timeout_s=10)
 
     # -J joins wrapped lines so each typed line maps to exactly one pane line;
@@ -601,7 +612,7 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     begin = re.compile(rf"{re.escape(marker)}A\s*$")
     end = re.compile(rf"{re.escape(marker)}B:(\d+)\s*$")
     cont_re = re.compile(r"(heredoc|dquote|quote|pipe)?>\s*$")
-    cmd_tail = command.split("\n")[-1][-60:].rstrip()
+    cmd_tail = typed_line.split("\n")[-1][-60:].rstrip()
     deadline = time.monotonic() + timeout_s
     last_tail = ""
     b_sent = False
