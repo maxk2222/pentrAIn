@@ -1437,7 +1437,7 @@ class _FlakyWorkerLlm(FakeLlm):
 async def test_worker_transient_llm_error_retries_once():
     """A single bare exception (ReadTimeout-style) must not kill the
     worker — one retry, then it continues normally."""
-    coach, c = _l4_coach()
+    coach, _c = _l4_coach()
     await coach.start()
     coach.llm = _FlakyWorkerLlm(fails=1, exc=TimeoutError())
     await coach._dispatch({"type": "spawn_agent", "task": "enum"})
