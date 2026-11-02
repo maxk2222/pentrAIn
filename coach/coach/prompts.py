@@ -226,7 +226,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
           if ctx.get("session_tools") else []),
         f"TRAINEE_LEVEL(track): {level}",
         f"TRIGGER: {reason} (urgency={urgency}, escalation_stage={min(2, stage)})",
-        f"FLAGS: {[(f['key'], f.get('name', ''), f['solved']) for f in ctx['flags']]}",
+        "FLAGS: " + str([(f["key"], f.get("name", ""), f.get("kind"),
+                          f["solved"]) for f in ctx["flags"]]) +
+        " — kind=file/command → check_flag verifies deliverables; only "
+        "submit_flag a literal value seen in output",
         (f"TARGETS: {q.get('targets') or []} — use these exact IPs/hostnames; "
          f"missing ips resolve on kali via getent hosts <name>; never invent "
          f"addresses"),

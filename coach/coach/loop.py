@@ -363,21 +363,7 @@ class SessionCoach:
                        for k in open_flags]
                     + [{"t": "Verify: all flags submitted, wrap up",
                         "s": "todo"}])
-                # surface it like a model-authored plan: checklist card in
-                # the feed + persisted action so a restart replays it
-                items = self.state.plan
-                open_n = sum(1 for i in items if i["s"] != "done")
-                meta = {**self._msg_meta(None), "plan": items, "open": open_n,
-                        "seed": True}
-                asyncio.create_task(self.client.send_chat(
-                    self.sid,
-                    f"**Plan (seeded):** {open_n} open / {len(items)} steps"
-                    " — owns + rewrites via update_plan",
-                    kind="action_report", meta=meta))
-                asyncio.create_task(self.client.log_action(
-                    self.sid, "update_plan",
-                    {"items": items, "agent": "main", "seed": True},
-                    {"open": open_n}))
+                self._plan_push_card("seeded")
         # a restart doesn't make the plan stale — the staleness nudge only
         # fires when the MODEL hasn't refreshed in-session for a while
         self.state.plan_updated = time.time()
@@ -1333,6 +1319,26 @@ class SessionCoach:
                                       "via", "for", "from", "with", "into",
                                       "all", "find", "loot"})
 
+    def _plan_push_card(self, tag: str) -> None:
+        """Re-render the checklist card after system-side plan mutations
+        (seed, flag auto-marks). Without this the feed froze on the last
+        model save — s69 solved both flags while the card still showed
+        them todo."""
+        if not self.state.plan:
+            return
+        items = [dict(i) for i in self.state.plan]
+        open_n = sum(1 for i in items if i["s"] != "done")
+        meta = {**self._msg_meta(None), "plan": items, "open": open_n,
+                "auto": tag}
+        asyncio.create_task(self.client.send_chat(
+            self.sid,
+            f"**Plan ({tag}):** {open_n} open / {len(items)} steps",
+            kind="action_report", meta=meta))
+        asyncio.create_task(self.client.log_action(
+            self.sid, "update_plan",
+            {"items": items, "agent": "main", "auto": tag},
+            {"open": open_n}))
+
     def _plan_mark_solved(self, flag_key: str) -> int:
         """A solved flag retires its roadmap steps — matching on the key's
         distinctive tokens ('ftp-flag' → 'ftp') keeps the checklist a live
@@ -1812,8 +1818,10 @@ class SessionCoach:
                     marked = self._plan_mark_solved(res.get("flag_key") or "")
                     if marked:
                         result += f"; plan: {marked} step(s) auto-marked done"
+                        self._plan_push_card("auto-mark")
                 if res.get("all_solved"):
-                    self._plan_close_all()
+                    if self._plan_close_all():
+                        self._plan_push_card("all-solved")
                     result += "; all_solved — plan closed"
                     text += " — all flags solved, quest complete"
                 await self.client.send_chat(self.sid, text, kind="action_report",
@@ -1844,8 +1852,10 @@ class SessionCoach:
                     marked = self._plan_mark_solved(key)
                     if marked:
                         result += f"; plan: {marked} step(s) auto-marked done"
+                        self._plan_push_card("auto-mark")
                 if res.get("all_solved"):
-                    self._plan_close_all()
+                    if self._plan_close_all():
+                        self._plan_push_card("all-solved")
                     result += "; all_solved — plan closed"
                     text += " — all flags solved, quest complete"
                 await self.client.send_chat(self.sid, text, kind="action_report",

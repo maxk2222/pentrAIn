@@ -246,6 +246,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         },
         "session_tools": session.kali_tools or "",
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
+                   "kind": f.kind,
                    "solved": f.key in solved} for f in flags],
         "checkpoints_hit": sorted(checkpoints),
         "telemetry_tail": [{"kind": t.kind, "payload": t.payload,

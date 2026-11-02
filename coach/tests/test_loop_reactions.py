@@ -2011,8 +2011,8 @@ async def test_l4_attach_seeds_plan_scaffold_from_flags():
     await asyncio.sleep(0)   # let the seed card/persist tasks run
     cards = [m for m in c.chats if "Plan (seeded)" in m["content"]]
     assert cards and cards[0]["meta"]["plan"][0]["s"] == "doing"
-    assert any(a["tool"] == "update_plan" and a["args"].get("seed")
-               for a in c.logged)
+    assert any(a["tool"] == "update_plan" and
+               a["args"].get("auto") == "seeded" for a in c.logged)
     await coach.stop()
 
 
@@ -2045,6 +2045,9 @@ async def test_seeded_plan_auto_marks_on_flag_solve():
         {"type": "submit_flag", "value": "pentrAIn{x}"}, proactive=True)
     assert any("web-flag" in i["t"] and i["s"] == "done"
                for i in coach.state.plan)
+    await asyncio.sleep(0)   # card push is fire-and-forget
+    cards = [m for m in c.chats if m["meta"] and m["meta"].get("auto") == "auto-mark"]
+    assert cards and cards[0]["meta"]["plan"]
     await coach.stop()
 
 

@@ -16,7 +16,7 @@ everything into one timeline and recover the three flags.
   with log access via the adm group).
 - Deliverable: write your findings to `/home/analyst/report.txt` on **db02**
   — abused account and where the loot was staged.
-- Three flags: webshell, loot, account.
+- Four flags: webshell, loot, account — plus the report.
 - The deliverable is the *timeline*: pcap ↔ access.log ↔ auth.log.
 
 ## Environment

@@ -13,7 +13,7 @@ doesn't show.
 
 ## Rules of engagement
 
-- Three flags: webshell, exfil, persistence.
+- Four flags: webshell, exfil, persistence — plus the report.
 - You have IR access to web01: `ssh analyst@<web01>` (pw `analysis`,
   read-only — log access via the adm group).
 - Deliverable: write your findings to `/home/analyst/report.txt` — attacker IP, webshell name, and the second implant.

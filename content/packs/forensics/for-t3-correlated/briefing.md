@@ -6,7 +6,7 @@
 
 A full intrusion across three hosts: entry on `edge01`, lateral movement to
 `app01`, data staging on `db01`. Each host holds one stage of the attacker's
-camp — find all three flags and reconstruct the kill chain end to end.
+camp — find all four flags and reconstruct the kill chain end to end.
 
 ## Objectives
 
