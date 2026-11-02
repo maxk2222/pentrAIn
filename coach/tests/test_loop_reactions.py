@@ -1404,6 +1404,69 @@ async def test_worker_activity_and_report_are_agent_scoped():
     await coach.stop()
 
 
+class _FlakyWorkerLlm(FakeLlm):
+    """Worker LLM that raises bare exceptions (like httpx.ReadTimeout, whose
+    str() is empty) — first N calls fail, then the normal two-beat script."""
+
+    def __init__(self, fails: int, exc: Exception):
+        super().__init__()
+        self.fails = fails
+        self.exc = exc
+        self.worker_calls = 0
+
+    async def chat(self, messages, **kw):
+        if "worker agent" in (messages[0].get("content") or ""):
+            self.worker_calls += 1
+            if self.worker_calls <= self.fails:
+                raise self.exc
+            if self.worker_calls == self.fails + 1:
+                return {"content": "",
+                        "actions": [{"type": "exec_in_kali",
+                                     "command": "id", "_call_id": "c1"}],
+                        "tool_calls": [{"id": "c1", "type": "function",
+                                        "function": {"name": "exec_in_kali",
+                                                     "arguments": "{}"}}],
+                        "raw": {"usage": {"total_tokens": 1}}}
+            return {"content": "REPORT: recovered after transient llm error",
+                    "actions": [{"type": "none"}],
+                    "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+        return {"content": "", "actions": [{"type": "none"}],
+                "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+
+
+async def test_worker_transient_llm_error_retries_once():
+    """A single bare exception (ReadTimeout-style) must not kill the
+    worker — one retry, then it continues normally."""
+    coach, c = _l4_coach()
+    await coach.start()
+    coach.llm = _FlakyWorkerLlm(fails=1, exc=TimeoutError())
+    await coach._dispatch({"type": "spawn_agent", "task": "enum"})
+    await asyncio.sleep(0.4)
+    assert coach._workers["w1"].status == "done"
+    assert "recovered" in coach._workers["w1"].report
+    await coach.stop()
+
+
+async def test_worker_crash_report_names_exception_type():
+    """Empty-str exceptions (httpx timeouts) must still produce a useful
+    report: exception type + last output, never 'worker crashed: '."""
+    coach, c = _l4_coach()
+    await coach.start()
+    coach.llm = _FlakyWorkerLlm(fails=99, exc=TimeoutError())
+    await coach._dispatch({"type": "spawn_agent", "task": "enum"})
+    await asyncio.sleep(0.4)
+    w = coach._workers["w1"]
+    assert w.status == "failed"
+    assert "TimeoutError" in w.report
+    assert w.report != "worker crashed: "
+    # the failure report still landed in the worker's own feed
+    reports = [m for m in c.chats
+               if (m.get("meta") or {}).get("agent") == "w1"
+               and "crashed" in m["content"]]
+    assert reports
+    await coach.stop()
+
+
 async def test_spawn_denied_when_subagents_off():
     c = FakeClient()
     c.ctx["session"]["autonomy_level"] = 4

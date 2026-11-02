@@ -2073,9 +2073,26 @@ class SessionCoach:
         t0 = time.monotonic()
         last_out = ""
         try:
+            llm_fails = 0
             while (w.turns < turn_cap
                    and time.monotonic() - t0 < time_cap):
-                resp = await self.llm.chat(msgs, tools=worker_tools())
+                try:
+                    resp = await self.llm.chat(msgs, tools=worker_tools())
+                except Exception as e:
+                    # transient endpoint hiccup (ReadTimeout str() is empty —
+                    # log the type) — one retry, then the worker legitimately
+                    # fails into the outer handler with full diagnostics
+                    llm_fails += 1
+                    await log.awarning("worker llm call failed",
+                                       session=self.sid, worker=w.id,
+                                       attempt=llm_fails,
+                                       error_type=type(e).__name__,
+                                       error=str(e) or repr(e))
+                    if llm_fails >= 2:
+                        raise
+                    await asyncio.sleep(0.05)   # yield; the failed call
+                    continue                    # usually already burned time
+                llm_fails = 0
                 w.turns += 1
                 # stash this turn's reasoning — the next message the worker
                 # posts (exec report, final report) carries it as
@@ -2144,10 +2161,17 @@ class SessionCoach:
                 await self._finish_worker(w)
             raise
         except Exception as e:
+            # bare exceptions (httpx.ReadTimeout, asyncio.TimeoutError) have
+            # an empty str() — type+repr+traceback are the only usable signal
+            kind = type(e).__name__
+            detail = str(e) or repr(e)
             w.status = "failed"
-            w.report = f"worker crashed: {e}"
+            w.report = (f"worker crashed: {kind}: {detail}"
+                        + (f"\nlast output: {last_out[-600:]}"
+                           if last_out else ""))
             await log.awarning("worker failed", session=self.sid,
-                               worker=w.id, error=str(e))
+                               worker=w.id, error_type=kind,
+                               error=detail[:400], exc_info=True)
             with contextlib.suppress(Exception):
                 await self._finish_worker(w)
 
