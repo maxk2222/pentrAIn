@@ -363,6 +363,7 @@ async def test_settings_patch_nonclient_keys_skip_engine_rebuild(db):
     testing_allow, template) must NOT rebuild — a rebuild retires the
     shared provider and in-flight deploys die on 'client closed'."""
     from unittest.mock import AsyncMock, patch
+
     from app.api.routes_admin import patch_settings
     from app.schemas import SettingsPatch
     with patch("app.api.routes_admin.rebuild",
@@ -395,6 +396,7 @@ def test_coach_action_log_status_contract():
     status=ok is only for coach-internal bookkeeping tools."""
     import pytest
     from pydantic import ValidationError
+
     from app.schemas import CoachActionLogIn
     # internal tools may log ok (worker lifecycle, plan, notes)
     for tool in ("spawn_agent", "collect_agent", "kill_agent",

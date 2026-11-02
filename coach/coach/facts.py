@@ -57,13 +57,13 @@ _HYDRA_URI = re.compile(r"(?:ssh|ftp|smb|rdp|mysql|vnc|telnet)://([\w.\-]+)")
 # means the credential in its line actually worked (valid_on)
 _AUTH_FAIL_OUT = re.compile(
     r"Access denied|Authentication failed|Permission denied \(publickey|"
-    r"Logon failure|Login failed|incorrect password", re.I)
+    r"Logon failure|Login failed|incorrect password", re.IGNORECASE)
 # `sort | uniq -c | sort -rn` output lines — the leading "N <value>" pair is
 # top-talker evidence (top attacker IP, hottest user) that MUST survive
 # context loss: s54 computed `5 203.0.113.44` correctly, then lost it and
 # re-derived the wrong awk field for an hour
 _TOPN = re.compile(
-    r"^\s*(\d{1,9})\s+((?:\d{1,3}\.){3}\d{1,3}|[\w@:.-]{3,64})\s*$", re.M)
+    r"^\s*(\d{1,9})\s+((?:\d{1,3}\.){3}\d{1,3}|[\w@:.-]{3,64})\s*$", re.MULTILINE)
 
 
 def _cmd_creds(cmd: str) -> list[tuple[str, str, str | None]]:

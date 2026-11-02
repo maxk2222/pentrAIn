@@ -186,20 +186,20 @@ async def test_denial_match_blocks_retry():
         "sshpass -p 'x' ssh deploy@shop01 'sudo docker ps'"})
     assert "denied" in res and not c.execs
     # unreachable target via the same vantage → blocked
-    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "sshpass -p 'x' ssh deploy@shop01 'curl http://172.20.1.2:8080/'"})
     assert "denied" in res and not c.execs
     # DIFFERENT user is a new path → allowed
-    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "sshpass -p 'x' ssh deploy@shop01 'mysql -h 172.20.1.3 -u shop_ro -pY'"})
     assert not res.startswith("denied") and c.execs
     # unreachable from a DIFFERENT vantage stays allowed (may route)
-    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "curl -s --max-time 10 http://172.20.1.2:8080/"})
     assert not res.startswith("denied: prior")
     # -auth denials must NOT brick the working pivot
     coach.facts.denials.append("denied:ssh-auth@shop01")
-    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "sshpass -p 'GOOD' ssh deploy@shop01 'id'"})
     assert not res.startswith("denied: prior")
 
@@ -254,7 +254,7 @@ async def test_wait_denied_below_l4():
 
 
 async def test_wait_aborts_on_pending_chat():
-    coach, c = _coach(4)
+    coach, _c = _coach(4)
 
     async def _flag_soon():
         await asyncio.sleep(0.3)
@@ -346,7 +346,7 @@ async def test_update_plan_stores_normalizes_and_reports():
 
 
 async def test_update_plan_all_levels_and_atomic_replace():
-    coach, c = _coach(1)          # bookkeeping — allowed everywhere
+    coach, _c = _coach(1)          # bookkeeping — allowed everywhere
     await coach._dispatch({"type": "update_plan",
                            "items": [{"t": "nudge next", "s": "doing"}]})
     assert len(coach.state.plan) == 1
@@ -362,7 +362,7 @@ async def test_update_plan_worker_owns_its_plan():
     coach.state.plan = [{"t": "parent phase", "s": "doing"}]
     coach._workers["w1"] = _Worker(id="w1", task="enum",
                                    started=time.monotonic())
-    spoke, res = await coach._dispatch(
+    spoke, _res = await coach._dispatch(
         {"type": "update_plan",
          "items": [{"t": "w step", "s": "doing"}]}, window="w1")
     assert spoke

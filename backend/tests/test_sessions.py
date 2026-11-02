@@ -16,7 +16,7 @@ from app.services import settings as settings_svc
 async def _abort_done(db, session_id: int) -> Session:
     """abort() is async now (range destroy runs as a background task) —
     return only once the session has actually reached 'aborted'."""
-    s = await sessions_svc.abort(db, session_id)
+    await sessions_svc.abort(db, session_id)
     return await _wait_state(session_id, "aborted")
 
 
@@ -496,7 +496,7 @@ async def test_watch_range_fails_fast_on_absent(db_with_packs, monkeypatch):
     db.add(s)
     await db.commit()
 
-    from app.ranges.base import RangeStatus, RangeState
+    from app.ranges.base import RangeState, RangeStatus
 
     async def gone(range_id=None):
         return RangeStatus(state=RangeState.ABSENT)
@@ -511,7 +511,7 @@ async def test_deploy_waits_for_inflight_abort(db_with_packs, monkeypatch):
     """A queued deploy must not push config while another session's teardown
     is still running — the shared default range corrupts mid-destroy."""
     db = db_with_packs
-    engine, p = await _engine_and_range(db, "running")
+    _engine, _p = await _engine_and_range(db, "running")
     old = Session(quest_id="linux-t1-first-foothold", state="aborting", range_id="MO")
     db.add(old)
     s = Session(quest_id="linux-t1-first-foothold", state="queued")
@@ -815,8 +815,8 @@ async def test_session_context_returns_coach_outputs(db_with_packs):
 async def test_session_context_returns_flag_submits_and_worker_reports(db_with_packs):
     """flag_submits + worker_reports — the resync seeds that keep submitted
     flags and finished worker findings alive across coach restarts."""
+    from app.models.domain import CoachMessage, FlagSubmission
     from app.services import coach_bridge
-    from app.models.domain import FlagSubmission, CoachMessage
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     s = await _wait_state(s.id, "ready")
@@ -843,8 +843,8 @@ async def test_session_context_returns_flag_submits_and_worker_reports(db_with_p
 async def test_session_context_returns_plan_and_coach_notes(db_with_packs):
     """plan + coach_notes — the resync seeds that keep the agent's own
     roadmap and private notes alive across coach restarts."""
-    from app.services import coach_bridge
     from app.models.domain import CoachAction
+    from app.services import coach_bridge
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     s = await _wait_state(s.id, "ready")
@@ -877,8 +877,8 @@ async def test_session_context_returns_worker_orphans(db_with_packs):
     """worker_orphans — spawned workers that neither finished (report) nor
     were killed resurface so the parent knows their intent died with a
     coach restart (their command outputs already reseed via coach_outputs)."""
-    from app.services import coach_bridge
     from app.models.domain import CoachAction, CoachMessage
+    from app.services import coach_bridge
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
     s = await _wait_state(s.id, "ready")

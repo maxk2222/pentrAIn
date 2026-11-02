@@ -182,8 +182,8 @@ def plan_render(plan: list[dict] | None, cap: int = 400,
     if not items:
         return ""
     suffix = " — stale: refresh via update_plan" if stale else ""
-    lines = [f"{title} (yours — update via update_plan as phases change)"
-             f"{suffix}:"]
+    lines = [(f"{title} (yours — update via update_plan as phases change)"
+             f"{suffix}:")]
     for i in items:
         mark = {"done": "x", "doing": ">"}.get(i.get("s"), " ")
         lines.append(f" [{mark}] {i['t'][:110]}")

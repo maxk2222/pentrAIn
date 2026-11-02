@@ -311,6 +311,7 @@ def test_compile_topology_no_platform_rule():
     # firewall rule can't express a literal public IP (renders as
     # "10.1.public.10" and kills the deploy's iptables task)
     from types import SimpleNamespace
+
     from app.services.sessions import compile_topology
     cfg = compile_topology(SimpleNamespace(topology={}))
     assert "network" not in cfg

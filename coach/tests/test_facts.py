@@ -306,7 +306,7 @@ def test_valid_on_marks_working_credential():
 def test_read_target_ignores_url_paths():
     """curl|head must not count http://host:port/… as a file read —
     live s46 false-positive blocked API curls as 'read /172.20.1.2'."""
-    from coach.facts import read_target, FactsDB
+    from coach.facts import FactsDB, read_target
     assert read_target(
         "curl -s http://172.20.1.2:8080/ 2>&1 | head -50") is None
     assert read_target(

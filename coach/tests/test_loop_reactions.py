@@ -902,7 +902,7 @@ async def test_report_flag_visible_in_context():
 
 
 async def test_update_plan_sets_plan_updated():
-    coach, c = _l4_coach()
+    coach, _c = _l4_coach()
     assert coach.state.plan_updated == 0.0
     await coach._dispatch({"type": "update_plan",
                            "items": [{"t": "next", "s": "doing"}]})
@@ -985,7 +985,7 @@ async def test_rewrite_unlocked_by_run_or_failed_check():
     """s54 live: report.sh ran clean but its output was wrong — the guard
     must allow write->run->inspect->rewrite. Only a version never
     exercised since its last write stays denied."""
-    coach, c = _coach()
+    coach, _c = _coach()
     coach.state.autonomy_level = 4
     w = "cat > /root/report.sh << 'EOF'\nx\nEOF"
     for _ in range(2):
@@ -1731,7 +1731,7 @@ async def test_reseed_fills_out_sigs():
     await coach.start()
     # sig for the replayed output is already counted once → the next
     # identical exec reports NOTE: identical output (n>=2)
-    _spoke, res = await coach._dispatch(
+    _spoke, _res = await coach._dispatch(
         {"type": "exec_in_kali", "command": "cat /tmp/x"})
     # FakeClient returns 'ok' output — different sig, so run once more
     # checking the seeded sig directly instead:
@@ -1828,7 +1828,7 @@ async def test_worker_prompt_carries_operator_plan():
 async def test_coach_enabled_event_pauses_and_resumes():
     """The /sessions/{id}/coach broadcast must idle the loop live —
     resync-only would let a 'paused' agent finish its current plan."""
-    coach, c = _l4_coach()
+    coach, _c = _l4_coach()
     await coach.start()
     assert coach.state.coach_enabled
     coach._workers["w1"] = _mk_worker()          # pause kills workers
@@ -1850,6 +1850,7 @@ async def test_coach_enabled_event_pauses_and_resumes():
 
 
 def _mk_worker():
-    from coach.loop import _Worker
     import time as _t
+
+    from coach.loop import _Worker
     return _Worker(id="w1", task="t", started=_t.monotonic())

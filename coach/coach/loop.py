@@ -26,7 +26,7 @@ from . import percept
 from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
-from .facts import FLAG_RE, WRITE_RE, FactsDB, _USER_AT_HOST
+from .facts import _USER_AT_HOST, FLAG_RE, WRITE_RE, FactsDB
 
 # settled-denial forms rendered by percept: denied:{svc}-{user}@{host},
 # denied:{svc}-auth@{host}, denied:sudo|docker@{host}, unreachable:{ip}@{v}

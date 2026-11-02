@@ -77,25 +77,25 @@ _ENV_URL = re.compile(
 # permission/service dead ends — recorded as facts so a restart (or a long
 # turn chain) doesn't send the model down paths that already failed.
 # Deliberately narrow: generic "Permission denied" matches find-output noise.
-_SUDOERS = re.compile(r"is not in the sudoers", re.I)
+_SUDOERS = re.compile(r"is not in the sudoers", re.IGNORECASE)
 _DOCKER_DENIED = re.compile(
     r"permission denied[^.]*docker|Cannot connect to the Docker daemon",
-    re.I)
+    re.IGNORECASE)
 _ACCESS_DENIED_USER = re.compile(
-    r"Access denied for user\s+'?([\w.\-]+)'?", re.I)
+    r"Access denied for user\s+'?([\w.\-]+)'?", re.IGNORECASE)
 _AUTH_FAIL = re.compile(
     r"Authentication failed|Permission denied \(publickey|"
-    r"Logon failure|Login failed", re.I)
+    r"Logon failure|Login failed", re.IGNORECASE)
 # retryable friction, not a dead end — lands as a hint, never `denied:`.
 # s46 spent 4 execs on `sudo` over ssh before finding `sudo -S`.
 _TTY_REQ = re.compile(
-    r"a terminal is required|sudo: no tty|sudo: unable to allocate pty", re.I)
+    r"a terminal is required|sudo: no tty|sudo: unable to allocate pty", re.IGNORECASE)
 # a host that TIMES OUT / has no route is unreachable from this vantage —
 # distinct from auth-denied (reachable, wrong cred). Without this fact the
 # model re-curls docker-internal IPs directly after every restart (s46: 4x).
 _UNREACHABLE = re.compile(
     r"Connection timed out|No route to host|connect: Network is unreachable|"
-    r"Operation timed out|Failed to connect .* timed out", re.I)
+    r"Operation timed out|Failed to connect .* timed out", re.IGNORECASE)
 # curl's own exit-code vocabulary when stderr is empty (28=timeout, 7=refused
 # is NOT unreachable — refused means the host answered)
 _CURL_TIMEOUT_EXIT = 28
@@ -109,14 +109,14 @@ _UID0 = re.compile(r"uid=0\b")
 _ID_USER_ARG = re.compile(r"\bid\s+[\w.\-]+\s*['\"]?$")
 # GRANT … FILE ON db.* TO 'user'@'%' → mysql-file capability bound to the
 # cred — two patterns: a lazy optional tail lets the engine skip the user
-_GRANT_FILE = re.compile(r"GRANT\b[^\n]*?\bFILE\b", re.I)
+_GRANT_FILE = re.compile(r"GRANT\b[^\n]*?\bFILE\b", re.IGNORECASE)
 _GRANT_FILE_TO = re.compile(
-    r"GRANT\b[^\n]*?\bFILE\b[^\n]*?\bTO\s+'?([\w.\-]+)'?", re.I)
+    r"GRANT\b[^\n]*?\bFILE\b[^\n]*?\bTO\s+'?([\w.\-]+)'?", re.IGNORECASE)
 # crontab line `*/2 * * * * root /path` — emitted as a PROMOTION CANDIDATE:
 # facts only grants the cap once the file carries a proven write (w:)
 _CRON_ROOT = re.compile(
     r"^\s*[\d*/,\-]+\s+[\d*/,\-]+\s+[\d*/,\-]+\s+[\d*/,\-]+\s+[\d*/,\-]+"
-    r"\s+root\s+(/\S+)", re.M)
+    r"\s+root\s+(/\S+)", re.MULTILINE)
 
 
 def _p_caps(cmd: str, out: str, d: dict) -> None:
@@ -240,9 +240,9 @@ def _p_generic(out: str, d: dict) -> None:
 
 
 _HIDDEN_TAG = re.compile(
-    r"<input\b[^>]*type=['\"]hidden['\"][^>]*>", re.I)
-_ATTR_NAME = re.compile(r"name=['\"]([\w.\[\]-]+)['\"]", re.I)
-_ATTR_VALUE = re.compile(r"value=['\"]([^'\"]*)['\"]", re.I)
+    r"<input\b[^>]*type=['\"]hidden['\"][^>]*>", re.IGNORECASE)
+_ATTR_NAME = re.compile(r"name=['\"]([\w.\[\]-]+)['\"]", re.IGNORECASE)
+_ATTR_VALUE = re.compile(r"value=['\"]([^'\"]*)['\"]", re.IGNORECASE)
 
 _PARSERS = {
     "nmap": _p_nmap,
@@ -328,8 +328,8 @@ _MAX_REPLY = 1700
 # body is a silent 302-back-to-form — curl exits 0 so the model reads it as
 # "login done" and burns turns exploiting an unauthenticated session (the
 # session-39 DVWA loop). Annotate the one deterministic symptom.
-_LOGIN_URL = re.compile(r"(?:/|^)(?:login|signin|auth)[\w./-]*", re.I)
-_POST = re.compile(r"(?:\s-d\s|--data\b|POST)", re.I)
+_LOGIN_URL = re.compile(r"(?:/|^)(?:login|signin|auth)[\w./-]*", re.IGNORECASE)
+_POST = re.compile(r"(?:\s-d\s|--data\b|POST)", re.IGNORECASE)
 
 
 def _auth_note(cmd: str, stripped: str) -> str:
