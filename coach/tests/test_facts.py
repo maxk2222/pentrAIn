@@ -211,6 +211,27 @@ def test_reads_count_via_observe_and_survive_replay():
     assert "/tmp/w.py" not in f.files or f.files["/tmp/w.py"].reads == 0
 
 
+def test_reads_reset_after_mutation():
+    """s54: report.txt rewritten by each report.sh run — a re-read after a
+    confirmed write/run sees FRESH content and must not hit the 3x deny."""
+    from coach.facts import FactsDB
+    f = FactsDB()
+    for _ in range(3):
+        f.observe_output("cat /root/report.txt", "SERVICES=x", 0)
+    assert f.files["/root/report.txt"].reads == 3
+    # a confirmed write anywhere bumps the mutation clock → next read is fresh
+    f.observe_output("echo 'new' > /root/report.txt", "", 0)
+    f.observe_output("cat /root/report.txt", "SERVICES=y", 0)
+    assert f.files["/root/report.txt"].reads == 1
+    # and a run of the producer script also refreshes the budget
+    f.observe_output("cat /root/report.txt", "SERVICES=y", 0)
+    f.observe_output("cat /root/report.txt", "SERVICES=y", 0)
+    assert f.files["/root/report.txt"].reads == 3
+    f.observe_output("/root/report.sh", "done", 0)
+    f.observe_output("cat /root/report.txt", "SERVICES=z", 0)
+    assert f.files["/root/report.txt"].reads == 1
+
+
 def test_file_key_host_attribution():
     from coach.facts import FactsDB, file_key
     assert file_key("sshpass -p 'x' ssh deploy@shop01 'cat /tmp/f'",
