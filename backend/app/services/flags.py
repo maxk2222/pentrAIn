@@ -6,7 +6,6 @@ VMs via qemu-guest-agent file writes (file kind) at deploy and after soft reset.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import secrets as _secrets
@@ -80,11 +79,20 @@ async def inject_flags(db: AsyncSession, engine, session: Session, flags: list[F
         try:
             container = spec.get("container")
             if container:
-                b64 = base64.b64encode(f"{secret}\n".encode()).decode()
-                await engine.pve.agent_exec_sh(
+                # docker exec needs a shell inside the image — distroless
+                # containers (juice-shop) have none, and agent_exec_sh doesn't
+                # raise on non-zero exits so failures used to log as
+                # "injected". Stage on the host and docker-cp instead.
+                tmp = f"/tmp/.pentrain-flag-{f.key}"
+                await engine.pve.agent_file_write(vmid, tmp, f"{secret}\n")
+                res = await engine.pve.agent_exec_sh(
                     vmid,
-                    f"docker exec {_shq(container)} /bin/sh -c "
-                    f"'mkdir -p $(dirname {_shq(path)}); echo {b64} | base64 -d > {_shq(path)}'")
+                    f"docker cp {_shq(tmp)} {_shq(container)}:{_shq(path)} "
+                    f"&& rm -f {_shq(tmp)}")
+                if res.get("exitcode") != 0:
+                    raise RuntimeError(
+                        f"docker cp rc={res.get('exitcode')}: "
+                        f"{res.get('err') or res.get('out')}")
             elif path.startswith("/"):
                 await engine.pve.agent_write_file(vmid, path, f"{secret}\n")
             else:

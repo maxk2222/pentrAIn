@@ -7,6 +7,7 @@ the coach/UI can be developed end-to-end on a laptop.
 from __future__ import annotations
 
 import itertools
+import shlex
 import time
 from dataclasses import dataclass, field
 
@@ -150,6 +151,15 @@ class MockPveClient:
             return {"out": "", "err": "no server running", "exitcode": 1}
         if "IP=" in cmd or "dhclient" in cmd or "pentrain-netup.sh" in cmd:  # kali_net guest bring-up
             return {"out": "IP=10.99.0.42/24\nIF=eth1\n", "err": "", "exitcode": 0}
+        if "docker cp" in cmd:  # container flag injection — files land under "ctr:/path"
+            seg = cmd.split("&&")[0]
+            parts = shlex.split(seg)
+            src, dst = parts[2], parts[3]
+            ctr, _, cpath = dst.partition(":")
+            if (vmid, src) in self.files:
+                self.files[(vmid, f"{ctr}:{cpath}")] = self.files[(vmid, src)]
+                return {"out": "", "err": "", "exitcode": 0}
+            return {"out": "", "err": f"no such file: {src}", "exitcode": 1}
         return {"out": f"[mock] executed: {' '.join(argv)}\n", "err": "", "exitcode": 0}
 
     async def agent_exec_sh(self, vmid: int, shell_cmd: str, *, timeout_s: int = 120) -> dict:

@@ -276,6 +276,52 @@ async def test_file_flag_on_kali_injects_to_kali_vmid(db_with_packs):
     await _abort_done(db, s.id)
 
 
+async def test_container_file_flag_injects_via_docker_cp(db):
+    """s65: juice-shop is distroless — the old `docker exec … /bin/sh` injection
+    'succeeded' but wrote nothing (no shell in the image, unchecked exit code).
+    Container flags now stage on the host and docker-cp in."""
+    from app.services import engine as engine_svc
+    s = Session(quest_id="web-t2-juice-shop", state="active", flag_seed="s1",
+                target_vmids={"juice01": 104})
+    db.add(s)
+    await db.commit()
+    engine = await engine_svc.get_engine(db)
+    flag = Flag(quest_id=s.quest_id, key="ftp-flag", name="f", kind="file",
+                points=10, command_spec={"vm": "juice01", "container": "juice-shop",
+                                         "file_path": "/juice-shop/ftp/flag1.txt"})
+    await flags_svc.create_expected_flags(db, s, [flag])
+    logs = await flags_svc.inject_flags(db, engine, s, [flag])
+    assert any("injected" in line for line in logs)
+    content = engine.pve.files.get((104, "juice-shop:/juice-shop/ftp/flag1.txt"))
+    assert content and content.decode().startswith("pentrAIn{")
+
+
+async def test_container_flag_inject_failure_is_logged(db):
+    """agent_exec_sh doesn't raise on non-zero exits — a failed docker cp
+    must log FAILED, not a phantom 'injected' (the s65 silent-skip bug)."""
+    from app.services import engine as engine_svc
+    s = Session(quest_id="web-t2-juice-shop", state="active", flag_seed="s1",
+                target_vmids={"juice01": 104})
+    db.add(s)
+    await db.commit()
+    engine = await engine_svc.get_engine(db)
+    flag = Flag(quest_id=s.quest_id, key="ftp-flag", name="f", kind="file",
+                points=10, command_spec={"vm": "juice01", "container": "juice-shop",
+                                         "file_path": "/juice-shop/ftp/flag1.txt"})
+    await flags_svc.create_expected_flags(db, s, [flag])
+    real = engine.pve.agent_exec_sh
+
+    async def broken(vmid, cmd, **kw):
+        if "docker cp" in cmd:
+            return {"out": "", "err": "no such container", "exitcode": 1}
+        return await real(vmid, cmd, **kw)
+
+    engine.pve.agent_exec_sh = broken
+    logs = await flags_svc.inject_flags(db, engine, s, [flag])
+    assert any("inject FAILED" in line for line in logs)
+    assert not any("injected" in line for line in logs)
+
+
 async def test_check_flag_rejects_noncommand_flag(db_with_packs):
     """check_flag on a file-kind flag surfaces the real reason, not 'None'."""
     db = db_with_packs
