@@ -118,6 +118,7 @@
       - proxychains4
       - sshuttle
       - ffuf
+      - wpscan          # web track: WP enumeration + password attack
       - seclists
       - wordlists
       - impacket-scripts
