@@ -182,6 +182,10 @@ class FileFact:
     # NEWLY failed check is informed iteration, not 'perfecting' (s54: the
     # script ran clean but its OUTPUT was wrong; only check_flag knew)
     write_check_seq: int = -1
+    # runs snapshot at the last write — a version that was RUN since writing
+    # produced observable output; rewriting it is informed iteration (s54:
+    # write->run->inspect->rewrite is THE deliverable loop)
+    write_run_seq: int = 0
     last_exit: int | None = None
 
 
@@ -350,6 +354,7 @@ class FactsDB:
         elif code == 0 and f.writes < f.attempts:
             f.writes += 1
             f.write_check_seq = self.checkfail_seq
+            f.write_run_seq = f.runs
             self.mutation_seq += 1
 
     def observe_output(self, cmd: str, out: str, code: int | None) -> None:
@@ -372,6 +377,7 @@ class FactsDB:
                         f.attempts += 1
                         f.writes += 1
                         f.write_check_seq = self.checkfail_seq
+                        f.write_run_seq = f.runs
                         self.mutation_seq += 1
                 if tgt := _run_target(cmd):
                     key = file_key(cmd, tgt)

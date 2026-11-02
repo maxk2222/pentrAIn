@@ -1388,17 +1388,18 @@ class SessionCoach:
                         external = any(path in c for c in self.facts.caps)
                         if (not external and n >= 2
                                 and (last is None or last == 0)
-                                and (ff is None or self.facts.checkfail_seq
-                                     <= ff.write_check_seq)):
-                            why = ("ran without error" if last == 0
-                                   else "was never executed")
+                                and (ff is None or
+                                     (ff.runs <= ff.write_run_seq
+                                      and self.facts.checkfail_seq
+                                      <= ff.write_check_seq))):
                             await log.ainfo("rewrite denied", session=self.sid,
                                             path=path, writes=n, cmd=cmd[:120])
                             return spoke, (
                                 f"denied: {path} was already written {n}x and "
-                                f"{why} — RUN it now (python3 -u {path}). "
-                                f"Another rewrite is only useful after a "
-                                f"failed run or check.")
+                                f"the current version was never executed — "
+                                f"RUN it (python3 -u {path}). Another "
+                                f"rewrite is only useful after new evidence: "
+                                f"a run, a failed check, or a crash.")
                     # read-loop guard: re-reading the same file produces
                     # identical output — settled facts the model keeps
                     # re-deriving (seen live: 6x `cat nmap.txt | grep …`

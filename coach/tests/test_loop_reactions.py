@@ -981,6 +981,30 @@ async def test_rewrite_guard_denies_third_write_without_failed_run():
     assert not r.startswith("denied:")
 
 
+async def test_rewrite_unlocked_by_run_or_failed_check():
+    """s54 live: report.sh ran clean but its output was wrong — the guard
+    must allow write->run->inspect->rewrite. Only a version never
+    exercised since its last write stays denied."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    w = "cat > /root/report.sh << 'EOF'\nx\nEOF"
+    for _ in range(2):
+        await coach._dispatch({"type": "exec_in_kali", "command": w})
+    # run the current version cleanly → it produced observable output
+    await coach._dispatch({"type": "exec_in_kali", "command": "bash /root/report.sh"})
+    assert coach.facts.files["/root/report.sh"].last_exit == 0
+    # the rewrite after seeing that output is informed iteration → allowed
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert not r.startswith("denied:")
+    # ...and a never-run new version is denied again
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert r.startswith("denied:") and "never executed" in r
+    # a failed check also counts as fresh evidence → unlocks
+    coach.facts.checkfail_seq += 1
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert not r.startswith("denied:")
+
+
 async def test_rewrite_guard_skips_cron_executed_file():
     """A file whose root-cron execution is a proven caps: fact CAN'T be run
     by the agent — 'RUN it now' is a dead end there (s46: backup.sh written
