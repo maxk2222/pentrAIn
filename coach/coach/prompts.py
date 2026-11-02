@@ -307,6 +307,13 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
                 "A spawn task must carry the ACCESS PATH — host, "
                 "credentials, pivot (`sshpass -p '…' ssh user@host '…'`) — "
                 "the worker sees only what you write into `task`.")
+            tgts = [str(t.get("name") or t.get("ip") or "?")
+                    for t in (s.get("quest", {}).get("targets") or [])]
+            if len(tgts) > 1:
+                parts.append(
+                    f"PARALLEL_HINT: {len(tgts)} independent targets "
+                    f"({', '.join(tgts[:4])}) — spawning a worker per host "
+                    "halves wall-time vs attacking them serially.")
         if (st.operator_directive
                 and time.time() - st.operator_directive_ts < 600):
             parts.append(
