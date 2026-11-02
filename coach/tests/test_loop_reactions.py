@@ -968,6 +968,20 @@ async def test_rewrite_guard_denies_third_write_without_failed_run():
     assert not r.startswith("denied:")
 
 
+async def test_rewrite_guard_skips_cron_executed_file():
+    """A file whose root-cron execution is a proven caps: fact CAN'T be run
+    by the agent — 'RUN it now' is a dead end there (s46: backup.sh written
+    2x, cron ran it as root, third payload-write got denied anyway)."""
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.facts.caps.append("root-exec via /opt/shop/backup.sh@shop01")
+    w = "cat > /opt/shop/backup.sh << 'EOF'\ncp /root/flag.txt /tmp/f\nEOF"
+    for _ in range(2):
+        await coach._dispatch({"type": "exec_in_kali", "command": w})
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert not r.startswith("denied:")
+
+
 async def test_start_seeds_write_counts_from_replay():
     """Coach restart mid-session: replayed writes must seed facts.files so
     the rewrite guard stays armed — otherwise each restart resets it."""

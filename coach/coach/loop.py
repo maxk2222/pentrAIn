@@ -1359,7 +1359,12 @@ class SessionCoach:
                         ff = self.facts.files.get(path)
                         n = ff.writes if ff else 0
                         last = ff.last_exit if ff else None
-                        if n >= 2 and (last is None or last == 0):
+                        # externally-executed files (proven via a caps: fact,
+                        # e.g. root cron) can't be "RUN" by us — demanding
+                        # `python3 -u <path>` for a cron script is a dead end
+                        external = any(path in c for c in self.facts.caps)
+                        if (not external and n >= 2
+                                and (last is None or last == 0)):
                             why = ("ran without error" if last == 0
                                    else "was never executed")
                             await log.ainfo("rewrite denied", session=self.sid,
