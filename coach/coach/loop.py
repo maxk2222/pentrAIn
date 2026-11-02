@@ -1632,6 +1632,14 @@ class SessionCoach:
                 # an identical resubmit goes through so a real-but-uncaptured
                 # read stays possible — invented values just get corrected.
                 ff = self.facts.flags.get(val)
+                # already-accepted resubmits burn a turn for zero gain —
+                # s46 submitted flag-4 four times (once at 01:59, thrice
+                # more post-restart while 'ok' kept saying solved)
+                if ff is not None and ff.accepted:
+                    return spoke, (
+                        f"denied: `{val[:80]}` is already accepted — flag "
+                        f"solved. Re-submitting scores nothing; move to the "
+                        f"NEXT objective.")
                 if (re.fullmatch(r"pentrAIn\{[^}\s]+\}", val)
                         and (ff is None or not ff.seen)
                         and not self._submit_challenged.get(val)):

@@ -435,6 +435,19 @@ async def test_unseen_flag_submit_is_challenged_once():
     assert did and c.flags[-1] == "pentrAIn{real}"
 
 
+async def test_accepted_flag_resubmit_is_denied():
+    """Resubmitting an already-accepted flag burns a turn for zero gain —
+    denied before the API call (s46 submitted flag-4 four times)."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.flag_seen("pentrAIn{abc}")
+    coach.facts.flag_mark_submitted("pentrAIn{abc}", True)
+    did, r = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{abc}"}, proactive=True)
+    assert not did and "already accepted" in r and not c.flags
+
+
 async def test_activity_status_emitted_around_exec():
     """While exec_in_kali blocks in tmux the UI must show a live status —
     emitted before the call, always cleared when the dispatch loop ends."""
