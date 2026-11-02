@@ -116,6 +116,48 @@ async def test_timed_out_exec_reports_partial_output():
     assert "still running" in report[0]["content"]
 
 
+async def test_infra_errors_backoff_and_guide():
+    """s49: qga died ~12min mid-run; the agent retyped identical payloads
+    9x into the dead channel. API-level `error` results must (a) carry an
+    INFRA note so the model knows the command never ran, and (b) bounce
+    after 3 consecutive errors until a probe succeeds."""
+    coach, c = _coach(autonomy=4)
+
+    async def dead_qga(sid, cmd, window=None):
+        c.execs.append(cmd)
+        return {"error": "POST /nodes/pentrain/qemu/103/agent/exec -> 500: "
+                         "QEMU guest agent is not running", "status": "error"}
+    c.exec_in_kali = dead_qga
+    for _ in range(3):
+        _, res = await coach._dispatch(
+            {"type": "exec_in_kali", "command": "cat /f"})
+    assert "INFRA" in res and "never ran" in res
+    # first call past the threshold is the recovery probe — it goes through
+    ok, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "echo ok"})
+    assert ok and "INFRA" in res
+    # channel still down → further execs bounce instead of reaching the backend
+    c.execs.clear()
+    ok, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat /f"})
+    assert not ok and "unreachable" in res and not c.execs
+    # probe window opens after the cooldown — the probe is typed again
+    coach._infra_last_probe = 0.0
+    ok, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "echo ok"})
+    assert ok and "INFRA" in res and c.execs == ["echo ok"]
+    # channel back → the probe succeeds, counter resets, execs flow again
+    async def healthy(sid, cmd, window=None):
+        c.execs.append(cmd)
+        return {"out": "ok\n", "exitcode": 0}
+    c.exec_in_kali = healthy
+    coach._infra_last_probe = 0.0   # probe window open
+    ok, _ = await coach._dispatch({"type": "exec_in_kali", "command": "id"})
+    assert ok and coach._infra_errors == 0
+    ok, _ = await coach._dispatch({"type": "exec_in_kali", "command": "id2"})
+    assert ok
+
+
 async def test_takeover_budget_cap():
     coach, c = _coach(autonomy=4, action_budget=2, action_grace=0)
     await coach._dispatch({"type": "exec_in_kali", "command": "a"})

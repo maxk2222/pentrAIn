@@ -47,6 +47,12 @@ LLM_TURN_BUDGET_S = 300    # hard bound for one LLM turn incl. action dispatch;
 # tool types that keep an in-turn chain alive — they have server-side effects
 # whose results the model should see immediately (send_chat/offer_hint/none
 # end the chain: the model only wanted to talk or pause)
+# backend/qga-side exec failures — the command never reached the pane. Not
+# command output, so matching on res["error"] only (never on `out`).
+_INFRA_ERR = (r"qemu guest agent|qga command|agent/exec|agent is not running|"
+              r"is not running|guest-exec|transport failed|500:|502:|503:")
+
+
 _CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
                 "mark_checkpoint", "capture_screen", "suggest_command",
                 "spawn_agent", "collect_agent", "agent_status", "kill_agent",
@@ -119,6 +125,12 @@ class SessionCoach:
         self._turn_deadline: float | None = None
         self._last_capture_ts = 0.0
         self._last_badflag_ack = 0.0
+        # infra-error backoff: backend/qga 500s are NOT command results — the
+        # model otherwise retypes payloads into a dead exec channel (s49:
+        # 9 wasted turns across a ~12min qga outage). Consecutive errors
+        # beyond a threshold bounce until a probe succeeds.
+        self._infra_errors = 0
+        self._infra_last_probe = 0.0
         self._disabled_notice_sent = False
         self._draft_seq = 0
         self._active_draft: str | None = None   # draft_id for send_chat meta
@@ -1431,6 +1443,20 @@ class SessionCoach:
                             f"{'; '.join(known) or '(resolve names via getent)'}. "
                             f"A host is only allowed once its IP appears in "
                             f"tool output (scan result, getent, logs).")
+                    # infra-backoff: after repeated backend/qga errors, let
+                    # only a periodic probe through instead of burning turns
+                    # retyping payloads into a dead channel
+                    if self._infra_errors >= 3:
+                        since_probe = time.time() - self._infra_last_probe
+                        if since_probe < 45:
+                            return spoke, (
+                                "denied: kali exec channel unreachable "
+                                f"({self._infra_errors} consecutive infra "
+                                "errors — qga/backend down or VM "
+                                "restarting). Wait ~45s, then probe with a "
+                                "cheap `echo ok`. Do NOT retype payloads — "
+                                "everything typed now is lost.")
+                        self._infra_last_probe = time.time()
                     # mark BEFORE the call so telemetry echo is recognized as ours
                     self._coach_cmds.append((cmd, time.time()))
                     where = f"[{window}] " if window else ""
@@ -1450,6 +1476,13 @@ class SessionCoach:
                             f"({type(e).__name__}) — the command may still be "
                             f"running on the pane; probe before re-running")
                     typed = False
+                    # API-level failures only (qga dead / VM not running /
+                    # transport) — denied statuses are policy, not outages
+                    if res.get("error") and res.get("status") != "denied" \
+                            and re.search(_INFRA_ERR, res["error"]):
+                        self._infra_errors += 1
+                    else:
+                        self._infra_errors = 0
                     if res.get("status") == "denied" or res.get("error") or res.get("busy"):
                         # never actually typed → a stale entry could mislabel a
                         # user-typed identical command
@@ -1490,6 +1523,17 @@ class SessionCoach:
                             result = f"{out[:1500]}\n[{err_hint}]"[:1900]
                         else:
                             result = out[:1900] or "still running"
+                        if res.get("error") and res.get("status") != "denied" \
+                                and re.search(_INFRA_ERR, res["error"]):
+                            # API-level failure (qga dead / VM restarting /
+                            # backend hiccup) — the command never reached the
+                            # pane. Without this note the model treats it as
+                            # a command error and retypes variants forever.
+                            result += (
+                                "\n[INFRA: exec channel error — the command "
+                                "never ran. Likely qga/VM/backend restart. "
+                                "Wait ~30-45s and probe with `echo ok`; "
+                                "don't retype payloads into a dead channel.]")
                         # bounced/denied — the command never ran, but the pane
                         # snapshot can still show a foreground program's
                         # findings; parse facts without run/write bookkeeping
