@@ -41,7 +41,7 @@ flags:
     vm: juice01
     command:
       vm: juice01
-      cmd: "curl -s http://localhost:3000/api/Challenges | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(c[\"solved\"] for c in d[\"data\"] if c.get(\"key\")==\"adminSection\"))'"
+      cmd: "curl -s http://localhost:3000/api/Challenges | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(c[\"solved\"] for c in d[\"data\"] if c.get(\"key\")==\"adminSectionChallenge\"))'"
       expect: "True"
 hints:
   - id: h1
@@ -55,7 +55,7 @@ hints:
   - id: h3
     cost: 60
     stage: exploit
-    text: "The admin-section challenge solves when you view /#/administration while logged in as ANY user. Login page has a SQLi flaw — try ' OR 1=1-- in the email field."
+    text: "Login page has a SQLi flaw — try ' OR 1=1-- in the email field. The admin page tracks visits via a pixel: /assets/public/images/padding/19px.png — request it with any referer header set and the challenge flips."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

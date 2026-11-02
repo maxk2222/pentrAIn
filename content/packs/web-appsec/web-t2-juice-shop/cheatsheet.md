@@ -17,4 +17,8 @@ curl http://<juice01>:3000/#/score-board
 
 - SPA = the API is the attack surface; enumerate /rest/* and /api/*
 - JWT weaknesses, BOLA on basket/order ids, file-upload traps
+- Challenges solve server-side via tracking pixels — e.g. the admin page
+  loads `/assets/public/images/padding/19px.png`; requesting it with a
+  `referer` header flips the challenge (fragments like /#/administration
+  never reach the server!)
 - Solve banners trigger instantly — watch for the notification
