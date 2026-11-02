@@ -2008,6 +2008,11 @@ async def test_l4_attach_seeds_plan_scaffold_from_flags():
     assert any("root-flag" in t for t in texts)
     assert not any("old-flag" in t for t in texts)      # solved → excluded
     assert any("Verify" in t for t in texts)
+    await asyncio.sleep(0)   # let the seed card/persist tasks run
+    cards = [m for m in c.chats if "Plan (seeded)" in m["content"]]
+    assert cards and cards[0]["meta"]["plan"][0]["s"] == "doing"
+    assert any(a["tool"] == "update_plan" and a["args"].get("seed")
+               for a in c.logged)
     await coach.stop()
 
 

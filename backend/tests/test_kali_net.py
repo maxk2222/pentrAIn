@@ -401,3 +401,35 @@ async def test_testing_mode_router_allow_survives_missing_router(monkeypatch):
     # disable never touches the router
     await prov.testing_mode(False)
     assert pve.sh_calls == []
+
+
+async def test_soft_reset_reapplies_testing_allow(db, monkeypatch):
+    """Disk-only rollback wipes router iptables — the testing allow rules
+    (api egress for telemetry/terminal) must be re-installed on reset."""
+    calls: list[list | None] = []
+
+    async def fake_tm(enable, allow_ips=None):
+        calls.append(allow_ips)
+
+    from app.models.domain import Quest, Track
+    from app.services import engine as engine_svc
+    from app.services import sessions as sessions_svc
+    from app.services import settings as settings_svc
+    db.add(Track(slug="t", title="t"))
+    db.add(Quest(id="q", track_slug="t", tier=1, title="q", pack_path="/x"))
+    await settings_svc.patch_settings(
+        db, {"platform.api_url": "http://192.0.2.10:8000"})
+    engine = await engine_svc.get_engine(db)
+    p = engine.provider
+    monkeypatch.setattr(p, "testing_mode", fake_tm)
+    await p.deploy_range("x", {"ludus": [{"vm_name": "MO-kali"}]})
+    rid = next(iter(p._ranges))
+    from app.ranges.base import RangeState
+    p._ranges[rid].state = RangeState.RUNNING
+    await p.snapshot_all(rid, "pentrain-postdeploy")
+
+    s = Session(quest_id="q", state="ready", range_id=rid)
+    db.add(s)
+    await db.commit()
+    await sessions_svc._reset(s.id, hard=False)
+    assert calls and calls[-1] == ["192.0.2.10/32"]

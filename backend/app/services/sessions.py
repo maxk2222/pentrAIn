@@ -671,6 +671,21 @@ async def _reset(session_id: int, hard: bool) -> None:
                         session.kali_wan_ip = None
                 except Exception as e:
                     await log.awarning("kali internet re-apply failed", error=str(e)[:150])
+            # rollback wipes router iptables (disk-only snapshot) — re-apply
+            # testing-mode isolation + the api allow rules or telemetry and
+            # the terminal channel die with the reset
+            if bool(await settings_svc.get_setting(db, "engine.testing_mode", True)):
+                api_ip, _ = _api_ip_port(await settings_svc.get_setting(
+                    db, "platform.api_url", ""))
+                allow = list(await settings_svc.get_setting(
+                    db, "engine.testing_allow", []))
+                allow = _merge_testing_allow(allow, api_ip)
+                try:
+                    await engine.provider.testing_mode(
+                        True, allow_ips=allow or None)
+                except Exception as e:
+                    await log.awarning("testing-mode re-apply failed",
+                                       error=str(e)[:150])
             # re-randomize flags (old secrets are gone after rollback)
             session.flag_seed = new_seed()
             session.telemetry_token = new_telemetry_token()

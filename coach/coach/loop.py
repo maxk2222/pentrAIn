@@ -363,6 +363,21 @@ class SessionCoach:
                        for k in open_flags]
                     + [{"t": "Verify: all flags submitted, wrap up",
                         "s": "todo"}])
+                # surface it like a model-authored plan: checklist card in
+                # the feed + persisted action so a restart replays it
+                items = self.state.plan
+                open_n = sum(1 for i in items if i["s"] != "done")
+                meta = {**self._msg_meta(None), "plan": items, "open": open_n,
+                        "seed": True}
+                asyncio.create_task(self.client.send_chat(
+                    self.sid,
+                    f"**Plan (seeded):** {open_n} open / {len(items)} steps"
+                    " — owns + rewrites via update_plan",
+                    kind="action_report", meta=meta))
+                asyncio.create_task(self.client.log_action(
+                    self.sid, "update_plan",
+                    {"items": items, "agent": "main", "seed": True},
+                    {"open": open_n}))
         # a restart doesn't make the plan stale — the staleness nudge only
         # fires when the MODEL hasn't refreshed in-session for a while
         self.state.plan_updated = time.time()
