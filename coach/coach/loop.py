@@ -1425,10 +1425,16 @@ class SessionCoach:
                                     if loot else
                                     " — need freshness, not content? "
                                     "`sha256sum`/`stat` it (not a read)")
+                            # compound `producer && cat file` aborts at the
+                            # read — the run never executes, the file stays
+                            # stale, the next compound denies again (s54).
+                            # Say how to refresh: run the producer ALONE.
                             return spoke, (
                                 f"denied: {read_tgt} was already read "
                                 f"{n}x with the same result — its contents "
                                 f"are settled facts{hint} "
+                                f"To REFRESH the file, run its producer "
+                                f"as a separate command first, then read. "
                                 f"(see ALREADY_DONE). "
                                 f"Take a DIFFERENT action toward the flag: "
                                 f"connect to a discovered service, use "
