@@ -100,6 +100,14 @@ async def _append_log(db: AsyncSession, session: Session, line: str) -> None:
     await _broadcast(session.id, "deploy_log", {"line": line})
 
 
+async def _append_log_by_id(db: AsyncSession, session_id: int, line: str) -> None:
+    """Log-append for contexts where the Session ORM object may be expired —
+    loads + commits in the same tx."""
+    session = await db.get(Session, session_id)
+    if session:
+        await _append_log(db, session, line)
+
+
 def _api_ip_port(api_url: str | None) -> tuple[str | None, int]:
     """platform.api_url → (ipv4 host | None, port). Only IPv4 literals can be
     turned into Ludus network rules — hostnames don't resolve inside ranges."""
@@ -280,10 +288,13 @@ async def _deploy(session_id: int) -> None:
             session = await db.get(Session, session_id)
             if not session:
                 return
-            quest = await db.get(Quest, session.quest_id)
             try:
                 engine = await get_engine(db)
                 await _set_state(db, session, SessionState.DEPLOYING)
+                if await _wait_for_aborts(db, session.id):
+                    # the wait rolled the tx back — `session` is expired
+                    session = await db.get(Session, session_id)
+                quest = await db.get(Quest, session.quest_id)
                 await _append_log(db, session, "[pentrain] compiling topology → ludus config")
                 config = compile_topology(
                     quest,
@@ -307,6 +318,41 @@ async def _deploy(session_id: int) -> None:
         _tasks.pop(session_id, None)
 
 
+async def _wait_for_aborts(db: AsyncSession, sid: int) -> bool:
+    """Hold a fresh deploy until any in-flight range teardown settles.
+
+    All sessions share ONE ludus default range — PUT config + POST deploy on a
+    range whose destroy is still running corrupts the deploy server-side
+    (observed: 'Unable to add VM to database: name: cannot be blank', then the
+    range vanished mid-deploy and the session watched an absent range for the
+    full 45min timeout). Poll other sessions' ABORTING state — that flag is the
+    authoritative teardown-in-progress signal — with a bounded wait so a wedged
+    abort cannot deadlock every future session.
+
+    Returns True when a wait actually happened — each poll ends the tx via
+    rollback so fresh abort states are visible, which EXPIRES every ORM object
+    in `db` (callers must re-fetch)."""
+    def _aborting_ids():
+        return select(Session.id).where(
+            Session.state == SessionState.ABORTING.value,
+            Session.id != sid)
+
+    other_aborting = (await db.execute(_aborting_ids())).scalars().all()
+    if not other_aborting:
+        return False
+    await _append_log_by_id(db, sid,
+                            f"[pentrain] waiting for {len(other_aborting)} teardown(s) before deploy")
+    # ~15min ceiling — teardown of the biggest range takes far less; beyond
+    # that the abort task is stuck and the deploy would race a dead range.
+    for _ in range(15 * 6):
+        await asyncio.sleep(POLL_S)
+        await db.rollback()  # drop the snapshot — see fresh abort states
+        still = (await db.execute(_aborting_ids())).scalars().all()
+        if not still:
+            return True
+    raise SessionError("previous range teardown did not finish — abort it again")
+
+
 async def _watch_range(db: AsyncSession, engine, session: Session,
                        seen_log_seed: str = ""):
     """Poll ludus until the range is RUNNING (max ~45 min for big AD labs).
@@ -316,6 +362,7 @@ async def _watch_range(db: AsyncSession, engine, session: Session,
     failures are tolerated — a flaky API must not kill a 30-minute deploy."""
     seen_log = seen_log_seed
     consec_errors = 0
+    consec_absent = 0
     for _ in range(45 * 6):
         try:
             st = await engine.provider.status(session.range_id or None)
@@ -337,6 +384,16 @@ async def _watch_range(db: AsyncSession, engine, session: Session,
             return st
         if st.state == RangeState.FAILED:
             raise SessionError("range deploy failed — see deploy log")
+        if st.state == RangeState.ABSENT:
+            # the range object vanished after deploy_range returned — a
+            # concurrent teardown deleted it mid-deploy (shared default range).
+            # Grace of 3 polls absorbs a transient 404; then fail fast instead
+            # of polling an absent range for the full timeout.
+            consec_absent += 1
+            if consec_absent >= 3:
+                raise SessionError("range disappeared mid-deploy (concurrent teardown?)")
+        else:
+            consec_absent = 0
         await asyncio.sleep(POLL_S)
     raise SessionError("deploy timed out")
 

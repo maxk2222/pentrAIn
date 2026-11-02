@@ -459,6 +459,48 @@ async def test_watch_range_tolerates_transient_errors(db_with_packs, monkeypatch
         await sessions_svc._watch_range(db, engine, s)
 
 
+async def test_watch_range_fails_fast_on_absent(db_with_packs, monkeypatch):
+    """Range deleted mid-deploy → fail in ~3 polls, not the 45min timeout."""
+    db = db_with_packs
+    engine, p = await _engine_and_range(db, "running")
+    s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
+    db.add(s)
+    await db.commit()
+
+    from app.ranges.base import RangeStatus, RangeState
+
+    async def gone(range_id=None):
+        return RangeStatus(state=RangeState.ABSENT)
+
+    monkeypatch.setattr(p, "status", gone)
+    monkeypatch.setattr(sessions_svc, "POLL_S", 0)
+    with pytest.raises(sessions_svc.SessionError, match="disappeared mid-deploy"):
+        await sessions_svc._watch_range(db, engine, s)
+
+
+async def test_deploy_waits_for_inflight_abort(db_with_packs, monkeypatch):
+    """A queued deploy must not push config while another session's teardown
+    is still running — the shared default range corrupts mid-destroy."""
+    db = db_with_packs
+    engine, p = await _engine_and_range(db, "running")
+    old = Session(quest_id="linux-t1-first-foothold", state="aborting", range_id="MO")
+    db.add(old)
+    s = Session(quest_id="linux-t1-first-foothold", state="queued")
+    db.add(s)
+    await db.commit()
+
+    monkeypatch.setattr(sessions_svc, "POLL_S", 0.05)
+    task = asyncio.create_task(sessions_svc._deploy(s.id))
+    await asyncio.sleep(0.2)
+    # deploy is parked on the abort-wait — no new range pushed yet
+    assert not task.done()
+    old.state = "aborted"  # teardown finishes
+    await db.commit()
+    await asyncio.wait_for(task, 30)
+    s = await _wait_state(s.id, "ready")
+    assert s.kali_vmid is not None
+
+
 async def test_resume_inflight_sweeps_states(db_with_packs):
     db = db_with_packs
     for state in ("queued", "deploying"):
