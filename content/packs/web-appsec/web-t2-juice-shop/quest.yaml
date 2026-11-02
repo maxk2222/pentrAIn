@@ -51,7 +51,7 @@ hints:
   - id: h2
     cost: 50
     stage: exploit
-    text: "/ftp is a public directory — browse it (careful, some files are quarantine bait). The flag file is there."
+    text: "/ftp is public — but the filter only serves .md/.pdf and hides everything else. Fool the extension check: double-encode a terminator into an allowed suffix."
   - id: h3
     cost: 60
     stage: exploit
