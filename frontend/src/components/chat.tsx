@@ -420,6 +420,14 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
     selAgent === "main"
       ? !m.meta?.agent || m.meta.agent === "main"
       : m.meta?.agent === selAgent);
+  // persistent plan strip — the selected feed's latest update_plan rides
+  // above the composer while any item is still open (gone = all done or
+  // none set); history and live WS events both carry meta.plan
+  let planItems: PlanItem[] | null = null;
+  for (let i = visible.length - 1; i >= 0; i--) {
+    const p = visible[i].meta?.plan;
+    if (Array.isArray(p) && p.length) { planItems = p as PlanItem[]; break; }
+  }
   useEffect(() => {
     if (atBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     else setUnseen((n) => n + 1);
@@ -590,6 +598,11 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
                   onClick={() => selectAgent(id)} />
               );
             })}
+          </div>
+        )}
+        {planItems && planItems.some((i) => i.s !== "done") && (
+          <div className="px-2 pt-2">
+            <PlanCard items={planItems} agent={selAgent} />
           </div>
         )}
         {sendError && (
