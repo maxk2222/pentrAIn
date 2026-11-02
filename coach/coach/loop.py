@@ -1400,10 +1400,21 @@ class SessionCoach:
                             await log.ainfo("reread denied",
                                             session=self.sid, path=read_tgt,
                                             reads=n, cmd=cmd[:120])
+                            # carry what we already extracted — 'settled'
+                            # alone leaves the model blind to WHAT it knows
+                            # (s46 retried cat backup.sh 4x post-restart)
+                            base = read_tgt.rsplit("/", 1)[-1]
+                            loot = next((f[5:] for f in self.facts.findings
+                                         if f.startswith(f"loot:{base}")), "")
+                            hint = (f" — extracted already: {loot}"
+                                    if loot else
+                                    " — need freshness, not content? "
+                                    "`sha256sum`/`stat` it (not a read)")
                             return spoke, (
                                 f"denied: {read_tgt} was already read "
                                 f"{n}x with the same result — its contents "
-                                f"are settled facts (see ALREADY_DONE). "
+                                f"are settled facts{hint} "
+                                f"(see ALREADY_DONE). "
                                 f"Take a DIFFERENT action toward the flag: "
                                 f"connect to a discovered service, use "
                                 f"credentials you found, or submit a flag.")
