@@ -60,6 +60,14 @@
     - { src: hook.sh, dest: /etc/pentrain/hook.sh, mode: "0644" }
     - { src: pentrain-telemetried.service, dest: /etc/systemd/system/pentrain-telemetried.service, mode: "0644" }
 
+# vendored stdlib-only .git rebuilder — upstream git-dumper needs
+# dulwich/bs4 (no pip access in ranges), cheatsheets name this command
+- name: install git-dumper
+  ansible.builtin.copy:
+    src: git-dumper
+    dest: /usr/local/bin/git-dumper
+    mode: "0755"
+
 - name: default telemetried config (overwritten by backend at deploy)
   ansible.builtin.copy:
     dest: /etc/pentrain/telemetried.conf
