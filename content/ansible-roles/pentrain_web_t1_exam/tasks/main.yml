@@ -50,6 +50,12 @@
         chdir: /var/www/portal
         creates: /var/www/portal/.git
 
+    # the repo dir is www-data-owned but ansible runs as root — without this
+    # every commit dies on 'dubious ownership' (observed live: refs/heads
+    # stayed EMPTY, all commits no-oped, exam unsolvable)
+    - name: mark the repo safe for git-as-root
+      ansible.builtin.command: git config --global --add safe.directory /var/www/portal
+
     - name: leaky v1 config (contains ssh creds — stays in history)
       ansible.builtin.copy:
         dest: /var/www/portal/config.php
@@ -68,7 +74,6 @@
         chdir: /var/www/portal
       register: c1
       changed_when: true
-      ignore_errors: true
 
     - name: commit v1 (record)
       ansible.builtin.command: git -c user.email=ops@corp.local -c user.name=ops commit -qm 'initial portal'
@@ -76,7 +81,10 @@
         chdir: /var/www/portal
       register: c2
       changed_when: true
-      ignore_errors: true
+      # idempotent re-runs: 'nothing to commit' is not a failure, a REAL git
+      # failure (dubious ownership, no user, disk) must fail the deploy —
+      # a silent no-commit makes the whole quest unsolvable
+      failed_when: c2.rc != 0 and 'nothing to commit' not in c2.stderr and 'nothing to commit' not in c2.stdout
 
     - name: scrubbed v2 config (removes the secret — but history remembers)
       ansible.builtin.copy:
@@ -95,7 +103,7 @@
         chdir: /var/www/portal
       register: c3
       changed_when: true
-      ignore_errors: true
+      failed_when: c3.rc != 0 and 'nothing to commit' not in c3.stderr and 'nothing to commit' not in c3.stdout
   when: true
 
 - name: deploy account whose creds live in git history
