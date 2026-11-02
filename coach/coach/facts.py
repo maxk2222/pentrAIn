@@ -58,6 +58,12 @@ _HYDRA_URI = re.compile(r"(?:ssh|ftp|smb|rdp|mysql|vnc|telnet)://([\w.\-]+)")
 _AUTH_FAIL_OUT = re.compile(
     r"Access denied|Authentication failed|Permission denied \(publickey|"
     r"Logon failure|Login failed|incorrect password", re.I)
+# `sort | uniq -c | sort -rn` output lines — the leading "N <value>" pair is
+# top-talker evidence (top attacker IP, hottest user) that MUST survive
+# context loss: s54 computed `5 203.0.113.44` correctly, then lost it and
+# re-derived the wrong awk field for an hour
+_TOPN = re.compile(
+    r"^\s*(\d{1,9})\s+((?:\d{1,3}\.){3}\d{1,3}|[\w@:.-]{3,64})\s*$", re.M)
 
 
 def _cmd_creds(cmd: str) -> list[tuple[str, str, str | None]]:
@@ -404,6 +410,15 @@ class FactsDB:
                     tag = f"loot:{base}→{','.join(toks)[:48]}"
                     if not any(f.startswith(f"loot:{base}")
                                for f in self.findings):
+                        self.findings.append(tag[:80])
+            # top-talker counts persist as findings — computed evidence that
+            # outlives context windows (s54: '5 203.0.113.44' was derived
+            # once, lost, then re-derived WRONG for an hour)
+            if code == 0 and not typed_input:
+                top = _TOPN.search(out or "")
+                if top:
+                    tag = f"top:{top.group(1)}x{top.group(2)}"
+                    if tag not in self.findings:
                         self.findings.append(tag[:80])
             # a credential test that exits 0 without an auth-failure marker
             # worked — mark it valid so `tried:` becomes `valid:` and the

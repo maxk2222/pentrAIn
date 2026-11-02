@@ -232,6 +232,22 @@ def test_reads_reset_after_mutation():
     assert f.files["/root/report.txt"].reads == 1
 
 
+def test_topn_count_becomes_finding():
+    """s54: '     5 203.0.113.44' from uniq -c is top-talker evidence — it
+    must persist as a finding, not vanish with the context window."""
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.observe_output(
+        "ssh soc@audit01 'grep \"Failed password\" /var/log/auth.log | "
+        "grep -oP \"from \\K[0-9.]+\" | sort | uniq -c | sort -rn'",
+        "      5 203.0.113.44\n      4 192.0.2.99", 0)
+    assert "top:5x203.0.113.44" in f.findings
+    # non-count output doesn't fire
+    f2 = FactsDB()
+    f2.observe_output("id", "uid=0(root)", 0)
+    assert not any(t.startswith("top:") for t in f2.findings)
+
+
 def test_file_key_host_attribution():
     from coach.facts import FactsDB, file_key
     assert file_key("sshpass -p 'x' ssh deploy@shop01 'cat /tmp/f'",
