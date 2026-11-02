@@ -64,6 +64,8 @@ export interface Quest {
   scoring: { par_s?: number; time_bonus_max?: number; takeover_cost?: number };
   locked: boolean; lock_reason: string; solved: boolean; best_score: number | null;
   exam: boolean;
+  /** flag points + time bonus — denominator for XP percent. */
+  max_score?: number;
 }
 
 export interface FlagDef {

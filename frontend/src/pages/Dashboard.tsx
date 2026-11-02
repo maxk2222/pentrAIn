@@ -1,13 +1,16 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, ArrowRight, BrainCircuit, CheckCircle2, PlayCircle, Server } from "lucide-react";
-import { api, type EngineStatus, type Track } from "@/lib/api";
+import { api, type EngineStatus, type GlobalBoardRow, type Quest, type Track } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Progress } from "@/components/ui";
+import { XpHero, useXpData } from "@/components/xp";
 
 export function DashboardPage() {
   const { activeSession } = useAppStore();
   const { data: tracks } = useQuery({ queryKey: ["tracks"], queryFn: () => api.get<Track[]>("/api/tracks") });
+  const { data: quests } = useQuery({ queryKey: ["quests"], queryFn: () => api.get<Quest[]>("/api/quests") });
+  const { data: board } = useQuery({ queryKey: ["leaderboard", "global"], queryFn: () => api.get<GlobalBoardRow[]>("/api/leaderboard") });
   const { data: engine } = useQuery({
     queryKey: ["engine-status"],
     queryFn: () => api.get<EngineStatus>("/api/engine/status"),
@@ -18,19 +21,23 @@ export function DashboardPage() {
     queryFn: () => api.get<{ xp_total: number; track_levels: Record<string, number> }>("/api/profile"),
   });
   const engineOk = Boolean(engine?.health?.ok);
+  const xp = useXpData(quests, board, tracks);
 
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-sm text-muted">XP {profile?.xp_total ?? 0} · engine {engine?.mode ?? "?"}</p>
+          <p className="text-sm text-muted">engine {engine?.mode ?? "?"} · profile XP {profile?.xp_total ?? 0}</p>
         </div>
         <Badge variant={engineOk ? "success" : "danger"}>
           <Server className="mr-1 h-3 w-3" />
           engine {engineOk ? "online" : "offline"}
         </Badge>
       </div>
+
+      <XpHero xp={xp.xp} xpMax={xp.xpMax} solved={xp.solved}
+              total={xp.total} byTrack={xp.byTrack} compact />
 
       {activeSession && (
         <Card className="border-primary/40 bg-primary/5">

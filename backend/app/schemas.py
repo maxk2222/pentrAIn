@@ -44,6 +44,9 @@ class QuestOut(BaseModel):
     solved: bool = False
     best_score: int | None = None
     exam: bool = False
+    # flag points + time_bonus_max — the XP-percent denominator on the
+    # dashboard/leaderboard (client can't sum flags from the list view)
+    max_score: int = 0
 
 
 class QuestDetailOut(QuestOut):
