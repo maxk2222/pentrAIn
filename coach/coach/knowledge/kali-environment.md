@@ -24,6 +24,10 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - No internet in the range: apt/pip/curl outbound all fail unless the
   session line says INTERNET: YES.
 - Hostnames resolve via /etc/hosts pins: `getent hosts <name>` → real IP.
+- Target VMs are MINIMAL debian — no tshark/strings/tcpdump/forensics
+  tools there. Pull evidence to Kali first (`sshpass -p … scp … /tmp/` or
+  `ssh … 'cat file' > /tmp/file`), analyze locally; scp needs
+  `-o StrictHostKeyChecking=no` or it fails on the unknown hostkey.
 
 ## Shell quirks that have bitten
 
