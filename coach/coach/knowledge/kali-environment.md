@@ -39,6 +39,20 @@ the live probe — anything absent there is NOT installed, don't retry it):
   privesc needs a pager escape (`!/bin/sh`) or an editor (`:!/bin/sh`).
 - `sudo` over plain ssh dies with "a terminal is required" — check the
   sudoer context ONCE via `echo 'PASS' | sudo -S -l`, don't retry variants.
+- "Sorry, user X is not allowed to execute" = the account is simply not a
+  sudoer — that NEVER changes mid-quest. Stop feeding it passwords and
+  move the work to where you have rights (usually: pull the artifact to
+  Kali, operate there).
+- Scoped NOPASSWD sudo (`sudo -l` shows a pinned binary list) matches the
+  BINARY sudo execs: `sudo timeout 10 airodump-ng` execs "timeout" →
+  denied. Put the wrapper OUTSIDE: `timeout 60 sudo airodump-ng …`.
+  Same for pipes/redirects — `sudo tool > /root/x` writes as YOU; use
+  `sudo sh -c 'tool > /root/x'` only if sh itself is listed, else write
+  to your own dir and sudo-cp is still off-limits — prefer /tmp or your
+  home for tool output.
+- `apt install` needs the session INTERNET flag — in an isolated range
+  it always 404s. Before begging for net, inventory the box: the crack
+  you need usually exists under a different name (see wifi/pcap below).
 - Probes that can hang (ssh/nc/mysql to unverified hosts) burn a whole
   turn when they block the pane — prefix with `timeout 15`.
 - A remote password prompt typed via type_in_pane is time-critical:
@@ -169,3 +183,31 @@ the live probe — anything absent there is NOT installed, don't retry it):
   `..;/` / `..\\` traversal when the check anchors on the wrong segment.
 - Juice Shop specifics: `/ftp/quarantine/` lists `.url` bait files; the
   easter egg `eastere.gg` needs the identical `%2500.md` bypass.
+
+## Wifi & capture cracking
+
+- Capture where the radio is, crack where the tools are: airodump/deauth
+  needs the wireless interface on the AP-side host — but `aircrack-ng`,
+  `hashcat`, `john` and rockyou live on KALI. `scp` the .cap/.pcap back
+  (`-o StrictHostKeyChecking=no`) and crack locally; remote sudo for the
+  crack is the wrong end of the wire.
+- `.cap` → hashcat: `hcxpcapngtool -o hash.22000 file.cap` then
+  `hashcat -m 22000 hash.22000 wordlist`. On a CPU-only VM hashcat wants
+  `-D 1` (or errors with no devices). john path: `wpapcap2john file.cap`
+  then `john -w=wordlist out.john`.
+- WPA cracking only yields the PSK — flags usually hide one step further:
+  reuse the PSK against login surfaces (ssh users, admin panels) and read
+  proof files where the quest puts them.
+- Handshake capture without a client connected: `aireplay-ng --deauth`
+  forces a re-auth; keep `airodump-ng` bounded (`timeout 60 airodump-ng
+  -w out …`) or it fills the pane forever.
+
+## Agent-side tool discipline
+
+- `check_flag` / `submit_flag` / `update_plan` are ACTIONS — typing them
+  into the Kali pane returns `command not found` and burns a turn.
+- A denied action carries the reason in its text — change the thing it
+  names (run the script alone, re-read the mutated file) instead of
+  retrying the same shape with cosmetic edits.
+- `exec_in_kali` output is the only ground truth: submit only flag values
+  that literally appeared in output; invented values hard-deny.

@@ -124,6 +124,8 @@
       - impacket-scripts
       - evil-winrm
       - tshark            # forensics track: pcap triage (provides capinfos/editcap too)
+      - aircrack-ng       # wifi track: airodump/aireplay/aircrack suite
+      - hcxtools          # cap → hashcat 22000 conversion (hcxpcapngtool)
       # seclists is ~3-4 GB — intentional: every wordlist a quest hints at exists
     state: present
     update_cache: true
