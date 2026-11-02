@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from coach import facts as facts_mod
 from coach.loop import CHAT_DEBOUNCE_S, SessionCoach
 
 
@@ -907,6 +908,79 @@ async def test_update_plan_sets_plan_updated():
     await coach._dispatch({"type": "update_plan",
                            "items": [{"t": "next", "s": "doing"}]})
     assert coach.state.plan_updated > 0
+
+
+async def test_flag_solve_auto_marks_plan_steps():
+    """s65: 'doing: retrieve ftp flag' stayed open 40 actions AFTER the flag
+    was submitted — a solve retires its own roadmap steps."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.state.plan = [{"t": "Retrieve ftp flag from /ftp/flag1.txt", "s": "doing"},
+                        {"t": "Submit ftp flag value", "s": "todo"},
+                        {"t": "SQLi login bypass on /rest/user/login", "s": "todo"}]
+
+    async def submit(sid, value):
+        return {"correct": True, "flag_key": "ftp-flag", "all_solved": False}
+    c.submit_flag = submit
+    coach.facts.flags["pentrAIn{x}"] = facts_mod.FlagFact(seen=1)
+    _, result = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{x}"}, proactive=True)
+    plan = coach.state.plan
+    assert plan[0]["s"] == "done" and plan[1]["s"] == "done"
+    assert plan[2]["s"] == "todo"     # unrelated step stays open
+    assert "auto-marked" in result
+
+
+async def test_check_flag_solve_auto_marks_and_closes_on_all_solved():
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.state.plan = [{"t": "View admin section", "s": "doing"},
+                        {"t": "Loot leftovers", "s": "todo"}]
+
+    async def chk(sid, key):
+        return {"correct": True, "flag_key": key, "all_solved": True}
+    c.check_flag = chk
+    _, result = await coach._dispatch(
+        {"type": "check_flag", "flag_key": "admin-section-flag"}, proactive=True)
+    assert all(i["s"] == "done" for i in coach.state.plan)
+    assert "plan closed" in result
+
+
+async def test_stale_plan_reminder_rides_tool_results():
+    """The context-block 'stale' suffix is advisory — under exec pressure the
+    model never sees it (s65: 40+ actions on a dead plan). The reminder must
+    ride the channel it always reads: tool results."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.state.exec_count = 20
+    coach.state.plan = [{"t": "stuck step", "s": "doing"}]
+    coach.state.plan_updated = time.time() - 2000
+    _, result = await coach._dispatch({"type": "none", "reason": "thinking"})
+    assert "PLAN NOTE" in result and "update_plan" in result
+    # throttled — once per staleness window, not every action
+    _, result2 = await coach._dispatch({"type": "none", "reason": "again"})
+    assert "PLAN NOTE" not in result2
+
+
+async def test_missing_plan_reminder_after_real_work():
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.state.exec_count = 20
+    _, result = await coach._dispatch({"type": "none", "reason": "x"})
+    assert "no roadmap" in result
+
+
+async def test_identical_plan_resave_reports_unchanged():
+    """s64 spammed 3 identical plans in a row — an unchanged rewrite should
+    say so instead of 'saved' so the model stops re-sending it."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    items = [{"t": "step a", "s": "doing"}, {"t": "step b", "s": "todo"}]
+    _, r1 = await coach._dispatch({"type": "update_plan", "items": items})
+    _, r2 = await coach._dispatch({"type": "update_plan", "items": items})
+    assert "plan saved" in r1 and "unchanged" in r2
 
 
 async def test_context_trainee_framing_below_l4():

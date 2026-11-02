@@ -34,7 +34,14 @@ _DENIAL_FORM = re.compile(r"denied:(\w+)(?:-([\w.\-]+))?@(\S+)")
 from . import facts as facts_mod
 from .llm import LlmClient, LlmError
 from .policy import Policy
-from .prompts import build_context_msg, chat_prompt, plan_render, render_worker_prompt, system_prompt
+from .prompts import (
+    _PLAN_STALE_S,
+    build_context_msg,
+    chat_prompt,
+    plan_render,
+    render_worker_prompt,
+    system_prompt,
+)
 from .state import CheckpointMatcher, SessionState, normalize_plan
 from .tools import WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
 
@@ -144,6 +151,10 @@ class SessionCoach:
         # file read counts live in facts.files[path].reads — persisted via
         # the coach_outputs replay so the ≥3 re-read guard survives restarts
         self._submit_challenged: dict[str, int] = {}  # unverified submits
+        # last in-result plan reminder — the context-block "stale" suffix is
+        # advisory and got ignored for 40+ actions (s65); the tool RESULT is
+        # the channel the model always reads
+        self._plan_stale_ping = 0.0
         self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
         self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
         # per-worker in-turn reasoning — attached once to that worker's next
@@ -1266,7 +1277,61 @@ class SessionCoach:
                     except Exception as e:   # audit must never break a turn
                         await log.adebug("denial audit failed", error=str(e))
                 asyncio.create_task(_audit())
+        # plan maintenance in the guaranteed-read channel: a plan untouched
+        # >15min (or still absent after real work) means the agent lost its
+        # thread — the context-block suffix was ignored for 40+ actions on
+        # s65. Once per staleness window, parent turns only.
+        if (window is None and self.state.autonomy_level >= 4
+                and self.state.exec_count > 15
+                and time.time() - self._plan_stale_ping > _PLAN_STALE_S):
+            age = time.time() - getattr(self.state, "plan_updated", 0.0)
+            if not self.state.plan or age > _PLAN_STALE_S:
+                self._plan_stale_ping = time.time()
+                result += ("\nPLAN NOTE: " + (
+                    "no roadmap set — create one via update_plan "
+                    "(free action, keeps phases→steps straight)" if not
+                    self.state.plan else
+                    f"roadmap is {int(age / 60)}min stale — refresh via "
+                    "update_plan: mark done steps, break the current "
+                    "blocker into substeps (free action)"))
         return spoke, result
+
+    # tokens that say nothing about WHICH flag a step belongs to
+    _PLAN_GENERIC_TOKENS = frozenset({"flag", "flags", "submit", "check",
+                                      "get", "read", "run", "the", "and",
+                                      "via", "for", "from", "with", "into",
+                                      "all", "find", "loot"})
+
+    def _plan_mark_solved(self, flag_key: str) -> int:
+        """A solved flag retires its roadmap steps — matching on the key's
+        distinctive tokens ('ftp-flag' → 'ftp') keeps the checklist a live
+        scoreboard instead of a stale intention list (s65: 'doing' stayed
+        open 40 actions AFTER ftp-flag was submitted). Returns count marked."""
+        if not self.state.plan:
+            return 0
+        toks = {t for t in re.split(r"[^a-z0-9]+", (flag_key or "").lower())
+                if len(t) >= 3 and t not in self._PLAN_GENERIC_TOKENS}
+        closed = 0
+        for i in self.state.plan:
+            if i["s"] == "done":
+                continue
+            txt = i["t"].lower()
+            if any(t in txt for t in toks):
+                i["s"] = "done"
+                closed += 1
+        if closed:
+            self.state.plan_updated = time.time()
+        return closed
+
+    def _plan_close_all(self) -> int:
+        """all_solved → close every open step so the feed renders a finished
+        checklist rather than an abandoned one."""
+        closed = sum(1 for i in self.state.plan if i["s"] != "done")
+        for i in self.state.plan:
+            i["s"] = "done"
+        if closed:
+            self.state.plan_updated = time.time()
+        return closed
 
     async def _dispatch_inner(self, a: dict, *, proactive: bool = False,
                               window: str | None = None) -> tuple[bool, str]:
@@ -1712,8 +1777,13 @@ class SessionCoach:
                            else f"rejected ({res.get('error') or 'wrong value'})")
                 result = f"submit {val[:80]} → {verdict}"
                 text = f"Submitted flag `{val[:80]}` → **{verdict}**"
+                if res.get("correct"):
+                    marked = self._plan_mark_solved(res.get("flag_key") or "")
+                    if marked:
+                        result += f"; plan: {marked} step(s) auto-marked done"
                 if res.get("all_solved"):
-                    result += "; all_solved"
+                    self._plan_close_all()
+                    result += "; all_solved — plan closed"
                     text += " — all flags solved, quest complete"
                 await self.client.send_chat(self.sid, text, kind="action_report",
                                             meta=self._draft_meta())
@@ -1739,8 +1809,13 @@ class SessionCoach:
                            else f"not satisfied ({res.get('detail') or res.get('error') or 'check failed'})")
                 result = f"check {key} → {verdict}"
                 text = f"Ran server check for `{key}` → **{verdict}**"
+                if res.get("correct"):
+                    marked = self._plan_mark_solved(key)
+                    if marked:
+                        result += f"; plan: {marked} step(s) auto-marked done"
                 if res.get("all_solved"):
-                    result += "; all_solved"
+                    self._plan_close_all()
+                    result += "; all_solved — plan closed"
                     text += " — all flags solved, quest complete"
                 await self.client.send_chat(self.sid, text, kind="action_report",
                                             meta=self._draft_meta())
@@ -1863,13 +1938,16 @@ class SessionCoach:
             target = (self._workers[window].plan
                       if window and window in self._workers
                       else self.state.plan)
+            unchanged = items == target
             target.clear()
             target.extend(items)
             if not window:
                 self.state.plan_updated = time.time()
             open_n = sum(1 for i in items if i["s"] != "done")
-            result = (f"plan saved — {len(items)} steps "
-                      f"({open_n} open): "
+            verb = ("plan unchanged — no need to re-send identical plans; "
+                    "update when steps complete or the approach pivots"
+                    if unchanged else "plan saved")
+            result = (f"{verb} — {len(items)} steps ({open_n} open): "
                       + " | ".join(f"[{'x' if i['s'] == 'done' else '>' if i['s'] == 'doing' else ' '}] {i['t']}"
                                   for i in items)[:600])
             asyncio.create_task(self.client.log_action(
