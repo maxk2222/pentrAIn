@@ -68,8 +68,8 @@ docs/media/.venv/bin/python docs/media/capture.py seed \
 | Demo session | `POST /api/sessions` for `linux-t1-first-foothold`, waits for `ready`, activates |
 | Coach chat | Injects welcome/hint/suggestion/action-report messages via the coach service endpoints (`/api/coach/message|stream|suggest`) using `PENTRAIN_COACH_SERVICE_TOKEN` |
 | Flag submission | Reads expected secrets straight from the sqlite DB (`expected_flags` table — mock mode never writes into guests) and types them into the UI |
-| Screenshots | Full-page/viewport PNGs at 2× device scale |
-| GIFs | Viewport frames at ~5 fps, stitched with Pillow (`quantize(255)`, ~250 ms per frame) |
+| Screenshots | Full-page/viewport PNGs — 1920×1200 viewport at 2× device scale (3840×2400; `--width/--height/--scale`) |
+| GIFs | Same viewport at 1.5× scale (2880×1800; `--gif-scale`), frames at ~5 fps, stitched with Pillow (`quantize(255)`, ~250 ms per frame) |
 
 > [!NOTE]
 > The console area shows the MockProvider placeholder ("Mock engine — no real

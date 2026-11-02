@@ -192,7 +192,7 @@ def confirm_lazy(page: Page) -> None:
 
 def open_chat_panel(page: Page) -> None:
     """Expand the coach panel; confirm the assistance lazy-modal if shown."""
-    page.click('button[title="Coach panel"]')
+    page.click('button[title="Elliot panel"]')
     page.wait_for_timeout(400)
     confirm_lazy(page)
 
@@ -268,7 +268,7 @@ def cmd_shots(args, api: Api) -> None:
         browser = p.chromium.launch()
         ctx: BrowserContext = browser.new_context(
             viewport={"width": args.width, "height": args.height},
-            device_scale_factor=2, color_scheme="dark")
+            device_scale_factor=args.scale, color_scheme="dark")
         page = ctx.new_page()
         dismiss_confirm(page)
 
@@ -355,8 +355,9 @@ def gif_quest_start(args, api: Api) -> None:
     out = ASSETS / "gifs"
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800},
-                                  color_scheme="dark")
+        ctx = browser.new_context(
+            viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.gif_scale, color_scheme="dark")
         page = ctx.new_page()
         dismiss_confirm(page)
         rec = Recorder(page)
@@ -387,8 +388,9 @@ def gif_coach_chat(args, api: Api) -> None:
     api.coach_msg(sid, COACH_WELCOME)
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800},
-                                  color_scheme="dark")
+        ctx = browser.new_context(
+            viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.gif_scale, color_scheme="dark")
         page = ctx.new_page()
         dismiss_confirm(page)
         rec = Recorder(page)
@@ -435,8 +437,9 @@ def gif_flag_solve(args, api: Api) -> None:
         raise RuntimeError("need 2 expected flags — seed the session first")
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800},
-                                  color_scheme="dark")
+        ctx = browser.new_context(
+            viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.gif_scale, color_scheme="dark")
         page = ctx.new_page()
         dismiss_confirm(page)
         rec = Recorder(page)
@@ -466,8 +469,9 @@ def gif_panels(args, api: Api) -> None:
     sid = _ready_session(api)
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800},
-                                  color_scheme="dark")
+        ctx = browser.new_context(
+            viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.gif_scale, color_scheme="dark")
         page = ctx.new_page()
         dismiss_confirm(page)
         rec = Recorder(page)
@@ -494,8 +498,9 @@ def gif_internet(args, api: Api) -> None:
     sid = _ready_session(api)
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 1280, "height": 800},
-                                  color_scheme="dark")
+        ctx = browser.new_context(
+            viewport={"width": args.width, "height": args.height},
+            device_scale_factor=args.gif_scale, color_scheme="dark")
         page = ctx.new_page()
         dismiss_confirm(page)
         rec = Recorder(page)
@@ -554,8 +559,10 @@ def main() -> None:
     ap.add_argument("--password", default="pentrain-docs")
     ap.add_argument("--coach-token", default="docs-coach-token")
     ap.add_argument("--db", default="/tmp/pentrain-docs.db")
-    ap.add_argument("--width", type=int, default=1600)
-    ap.add_argument("--height", type=int, default=1000)
+    ap.add_argument("--width", type=int, default=1920)
+    ap.add_argument("--height", type=int, default=1200)
+    ap.add_argument("--scale", type=float, default=2)
+    ap.add_argument("--gif-scale", type=float, default=1.5)
     args = ap.parse_args()
 
     api = Api(args.api, args.password, args.coach_token)
