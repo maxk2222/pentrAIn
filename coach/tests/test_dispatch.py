@@ -177,12 +177,12 @@ async def test_denial_match_blocks_retry():
         "unreachable:172.20.1.2@shop01",
     ]
     # same svc + user + pivot → blocked before typing
-    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "sshpass -p 'x' ssh deploy@shop01 'mysql -h 172.20.1.3 -u root -pY'"})
     assert res.startswith("denied: prior evidence")
     assert not c.execs
     # bare sudo on the same pivot → blocked
-    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "sshpass -p 'x' ssh deploy@shop01 'sudo docker ps'"})
     assert "denied" in res and not c.execs
     # unreachable target via the same vantage → blocked
