@@ -1730,7 +1730,7 @@ class SessionCoach:
                     # was wrong; only the check knew)
                     self.facts.checkfail_seq += 1
                 verdict = ("verified — flag solved" if res.get("correct")
-                           else f"not satisfied ({res.get('error') or 'check failed'})")
+                           else f"not satisfied ({res.get('detail') or res.get('error') or 'check failed'})")
                 result = f"check {key} → {verdict}"
                 text = f"Ran server check for `{key}` → **{verdict}**"
                 if res.get("all_solved"):

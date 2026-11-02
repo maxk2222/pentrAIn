@@ -287,6 +287,35 @@ async def test_check_flag_rejects_noncommand_flag(db_with_packs):
     await _abort_done(db, s.id)
 
 
+async def test_command_flag_detail_names_failed_condition(db_with_packs):
+    """s54 burned ~40min on 'correct:false' with no idea WHICH grep missed —
+    a failed compound check reports the failing && segment index now."""
+    from app.services import engine as engine_svc
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    await sessions_svc.activate(db, s.id)
+    engine = await engine_svc.get_engine(db)
+    flag = Flag(quest_id=s.quest_id, key="rep", name="r", kind="command",
+                points=10, command_spec={
+                    "vm": "kali",
+                    "cmd": "grep -q NGINX /r.txt && grep -q ATTACKER=1 /r.txt && grep -q vault /r.txt"})
+    db.add(flag)
+    await db.commit()
+    real = engine.pve.agent_exec_sh
+
+    async def flaky(vmid, cmd, **kw):
+        if "ATTACKER" in cmd:
+            return {"out": "", "err": "", "exitcode": 1}
+        return await real(vmid, cmd, **kw)
+
+    engine.pve.agent_exec_sh = flaky
+    res = await flags_svc.check_and_record_flag(db, engine, s, "rep")
+    assert not res["correct"]
+    assert res["detail"] == "condition 2 of 3 failed"
+    await _abort_done(db, s.id)
+
+
 async def test_soft_reset_regenerates_secrets(db_with_packs):
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")

@@ -109,6 +109,7 @@ class FlagSubmitOut(BaseModel):
     all_solved: bool
     solved: list[str]
     total: int
+    detail: str | None = None   # e.g. "condition 2 of 3 failed"
 
 
 class HintUseIn(BaseModel):

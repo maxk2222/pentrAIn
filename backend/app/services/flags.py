@@ -154,6 +154,9 @@ async def check_and_record_flag(db: AsyncSession, engine, session: Session, flag
                 "all_solved": False, "solved": [], "total": 0,
                 "error": "not a command flag"}
     ok = await check_command_flag(db, engine, session, flag)
+    detail = None
+    if not ok:
+        detail = await _command_flag_detail(engine, session, flag)
     if ok:
         expected = (await db.execute(
             select(ExpectedFlag).where(
@@ -170,9 +173,42 @@ async def check_and_record_flag(db: AsyncSession, engine, session: Session, flag
                 FlagSubmission.session_id == session.id,
                 FlagSubmission.correct.is_(True)))).scalars().all()}
     all_solved = bool(flags) and all(f.key in solved_keys for f in flags)
-    return {"correct": ok, "flag_key": flag_key if ok else None,
-            "points": flag.points if ok else 0, "all_solved": all_solved,
-            "solved": sorted(solved_keys), "total": len(flags)}
+    res = {"correct": ok, "flag_key": flag_key if ok else None,
+           "points": flag.points if ok else 0, "all_solved": all_solved,
+           "solved": sorted(solved_keys), "total": len(flags)}
+    if detail:
+        res["detail"] = detail
+    return res
+
+
+async def _command_flag_detail(engine, session: Session, flag: Flag) -> str | None:
+    """Failure diagnostics for compound `a && b && c` checks: run each
+    segment alone and report WHICH failed — 'condition 2 of 3' focuses the
+    trainee without leaking expected values (s54: the agent burned ~40min
+    on 'correct:false' with no idea which grep missed)."""
+    spec = flag.command_spec or {}
+    cmd = spec.get("cmd") or ""
+    vmid = _flag_vmid(session, spec.get("vm", ""))
+    if not vmid or " && " not in cmd or spec.get("expect") is not None:
+        return None
+    parts = [p.strip() for p in cmd.split(" && ") if p.strip()]
+    if len(parts) < 2:
+        return None
+    if spec.get("container"):
+        parts = [f"docker exec {spec['container']} /bin/sh -c {_shq(p)}"
+                 for p in parts]
+    failed = []
+    for i, part in enumerate(parts):
+        try:
+            res = await engine.pve.agent_exec_sh(vmid, part)
+            if res.get("exitcode") != 0:
+                failed.append(i + 1)
+        except Exception:
+            failed.append(i + 1)
+    if not failed or len(failed) == len(parts):
+        return None
+    nums = ",".join(str(n) for n in failed)
+    return f"condition {nums} of {len(parts)} failed"
 
 
 def _shq(s: str) -> str:
