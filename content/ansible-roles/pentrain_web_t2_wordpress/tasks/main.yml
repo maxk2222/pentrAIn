@@ -62,10 +62,18 @@
 
 # the cli container must share the wordpress container's /var/www/html —
 # wp-config.php lives in that volume; without --volumes-from wp-cli sees an
-# empty docroot and 'wp core install' dies silently
+# empty docroot and 'wp core install' dies silently. It ALSO needs the
+# WORDPRESS_DB_* env — wp-config.php resolves getenv_docker() at runtime,
+# --volumes-from shares files, not env: without -e the cli falls back to
+# the 'mysql' hostname and the db connect fails.
 - name: install wordpress — admin / passw0rd (the weak-cred lesson)
   ansible.builtin.command: >-
-    docker run --rm --network wp-net --volumes-from wordpress wordpress:cli
+    docker run --rm --network wp-net --volumes-from wordpress
+    -e WORDPRESS_DB_HOST=wp-mysql
+    -e WORDPRESS_DB_NAME=wordpress
+    -e WORDPRESS_DB_USER=wp
+    -e WORDPRESS_DB_PASSWORD=WpDb!2024
+    wordpress:cli
     wp core install --allow-root
     --url=http://{{ ansible_default_ipv4.address }}
     --title='Corp Intranet'
@@ -92,7 +100,12 @@
 
 - name: activate labtheme
   ansible.builtin.command: >-
-    docker run --rm --network wp-net --volumes-from wordpress wordpress:cli
+    docker run --rm --network wp-net --volumes-from wordpress
+    -e WORDPRESS_DB_HOST=wp-mysql
+    -e WORDPRESS_DB_NAME=wordpress
+    -e WORDPRESS_DB_USER=wp
+    -e WORDPRESS_DB_PASSWORD=WpDb!2024
+    wordpress:cli
     wp theme activate labtheme --allow-root
   register: theme
   changed_when: "'Success' in (theme.stdout | default(''))"
