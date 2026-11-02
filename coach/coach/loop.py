@@ -1387,7 +1387,9 @@ class SessionCoach:
                         # `python3 -u <path>` for a cron script is a dead end
                         external = any(path in c for c in self.facts.caps)
                         if (not external and n >= 2
-                                and (last is None or last == 0)):
+                                and (last is None or last == 0)
+                                and (ff is None or self.facts.checkfail_seq
+                                     <= ff.write_check_seq)):
                             why = ("ran without error" if last == 0
                                    else "was never executed")
                             await log.ainfo("rewrite denied", session=self.sid,
@@ -1396,7 +1398,7 @@ class SessionCoach:
                                 f"denied: {path} was already written {n}x and "
                                 f"{why} — RUN it now (python3 -u {path}). "
                                 f"Another rewrite is only useful after a "
-                                f"failed run.")
+                                f"failed run or check.")
                     # read-loop guard: re-reading the same file produces
                     # identical output — settled facts the model keeps
                     # re-deriving (seen live: 6x `cat nmap.txt | grep …`
@@ -1720,6 +1722,12 @@ class SessionCoach:
                 await self.client.send_activity(self.sid, f"verifying `{key}`…",
                                                 agent=window or "main")
                 res = await self.client.check_flag(self.sid, key)
+                if not res.get("correct"):
+                    # a failed check is fresh evidence — rewrites of the
+                    # deliverable producer are informed iteration, not
+                    # 'perfecting' (s54: report.sh ran clean but its output
+                    # was wrong; only the check knew)
+                    self.facts.checkfail_seq += 1
                 verdict = ("verified — flag solved" if res.get("correct")
                            else f"not satisfied ({res.get('error') or 'check failed'})")
                 result = f"check {key} → {verdict}"

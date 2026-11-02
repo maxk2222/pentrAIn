@@ -178,6 +178,10 @@ class FileFact:
     # mutation_seq snapshot when `reads` was last reset — a file re-read
     # after any confirmed write/run is FRESH content, not a settled loop
     read_seq: int = -1
+    # checkfail_seq snapshot at the last confirmed write — a rewrite after a
+    # NEWLY failed check is informed iteration, not 'perfecting' (s54: the
+    # script ran clean but its OUTPUT was wrong; only check_flag knew)
+    write_check_seq: int = -1
     last_exit: int | None = None
 
 
@@ -234,6 +238,7 @@ class FactsDB:
         self._pending: tuple[str, str, float] | None = None  # (path, kind, ts)
         self._seen_cmds: set[str] = set()   # dedup: replay + live overlap
         self.mutation_seq = 0             # bumps on every confirmed write/run
+        self.checkfail_seq = 0            # bumps on every failed check_flag
 
     def _count_read(self, cmd: str, rt: str) -> FileFact:
         """Read bookkeeping with freshness reset: when the fs mutation counter
@@ -344,6 +349,7 @@ class FactsDB:
             self.mutation_seq += 1
         elif code == 0 and f.writes < f.attempts:
             f.writes += 1
+            f.write_check_seq = self.checkfail_seq
             self.mutation_seq += 1
 
     def observe_output(self, cmd: str, out: str, code: int | None) -> None:
@@ -365,6 +371,7 @@ class FactsDB:
                             key, FileFact(path=key, kind=_kind(path)))
                         f.attempts += 1
                         f.writes += 1
+                        f.write_check_seq = self.checkfail_seq
                         self.mutation_seq += 1
                 if tgt := _run_target(cmd):
                     key = file_key(cmd, tgt)
