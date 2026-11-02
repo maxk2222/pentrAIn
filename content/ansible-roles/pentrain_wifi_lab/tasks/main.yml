@@ -20,6 +20,7 @@
       - hashcat
       - kmod
       - rfkill
+      - openssl             # t2-exam encrypts its backup; minimal debian lacks it
       - sshpass
       - openssh-server
     state: present
