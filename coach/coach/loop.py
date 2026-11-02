@@ -1781,12 +1781,13 @@ class SessionCoach:
                 {"items": items, "agent": window or "main"},
                 {"open": open_n}))
             rep = (f"{'[' + window + '] ' if window else ''}"
-                   f"**Plan:** {open_n} open / {len(items)} steps\n"
-                   + "\n".join(
-                       f"- {'~~' + i['t'] + '~~' if i['s'] == 'done' else ('**' + i['t'] + '** ←' if i['s'] == 'doing' else i['t'])}"
-                       for i in items)[:900])
-            await self.client.send_chat(self.sid, rep, kind="action_report",
-                                        meta=self._msg_meta(window))
+                   f"**Plan:** {open_n} open / {len(items)} steps")
+            # the structured items ride in meta — the feed renders a real
+            # checklist card instead of markdown bullet soup
+            meta = {**self._msg_meta(window), "plan": items,
+                    "open": open_n}
+            await self.client.send_chat(self.sid, rep, kind="plan_update",
+                                        meta=meta)
             self._record_reply(rep)
             spoke = True
         # "none" or unknown → silence (reason captured above as working memory)

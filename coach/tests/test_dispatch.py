@@ -296,13 +296,11 @@ async def test_update_plan_stores_normalizes_and_reports():
     await asyncio.sleep(0)
     assert any(l["tool"] == "update_plan" and l["args"]["agent"] == "main"
                for l in c.logged)
-    card = next(k for k in c.chats if k["kind"] == "action_report"
-                and "Plan" in k["content"])
+    card = next(k for k in c.chats if k["kind"] == "plan_update")
     assert "2 open / 3 steps" in card["content"]
-    # the actual items are visible in the feed, not just the count
-    assert "~~loot creds from tarball~~" in card["content"]   # done → struck
-    assert "**mysql LOAD_FILE via shop_ro** ←" in card["content"]  # doing
-    assert "- read /root flags" in card["content"]
+    # structured items ride in meta — the feed renders a checklist card
+    assert card["meta"]["plan"] == coach.state.plan
+    assert card["meta"]["open"] == 2
 
 
 async def test_update_plan_all_levels_and_atomic_replace():

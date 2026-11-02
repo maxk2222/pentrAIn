@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Bot, Lightbulb, Loader2, Pause, Play, Radio, Terminal, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, CheckCircle2, ChevronRight, Circle, Lightbulb, ListTodo, Loader2, Pause, Play, Radio, Terminal, User, X } from "lucide-react";
 import { api, type ChatMessage, type WsEvent } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { MarkdownView } from "@/components/markdown";
@@ -751,9 +751,54 @@ function AgentChip({ label, title, status, selected, working, unseen, onClick }:
 const KIND_STYLE: Record<string, { label: string; cls: string; iconCls: string }> = {
   suggestion: { label: "suggested command", cls: "border border-accent/40 bg-accent/10", iconCls: "bg-accent/15 text-accent" },
   action_report: { label: "elliot action", cls: "border border-warning/40 bg-warning/10", iconCls: "bg-warning/15 text-warning" },
+  plan_update: { label: "elliot plan", cls: "border border-primary/30 bg-primary/5", iconCls: "bg-primary/15 text-primary" },
   hint: { label: "hint", cls: "border border-accent/40 bg-accent/5", iconCls: "bg-accent/15 text-accent" },
   nudge: { label: "", cls: "bg-surface-2", iconCls: "bg-primary/20 text-primary" },
 };
+
+interface PlanItem { t: string; s?: string; }
+
+function PlanCard({ items, agent }: { items: PlanItem[]; agent?: string }) {
+  const done = items.filter((i) => i.s === "done").length;
+  const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+  return (
+    <div className="mt-1 overflow-hidden rounded-md border border-border/60 bg-black/25">
+      <div className="flex items-center gap-2 border-b border-border/50 px-2.5 py-1.5">
+        <ListTodo className="h-3.5 w-3.5 text-primary" />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">plan</span>
+        {agent && agent !== "main" && (
+          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-accent">
+            {agent}
+          </span>
+        )}
+        <span className="ml-auto text-[10px] font-medium tabular-nums text-muted">
+          {done}/{items.length}
+        </span>
+        <div className="h-1 w-14 overflow-hidden rounded-full bg-surface-2">
+          <div className="h-full rounded-full bg-success transition-all duration-300"
+            style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      <ul className="space-y-1 px-2.5 py-2">
+        {items.map((i, k) => (
+          <li key={k} className="flex items-start gap-2 text-xs leading-snug">
+            {i.s === "done"
+              ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+              : i.s === "doing"
+                ? <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-pulse text-warning" />
+                : <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted/60" />}
+            <span className={
+              i.s === "done" ? "text-muted line-through opacity-60"
+                : i.s === "doing" ? "font-medium text-foreground"
+                : "text-muted"}>
+              {i.t}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 // memoized — a new WS event would otherwise re-parse every message's markdown
 const Message = memo(function Message({ m, onConfirm, onSelectAgent }: {
@@ -787,6 +832,8 @@ const Message = memo(function Message({ m, onConfirm, onSelectAgent }: {
         isCoach ? (style.iconCls || "bg-primary/20 text-primary") : "bg-surface-2 text-muted")}>
         {isCoach
           ? (m.kind === "hint" ? <Lightbulb className="h-3.5 w-3.5" />
+            : m.kind === "plan_update"
+              ? <ListTodo className="h-3.5 w-3.5" />
             : m.kind === "suggestion" || m.kind === "action_report"
               ? <Terminal className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />)
           : <User className="h-3.5 w-3.5" />}
@@ -802,7 +849,10 @@ const Message = memo(function Message({ m, onConfirm, onSelectAgent }: {
         {typeof m.meta?.reasoning === "string" && m.meta.reasoning && (
           <ThinkingBlock text={m.meta.reasoning} />
         )}
-        <MarkdownView>{m.content}</MarkdownView>
+        {Array.isArray(m.meta?.plan)
+          ? <PlanCard items={m.meta.plan as PlanItem[]}
+              agent={m.meta.agent as string | undefined} />
+          : <MarkdownView>{m.content}</MarkdownView>}
         {typeof suggestion?.command === "string" && (
           <div className="mt-2 rounded bg-black/40 p-2 font-mono text-xs text-accent whitespace-pre-wrap break-all">
             $ {suggestion.command}
