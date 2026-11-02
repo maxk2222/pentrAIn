@@ -43,9 +43,12 @@ class FakeClient:
         return {}
 
 
-def _coach(autonomy: int, action_budget: int = 50) -> tuple[SessionCoach, FakeClient]:
+def _coach(autonomy: int, action_budget: int = 50,
+           action_grace: int = 10) -> tuple[SessionCoach, FakeClient]:
     c = FakeClient()
-    coach = SessionCoach(1, c, {"coach": {"action_budget": action_budget, "nudge_after_s": 60,
+    coach = SessionCoach(1, c, {"coach": {"action_budget": action_budget,
+                                          "action_grace": action_grace,
+                                          "nudge_after_s": 60,
                                           "hint_after_s": 120}})
     coach.state.autonomy_level = autonomy
     coach.state.state = "active"
@@ -114,12 +117,33 @@ async def test_timed_out_exec_reports_partial_output():
 
 
 async def test_takeover_budget_cap():
-    coach, c = _coach(autonomy=4, action_budget=2)
+    coach, c = _coach(autonomy=4, action_budget=2, action_grace=0)
     await coach._dispatch({"type": "exec_in_kali", "command": "a"})
     await coach._dispatch({"type": "exec_in_kali", "command": "b"})
     ok, res = await coach._dispatch({"type": "exec_in_kali", "command": "c"})
     assert not ok and "budget" in res and c.execs == ["a", "b"]
-    assert any("budget" in m["content"] for m in c.chats)
+
+
+async def test_budget_grace_window():
+    """s46: a hard stop froze the agent mid-flag-chain. Over-budget execs
+    run inside a labelled grace window, then the wall still stands."""
+    coach, c = _coach(autonomy=4, action_budget=1, action_grace=2)
+    await coach._dispatch({"type": "exec_in_kali", "command": "a"})
+    # 1st grace exec — allowed, labelled, operator got the one-shot note
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command": "b"})
+    assert ok and c.execs[-1] == "b"
+    assert res.startswith("GRACE 1/2")
+    notes = [m for m in c.chats if m["kind"] == "nudge"
+             and "grace window" in m["content"]]
+    assert len(notes) == 1
+    # 2nd grace exec — still allowed, note NOT repeated
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command": "c2"})
+    assert ok and res.startswith("GRACE 2/2")
+    assert len([m for m in c.chats if m["kind"] == "nudge"
+                and "grace window" in m["content"]]) == 1
+    # grace exhausted — hard wall
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command": "d"})
+    assert not ok and "grace" in res and "action_budget" in res
 
 
 async def test_telemetry_event_feeds_state():

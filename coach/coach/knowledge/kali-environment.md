@@ -33,6 +33,10 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - `ssh host 'cmd'` has NO TTY — remote pagers (journalctl, less, man) and
   vim dump-and-exit instead of opening. Use `ssh -tt` when a sudo-NOPASSWD
   privesc needs a pager escape (`!/bin/sh`) or an editor (`:!/bin/sh`).
+- `sudo` over plain ssh dies with "a terminal is required" — check the
+  sudoer context ONCE via `echo 'PASS' | sudo -S -l`, don't retry variants.
+- Probes that can hang (ssh/nc/mysql to unverified hosts) burn a whole
+  turn when they block the pane — prefix with `timeout 15`.
 - A remote password prompt typed via type_in_pane is time-critical:
   sshd LoginGraceTime (~120s) kills the connection. Answer immediately,
   never queue other actions first.
@@ -90,6 +94,11 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - Group-writable script executed by root cron/timer → append a payload
   line (e.g. `cp /root/flag.txt /tmp/x; chmod 644 /tmp/x`), use the
   `wait` tool for the interval, then check the output file ONCE.
+- `caps:` in FACTS = primitives you already PROVED (root-exec via file,
+  mysql FILE priv, valid creds). For every remaining objective check caps
+  FIRST — reusing a proven primitive beats deriving a new vector. The
+  cron you already hijacked can `docker cp`, `cp /root/*`, or drop
+  anything else you still need.
 
 ## Containerized targets
 

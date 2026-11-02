@@ -270,6 +270,55 @@ def test_read_target_ignores_url_paths():
     assert not any(p.startswith("/172.20.1.2") for p in f.files)
 
 
+def test_read_target_ignores_redirects_and_cd_prefix():
+    """s46: `2>/dev/null` was counted 11x as a read (it out-lengthed real
+    paths) and `cd /tmp && …|head` counted /tmp. A path only counts when
+    it sits in the same segment as the read command."""
+    from coach.facts import read_target
+    assert read_target("cat /tmp/x 2>/dev/null") == "/tmp/x"
+    assert read_target("ls /tmp 2>/dev/null") == "/tmp"          # real read
+    assert read_target("cd /tmp && find x -type f | head -20") is None
+    assert read_target("ls /var 2>/dev/null | head") == "/var"
+    # pipe targets of a second read-command DO count (grep reads /b)
+    assert read_target("cat /a | grep p /b") in ("/a", "/b")
+    assert read_target("cat /f 2>&1 | head -5") == "/f"
+    # writes still excluded
+    assert read_target("cat > /tmp/out.txt") is None
+    assert read_target("echo hi > /dev/null") is None
+    # unchanged single-segment behaviour
+    assert read_target("cat /etc/passwd") == "/etc/passwd"
+
+
+def test_caps_promotion_and_render():
+    """A root-cron path only becomes a cap once the file carries OUR write —
+    seeing a schedule ≠ having proven code-exec."""
+    from coach.facts import FactsDB
+    f = FactsDB()
+    # schedule discovered but never written → no cap
+    f.observe_output("ssh u@h 'cat /etc/cron.d/shop-backup'",
+                     "*/2 * * * * root /opt/shop/backup.sh", 0)
+    assert not f.caps
+    # we write a payload into that file, then see the schedule again → cap
+    f.observe_output("ssh u@h \"echo 'cp /root/flag /tmp/x' >> "
+                     "/opt/shop/backup.sh\"", "", 0)
+    f.observe_output("ssh u@h 'cat /etc/cron.d/shop-backup'",
+                     "*/2 * * * * root /opt/shop/backup.sh", 0)
+    assert "root-exec via /opt/shop/backup.sh@h" in f.caps
+    # caps render even in compact mode (highest-value line)
+    out = f.render(max_chars=200)
+    assert "caps:" in out and "root-exec" in out
+
+
+def test_caps_direct_and_bound():
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.apply_delta({"caps": ["mysql-file:shop_ro", "root-shell@shop01",
+                            "mysql-file:shop_ro"]})
+    assert f.caps == ["mysql-file:shop_ro", "root-shell@shop01"]  # dedup
+    f.apply_delta({"caps": [f"c{i}" for i in range(8)]})
+    assert len(f.caps) <= 6                                       # bounded
+
+
 def test_normalize_plan_edges():
     from coach.state import normalize_plan
     # bare strings → todo; status aliases; caps

@@ -86,6 +86,40 @@ _ACCESS_DENIED_USER = re.compile(
 _AUTH_FAIL = re.compile(
     r"Authentication failed|Permission denied \(publickey|"
     r"Logon failure|Login failed", re.I)
+# retryable friction, not a dead end — lands as a hint, never `denied:`.
+# s46 spent 4 execs on `sudo` over ssh before finding `sudo -S`.
+_TTY_REQ = re.compile(
+    r"a terminal is required|sudo: no tty|sudo: unable to allocate pty", re.I)
+
+# proven-primitive detectors → `caps:` facts. Distinct from `creds.valid_on`
+# (access) — caps are *capabilities* the model must reuse for later objectives
+# instead of re-deriving them from history (s46: root-cron was proven at
+# 22:18, reused for flag-4 only at 23:24).
+# `id` with an explicit user arg also prints uid=0 — not a shell capability.
+_UID0 = re.compile(r"uid=0\b")
+_ID_USER_ARG = re.compile(r"\bid\s+[\w.\-]+\s*['\"]?$")
+# GRANT … FILE ON db.* TO 'user'@'%' → mysql-file capability bound to the
+# cred — two patterns: a lazy optional tail lets the engine skip the user
+_GRANT_FILE = re.compile(r"GRANT\b[^\n]*?\bFILE\b", re.I)
+_GRANT_FILE_TO = re.compile(
+    r"GRANT\b[^\n]*?\bFILE\b[^\n]*?\bTO\s+'?([\w.\-]+)'?", re.I)
+# crontab line `*/2 * * * * root /path` — emitted as a PROMOTION CANDIDATE:
+# facts only grants the cap once the file carries a proven write (w:)
+_CRON_ROOT = re.compile(
+    r"^\s*[\d*/,\-]+\s+[\d*/,\-]+\s+[\d*/,\-]+\s+[\d*/,\-]+\s+[\d*/,\-]+"
+    r"\s+root\s+(/\S+)", re.M)
+
+
+def _p_caps(cmd: str, out: str, d: dict) -> None:
+    h = _denial_host(cmd)
+    if _UID0.search(out) and not _ID_USER_ARG.search(cmd or ""):
+        d["caps"].append(f"root-shell@{h}")
+    for m in _GRANT_FILE_TO.finditer(out):
+        d["caps"].append(f"mysql-file:{m.group(1)}")
+    if _GRANT_FILE.search(out) and not _GRANT_FILE_TO.search(out):
+        d["caps"].append("mysql-file")
+    for m in _CRON_ROOT.finditer(out):
+        d["cap_cron"].append(f"{m.group(1)}@{h}")
 _SSH_TARGET = re.compile(r"([\w.\-]+)@([\w.\-]+)")
 _MYSQL_H = re.compile(r"\bmysql\b[^\n]*?-h\s*['\"]?(\S+)")
 _SVC_BINARIES = (
@@ -125,6 +159,9 @@ def _p_denials(cmd: str, out: str, d: dict) -> None:
         d["denials"].append(f"denied:{svc}-{m.group(1)}@{h}")
     if _AUTH_FAIL.search(out):
         d["denials"].append(f"denied:{svc}-auth@{h}")
+    if _TTY_REQ.search(out) and "sudo" in (cmd or ""):
+        d["findings"].append(
+            "hint:sudo needs a pipe — echo $PASS | sudo -S -l")
 
 
 def _p_nmap(out: str, d: dict) -> None:
@@ -215,7 +252,7 @@ def _tool_token(cmd: str) -> str:
 def parse_output(cmd: str, out: str) -> dict:
     """Raw output → facts delta. Never raises: garbage in, empty delta out."""
     d: dict = {"ips": set(), "names": {}, "ports": {}, "creds": [],
-               "findings": [], "denials": []}
+               "findings": [], "denials": [], "caps": [], "cap_cron": []}
     try:
         # an IP in the command line is intent, not discovery — its own error
         # output ("Failed to connect to 10.42.0.5") must not retroactively
@@ -229,6 +266,7 @@ def parse_output(cmd: str, out: str) -> dict:
             parser(out or "", d)
         _p_generic(out or "", d)
         _p_denials(cmd, out or "", d)
+        _p_caps(cmd, out or "", d)
         # dedup creds — a tool parser (hydra host+login) and the generic pair
         # regex can hit the same line; keep the entry carrying a host
         seen: dict[tuple, dict] = {}

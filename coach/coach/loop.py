@@ -320,6 +320,9 @@ class SessionCoach:
         # restarts via coach_actions — without this the model re-derives
         # its multi-step plan from scattered evidence after every restart
         self.state.plan = normalize_plan(self.ctx.get("plan") or [])
+        # a restart doesn't make the plan stale — the staleness nudge only
+        # fires when the MODEL hasn't refreshed in-session for a while
+        self.state.plan_updated = time.time()
         self.state.notes = [str(n)[:300]
                             for n in self.ctx.get("coach_notes") or []][-8:]
         # stuck/idle clocks seed from the most RECENT liveness signal —
@@ -1272,12 +1275,30 @@ class SessionCoach:
                 result = f"denied: autonomy level {level} < 4"
             else:
                 budget = int(self.cfg.get("coach", {}).get("action_budget", 50))
-                if self.state.exec_count >= budget:
-                    await self.client.send_chat(
-                        self.sid, "Coach action budget reached — manual takeover disabled this session.",
-                        kind="nudge")
-                    result = "denied: action budget reached"
+                grace = int(self.cfg.get("coach", {}).get("action_grace", 10))
+                grace_note = ""
+                n_over = self.state.exec_count - budget
+                if n_over >= grace:
+                    result = ("denied: action budget exhausted (incl. "
+                              f"{grace} grace) — raise coach.action_budget "
+                              "in Settings to continue")
                 else:
+                    if n_over >= 0:
+                        # soft-cap: finish what is open, don't start new
+                        # exploration lines (s46 froze mid-flag-4-chain)
+                        if not self.state._grace_noted:
+                            self.state._grace_noted = True
+                            await self.client.send_chat(
+                                self.sid,
+                                "Coach action budget reached — grace window "
+                                f"({grace} execs) to finish pending chains. "
+                                "Raise coach.action_budget to continue.",
+                                kind="nudge")
+                        grace_note = (
+                            f"GRACE {n_over + 1}/{grace}: budget exceeded — "
+                            "finish pending chains (read pending loot, "
+                            "submit flags, write report); no new "
+                            "exploration.\n")
                     cmd = (a.get("command") or a.get("content", "")).strip()
                     if not cmd:
                         return spoke, "error: empty command"
@@ -1430,6 +1451,12 @@ class SessionCoach:
                                 f"interrupt with exec_in_kali 'C-c', or if a "
                                 f"prompt waits for input (password/menu) "
                                 f"answer it via type_in_pane NOW.")
+                        else:
+                            result += (
+                                "\nNOTE: pane busy — interrupt with 'C-c', or "
+                                "prefix possibly-hanging remote cmds "
+                                "(ssh/nc/mysql to unverified hosts) with "
+                                "'timeout 15'")
                     elif code is not None:
                         self._busy_bounces[window or "main"] = 0
                     if typed and code == 0 and out.strip():
@@ -1470,6 +1497,8 @@ class SessionCoach:
                                                 meta=self._msg_meta(window))
                     self._record_reply(text)
                     spoke = True
+                    if grace_note:
+                        result = grace_note + result
         elif t == "type_in_pane":
             if level < 4:
                 result = f"denied: autonomy level {level} < 4"
@@ -1693,6 +1722,8 @@ class SessionCoach:
                       else self.state.plan)
             target.clear()
             target.extend(items)
+            if not window:
+                self.state.plan_updated = time.time()
             open_n = sum(1 for i in items if i["s"] != "done")
             result = (f"plan saved — {len(items)} steps "
                       f"({open_n} open): "

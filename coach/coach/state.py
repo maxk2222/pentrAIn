@@ -72,6 +72,8 @@ class SessionState:
     # says what IS, the plan says what COMES NEXT. Persisted via
     # log_action so it survives restarts; workers keep their own on _Worker
     plan: list[dict] = field(default_factory=list)
+    plan_updated: float = 0.0          # ts of last update_plan — staleness nudge
+    _grace_noted: bool = False         # one-shot: operator told budget hit grace
     # rolling summary — what trim_history dropped, distilled to one line per
     # item so long-horizon runs keep a trace of their early turns
     earlier: list[str] = field(default_factory=list)

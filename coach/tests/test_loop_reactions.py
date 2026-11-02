@@ -834,6 +834,68 @@ async def test_context_recon_saturation_at_l4():
     assert "RECON_SATURATED" not in msg
 
 
+async def test_context_plan_staleness_nudge():
+    """L4 + real work + missing/stale plan → the context must push
+    update_plan (costs no exec budget). Below L4 or early turns: silent."""
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    coach.ctx["session"]["autonomy_level"] = 4
+    st = coach.state
+    st.exec_count = 20
+    # empty plan → nudge line
+    msg = build_context_msg(coach.ctx, st, "x", stage=1)
+    assert "PLAN: none — set one via update_plan" in msg
+    # fresh plan → normal render, no stale marker
+    st.plan = [{"t": "hunt flag-4", "s": "doing"}]
+    st.plan_updated = time.time()
+    msg = build_context_msg(coach.ctx, st, "x", stage=1)
+    assert "hunt flag-4" in msg and "stale" not in msg
+    # stale plan → marker on the title
+    st.plan_updated = time.time() - 1000
+    msg = build_context_msg(coach.ctx, st, "x", stage=1)
+    assert "stale: refresh via update_plan" in msg
+    # below L4 the staleness marker stays silent (the plan itself may render)
+    coach.ctx["session"]["autonomy_level"] = 2
+    msg = build_context_msg(coach.ctx, st, "x", stage=1)
+    assert "stale:" not in msg and "PLAN: none" not in msg
+
+
+async def test_budget_warning_suffix():
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    st = coach.state
+    st.exec_count = 10
+    msg = build_context_msg(coach.ctx, st, "x", stage=1, action_budget=50)
+    assert "nearly exhausted" not in msg
+    st.exec_count = 42
+    msg = build_context_msg(coach.ctx, st, "x", stage=1, action_budget=50)
+    assert "42/50" in msg and "nearly exhausted" in msg
+
+
+async def test_report_flag_visible_in_context():
+    """s46-P7 regression: the briefing's report deliverable + the report
+    flag's name must both survive context truncation."""
+    from coach.prompts import build_context_msg
+    coach, _ = _coach()
+    briefing = Path(
+        __file__).resolve().parents[2] / \
+        "content/packs/capstone/cap-t2-nordmarkt/briefing.md"
+    coach.ctx["quest"]["briefing"] = briefing.read_text()
+    coach.ctx["flags"] = [
+        {"key": "report", "name": "Assessment report (kali: /root/report.md)",
+         "points": 100, "solved": False}]
+    msg = build_context_msg(coach.ctx, coach.state, "x", stage=1)
+    assert "/root/report.md" in msg and "Assessment report" in msg
+
+
+async def test_update_plan_sets_plan_updated():
+    coach, c = _l4_coach()
+    assert coach.state.plan_updated == 0.0
+    await coach._dispatch({"type": "update_plan",
+                           "items": [{"t": "next", "s": "doing"}]})
+    assert coach.state.plan_updated > 0
+
+
 async def test_context_trainee_framing_below_l4():
     from coach.prompts import build_context_msg
     coach, _ = _coach()

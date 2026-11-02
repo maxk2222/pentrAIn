@@ -153,15 +153,37 @@ def system_prompt(tools_active: bool) -> str:
         "\n\n" + _knowledge() if _knowledge() else "")
 
 
+_PLAN_STALE_S = 900   # an L4 plan untouched this long is probably forgotten
+
+
+def _plan_stale(st, s: dict) -> bool:
+    """L4 + real work done + plan empty or >15min old → refresh worth a turn."""
+    return (int(s.get("autonomy_level") or 0) >= 4
+            and st.exec_count > 15
+            and (not st.plan
+                 or time.time() - getattr(st, "plan_updated", 0.0)
+                 > _PLAN_STALE_S))
+
+
+def _plan_line(st, s: dict) -> str:
+    if _plan_stale(st, s):
+        return (plan_render(st.plan, stale=True)
+                if st.plan else
+                "PLAN: none — set one via update_plan (phases → steps)")
+    return plan_render(st.plan)
+
+
 def plan_render(plan: list[dict] | None, cap: int = 400,
-                title: str = "PLAN") -> str:
+                title: str = "PLAN", stale: bool = False) -> str:
     """Self-maintained roadmap → compact context block. [x]=done, [>]=doing,
     [ ]=todo. Rendered next to CURRENT_OBJECTIVE — deterministic suggestion
     vs model intent stay complementary (objective can't hold phases)."""
     items = [i for i in (plan or []) if i.get("t")]
     if not items:
         return ""
-    lines = [f"{title} (yours — update via update_plan as phases change):"]
+    suffix = " — stale: refresh via update_plan" if stale else ""
+    lines = [f"{title} (yours — update via update_plan as phases change)"
+             f"{suffix}:"]
     for i in items:
         mark = {"done": "x", "doing": ">"}.get(i.get("s"), " ")
         lines.append(f" [{mark}] {i['t'][:110]}")
@@ -219,10 +241,17 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
                                    if facts else "")) else []),
         # the model's own roadmap — intent next to the deterministic
         # suggestion; update_plan rewrites it, restarts keep it
-        *([plan_txt] if (plan_txt := plan_render(st.plan)) else []),
+        # plan freshness: an empty/stale plan at L4 means the agent lost its
+        # thread — nudge update_plan (costs no exec budget; s46 planned once
+        # then never again)
+        *([plan_txt] if (plan_txt := _plan_line(st, s)) else []),
         f"CHECKPOINTS_HIT: {sorted(st.checkpoints_hit)}",
         f"CHECKPOINTS_OPEN: {[c.get('name') or c.get('id') for c in q.get('checkpoints', []) if c.get('id') not in st.checkpoints_hit]}",
-        f"ACTION_BUDGET: {st.exec_count}/{action_budget} execs used",
+        f"ACTION_BUDGET: {st.exec_count}/{action_budget} execs used"
+        + (" — nearly exhausted: consolidate — submit seen flags, finish "
+           "pending loot reads, write report"
+           if action_budget and st.exec_count >= 0.8 * action_budget
+           else ""),
         "RECENT_TELEMETRY (newest last; `# exit N` = failed, `[coach-ran]` = your own commands):",
     ]
     for line in st.recent_formatted(22):

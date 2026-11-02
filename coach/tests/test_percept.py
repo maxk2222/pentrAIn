@@ -175,3 +175,36 @@ def test_denials_skip_generic_permission_noise():
                      "find: '/root': Permission denied\n"
                      "find: '/proc/1': Permission denied")
     assert d["denials"] == []
+
+
+def test_sudo_tty_becomes_hint_not_denial():
+    """s46: 4 execs wasted on sudo-over-ssh TTY errors. It's retryable with
+    `sudo -S`, so it must land as a hint finding, never a dead-end denial."""
+    from coach.percept import parse_output
+    d = parse_output(
+        "sshpass -p 'x' ssh deploy@shop01 'sudo -l'",
+        "sudo: a terminal is required to read the password; "
+        "either use the -S option to read from standard input")
+    assert any(f.startswith("hint:sudo") for f in d["findings"])
+    assert d["denials"] == []
+
+
+def test_caps_detectors():
+    from coach.percept import parse_output
+    # uid=0 in `id` output → root shell cap on the ssh host
+    d = parse_output("sshpass -p 'x' ssh deploy@shop01 'id'",
+                     "uid=0(root) gid=0(root) groups=0(root)")
+    assert "root-shell@shop01" in d["caps"]
+    # `id root` as an unprivileged user also prints uid=0 — no cap
+    d = parse_output("ssh u@h 'id root'", "uid=0(root) gid=0(root)")
+    assert not d["caps"]
+    # FILE grant → mysql-file cap bound to the cred
+    d = parse_output(
+        "mysql -h 172.20.1.3 -u shop_ro -pX -e 'SHOW GRANTS'",
+        "GRANT SELECT, FILE ON `shop`.* TO 'shop_ro'@'%'")
+    assert "mysql-file:shop_ro" in d["caps"]
+    # crontab line → promotion candidate, keyed path@host
+    d = parse_output("ssh u@shop01 'cat /etc/cron.d/shop-backup'",
+                     "*/2 * * * * root /opt/shop/backup.sh")
+    assert d["cap_cron"] == ["/opt/shop/backup.sh@shop01"]
+    assert d["caps"] == []          # not yet proven — needs our write

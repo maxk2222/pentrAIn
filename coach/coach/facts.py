@@ -159,15 +159,31 @@ READ_CMD = re.compile(
     r"(?:^|['\";|&]\s*)(?:sudo\s+)?(?:cat|less|more|head|tail|grep|egrep|"
     r"fgrep|awk|sed|cut|sort|uniq|wc|strings|file|ls|ll|xxd|od|diff)\b")
 _ABS_PATH = re.compile(r"(?<![\w.:/-])/(?:[\w.+-]+/)*[\w.+-]+")
+# a path only counts as read when it sits in the SAME segment as the read
+# command — `cd /tmp && find x | head` reads nothing (s46: /tmp was counted)
+_SEG_SPLIT = re.compile(r"\|\||&&|[|;&]")
+# redirect targets (`2>/dev/null`) are destinations, not reads (s46: /dev/null
+# was counted 11x as 'read' because it out-lengthed the real path)
+_REDIRECT = re.compile(r"\d?>>?\s*\S+")
 
 
 def read_target(cmd: str) -> str | None:
-    """Longest absolute path of a read-command, or None. Write redirects
-    (`cat > f`, heredocs, tee) write — they don't count as reads."""
-    if not READ_CMD.search(cmd or "") or WRITE_RE.search(cmd or ""):
+    """Longest absolute path in a read-command segment, or None. Write
+    redirects (`cat > f`, heredocs, tee) write — they don't count as reads."""
+    cmd = cmd or ""
+    if not READ_CMD.search(cmd) or WRITE_RE.search(cmd):
         return None
-    paths = _ABS_PATH.findall(cmd or "")
-    return max(paths, key=len) if paths else None
+    best = None
+    for seg in _SEG_SPLIT.split(cmd):
+        seg = seg.strip(" '\"")
+        if not READ_CMD.search(seg):
+            continue
+        paths = [p for p in _ABS_PATH.findall(_REDIRECT.sub(" ", seg))
+                 if p != "/dev/null"]
+        if paths and (cand := max(paths, key=len)) \
+                and (best is None or len(cand) > len(best)):
+            best = cand
+    return best
 
 
 @dataclass
@@ -186,6 +202,7 @@ class FactsDB:
         self.ips_seen: set[str] = set()
         self.findings: list[str] = []     # bounded misc evidence (enum users)
         self.denials: list[str] = []      # bounded dead ends (denied:svc@host)
+        self.caps: list[str] = []         # proven primitives (root-exec via …)
         self._pending: tuple[str, str, float] | None = None  # (path, kind, ts)
         self._seen_cmds: set[str] = set()   # dedup: replay + live overlap
 
@@ -291,7 +308,10 @@ class FactsDB:
             typed_input = cmd.startswith("<type>")
             if not typed_input:
                 if w := WRITE_RE.search(cmd):
-                    path = w.group(1) or w.group(3)
+                    # the \S+ capture can eat a closing quote (`>> /f"`) —
+                    # strip it or dedup/promotion keys diverge from the
+                    # unquoted path the cron output shows (s46-promotion bug)
+                    path = (w.group(1) or w.group(3) or "").strip("'\"")
                     if path and path != "/dev/null" and code == 0:
                         f = self.files.setdefault(
                             path, FileFact(path=path, kind=_kind(path)))
@@ -330,6 +350,14 @@ class FactsDB:
                 for user, secret, host in _cmd_creds(cmd):
                     if host:
                         self.add_cred(user, secret, valid_on=host)
+            # root-cron promotion: a crontab line for a file WE wrote proves
+            # root code-exec (not just a discovered schedule) — the cap must
+            # outlive the history that produced it
+            for entry in parsed.get("cap_cron") or ():
+                path = str(entry).split("@", 1)[0]
+                ff = self.files.get(path)
+                if ff and ff.writes:
+                    self._merge_caps([f"root-exec via {entry}"])
         except Exception:      # fact extraction must never break a turn
             log.debug("observe_output failed", cmd=(cmd or "")[:120],
                       exc_info=True)
@@ -362,6 +390,14 @@ class FactsDB:
             if dn not in self.denials:
                 self.denials.append(dn)
         del self.denials[:-10]
+        self._merge_caps(d.get("caps") or ())
+
+    def _merge_caps(self, entries) -> None:
+        for cp in entries:
+            cp = str(cp)[:80]
+            if cp not in self.caps:
+                self.caps.append(cp)
+        del self.caps[:-6]
 
     def apply_worker_report(self, worker_id: str, parsed: dict) -> dict:
         """Merge a structured worker report (phase C). Returns merge counts
@@ -423,7 +459,7 @@ class FactsDB:
         """FACTS: section for the context message. Cred secrets are kept —
         the agent needs them to type passwords; everything else truncates."""
         if not (self.hosts or self.creds or self.files or self.flags
-                or self.denials):
+                or self.denials or self.caps):
             return ""
         lines = ["FACTS:"]
         if self.hosts:
@@ -478,6 +514,12 @@ class FactsDB:
                 seg += ("; " if seg else "") + \
                     "rejected: " + ", ".join(rejected[:3])
             lines.append("  flags: " + (seg or "seen only"))
+        if self.caps:
+            # proven primitives are the highest-value line — they are what
+            # stops re-deriving a solved technique from scratch after
+            # context loss (s46: root-cron reuse lagged its proof by ~65min)
+            lines.append("  caps: " + " | ".join(self.caps[-3:] if compact
+                                                 else self.caps[-6:]))
         if self.denials:
             # dead ends deserve permanent space — they are what stops the
             # model re-trying sudo/docker/mysql paths that already failed
