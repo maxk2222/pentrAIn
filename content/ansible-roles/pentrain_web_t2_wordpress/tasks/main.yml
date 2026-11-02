@@ -29,11 +29,11 @@
   changed_when: c1.rc == 0
   failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))
 
-- name: wait for mysql to accept connections
-  ansible.builtin.command: docker exec wp-mysql mysqladmin ping -proot_db! --silent
+- name: wait for mysql to accept TCP connections
+  ansible.builtin.command: docker exec wp-mysql mysqladmin ping -h wp-mysql -proot_db! --silent
   register: dbping
   until: dbping.rc == 0
-  retries: 30
+  retries: 40
   delay: 5
   changed_when: false
   ignore_errors: true
@@ -82,6 +82,9 @@
     --admin_email=admin@corp.local
     --skip-email
   register: wpi
+  until: wpi.rc == 0
+  retries: 10
+  delay: 10
   changed_when: "'Success' in (wpi.stdout | default(''))"
   failed_when: wpi.rc != 0 and 'already installed' not in (wpi.stderr | default('')) + (wpi.stdout | default(''))
 
