@@ -48,4 +48,4 @@ installer/.secrets/
 *.tfstate*
 .terraform/
 *.tsbuildinfo
-coach/traj/
+traj/

@@ -3,7 +3,8 @@
 The coach is a separate agent service (`coach/`) that attaches to your
 session, watches your command stream and the range state, and helps within a
 strict autonomy contract. It connects to any **OpenAI-compatible** LLM
-endpoint (`/v1/chat/completions`).
+endpoint (`/v1/chat/completions`). In the UI the coach appears as **Elliot**
+(`samsepi0l`) — same agent, just the persona name.
 
 ![Coach panel](assets/screenshots/07-session-workspace.png)
 
