@@ -103,6 +103,28 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         plan = []
     if not isinstance(plan, list):
         plan = []
+    # orphaned workers — spawned but never finished/killed. Their command
+    # outputs reseed via coach_outputs, but the roster (and each worker's
+    # task) dies with the coach process; without this note the parent
+    # re-does their work or searches for their files on the wrong host
+    # (s46: w1 wrote /tmp/backup-modified.sh on shop01, post-restart the
+    # parent looked for it on Kali)
+    spawn_rows = (await db.execute(
+        select(func.json_extract(CoachAction.args, "$.worker_id"),
+               func.json_extract(CoachAction.args, "$.task")).where(
+            CoachAction.session_id == session_id,
+            CoachAction.tool == "spawn_agent")
+        .order_by(CoachAction.id.desc()).limit(8))).all()
+    finished_or_killed = {w["agent"] for w in worker_reports}
+    finished_or_killed |= {
+        str(r[0]) for r in (await db.execute(
+            select(func.json_extract(CoachAction.args, "$.worker_id")).where(
+                CoachAction.session_id == session_id,
+                CoachAction.tool == "kill_agent"))).all() if r[0]}
+    worker_orphans = [
+        {"agent": str(r[0]), "task": str(r[1])[:160]}
+        for r in reversed(spawn_rows)
+        if r[0] and str(r[0]) not in finished_or_killed]
     # private none-reason notes — the coach's working memory; last 10 in
     # chronological order for the reseed (cap 8 applies coach-side)
     coach_notes = [r[0] for r in (await db.execute(
@@ -236,6 +258,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         "flag_outs": flag_outs,
         "flag_submits": flag_submits,
         "worker_reports": worker_reports,
+        "worker_orphans": worker_orphans,
         "plan": plan,
         "coach_notes": coach_notes,
         "profile": {"track_levels": profile.track_levels if profile else {},

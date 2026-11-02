@@ -1739,6 +1739,23 @@ async def test_reseed_plan_and_notes():
     await coach.stop()
 
 
+async def test_reseed_orphaned_workers_become_notes():
+    """worker_orphans in ctx → a note tells the parent a worker's task died
+    with the restart (outputs already reseed via coach_outputs — s46's
+    post-restart 'file on wrong host' confusion)."""
+    coach, c = _l4_coach()
+    c.ctx["coach_notes"] = ["existing note"]
+    c.ctx["worker_orphans"] = [
+        {"agent": "w1", "task": "modify /opt/shop/backup.sh on shop01"}]
+    await coach.start()
+    orphan = [n for n in coach.state.notes if "died with a coach restart" in n]
+    assert len(orphan) == 1 and "w1" in orphan[0]
+    assert "backup.sh" in orphan[0] and "FACTS" in orphan[0]
+    # orphan note lands AFTER ctx notes — freshest, therefore rendered
+    assert coach.state.notes[-1] == orphan[0]
+    await coach.stop()
+
+
 async def test_plan_renders_in_context():
     from coach.prompts import build_context_msg
     coach, c = _l4_coach()

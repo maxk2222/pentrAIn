@@ -329,6 +329,16 @@ class SessionCoach:
         self.state.plan_updated = time.time()
         self.state.notes = [str(n)[:300]
                             for n in self.ctx.get("coach_notes") or []][-8:]
+        # orphaned workers: spawned pre-restart, killed with the process —
+        # their command outputs reseeded via coach_outputs but the TASK died.
+        # A note is all the parent needs to not re-do (or misplace) their work
+        for wo in self.ctx.get("worker_orphans") or []:
+            note = (f"{wo.get('agent', 'w?')} died with a coach restart — "
+                    f"task was: \"{str(wo.get('task') or '')[:140]}\" — its "
+                    "command outputs already live in FACTS")
+            if note not in self.state.notes:
+                self.state.notes.append(note)
+        self.state.notes = self.state.notes[-8:]
         # stuck/idle clocks seed from the most RECENT liveness signal —
         # not blindly from started_at (a session parked in 'ready' for hours
         # then activated must not look stuck-since-forever)
@@ -1355,8 +1365,9 @@ class SessionCoach:
                     # typing anything; a failed run unlocks the next rewrite.
                     wm = WRITE_RE.search(cmd)
                     if wm:
-                        path = wm.group(1) or wm.group(3)
-                        ff = self.facts.files.get(path)
+                        path = (wm.group(1) or wm.group(3) or "").strip("'\"")
+                        ff = self.facts.files.get(
+                            facts_mod.file_key(cmd, path))
                         n = ff.writes if ff else 0
                         last = ff.last_exit if ff else None
                         # externally-executed files (proven via a caps: fact,
@@ -1382,7 +1393,8 @@ class SessionCoach:
                     # read of the SAME path is denied before typing.
                     read_tgt = facts_mod.read_target(cmd)
                     if read_tgt:
-                        rf = self.facts.files.get(read_tgt)
+                        rf = self.facts.files.get(
+                            facts_mod.file_key(cmd, read_tgt))
                         n = rf.reads if rf else 0
                         if n >= 3:
                             await log.ainfo("reread denied",
@@ -1479,7 +1491,8 @@ class SessionCoach:
                     # write-count note for the rewrite guard above — facts
                     # already counted this successful write via observe_output
                     if wm and code == 0:
-                        ff = self.facts.files.get(path)
+                        ff = self.facts.files.get(
+                            facts_mod.file_key(cmd, path))
                         n = ff.writes if ff else 0
                         if n >= 2:
                             result += (f"\nNOTE: {path} has now been written "

@@ -118,6 +118,22 @@ def _run_target(cmd: str) -> str | None:
     return None
 
 
+def file_host(cmd: str) -> str | None:
+    """The remote host a command targets, or None for local commands.
+    `ssh user@host 'cat /tmp/x'` reads x ON host — a host-blind file key
+    made s46's agent search Kali's /tmp for loot written on shop01."""
+    m = _USER_AT_HOST.search(cmd or "")
+    return m.group(2) if m else None
+
+
+def file_key(cmd: str, path: str) -> str:
+    """Facts key for a filesystem path — '@host' suffix when the command
+    runs remotely, so the same path on different hosts stays distinct and
+    the rendered fact tells the model WHERE the file lives."""
+    h = file_host(cmd)
+    return f"{path}@{h}" if h else path
+
+
 @dataclass
 class HostFact:
     ip: str
@@ -269,18 +285,22 @@ class FactsDB:
         if cmd.startswith("<type>"):
             return   # typed pane input: cred extraction yes, write/run no
         if tgt := _run_target(cmd):
-            f = self.files.setdefault(tgt, FileFact(path=tgt, kind=_kind(tgt)))
+            key = file_key(cmd, tgt)
+            f = self.files.setdefault(key, FileFact(path=key,
+                                                    kind=_kind(tgt)))
             f.runs += 1
-            self._pending = (tgt, "run", time.time())
+            self._pending = (key, "run", time.time())
         elif w := WRITE_RE.search(cmd):
-            path = w.group(1) or w.group(3)
+            path = (w.group(1) or w.group(3) or "").strip("'\"")
             if path and path != "/dev/null":
-                self.files.setdefault(path, FileFact(path=path,
-                                                     kind=_kind(path))).attempts += 1
-                self._pending = (path, "write", time.time())
+                key = file_key(cmd, path)
+                self.files.setdefault(key, FileFact(path=key,
+                                                    kind=_kind(path))).attempts += 1
+                self._pending = (key, "write", time.time())
         if rt := read_target(cmd):
+            key = file_key(cmd, rt)
             self.files.setdefault(
-                rt, FileFact(path=rt, kind=_kind(rt))).reads += 1
+                key, FileFact(path=key, kind=_kind(rt))).reads += 1
 
     def mark_run_exit(self, code: int) -> None:
         """command_result for a telemetry command — confirm the pending
@@ -313,19 +333,22 @@ class FactsDB:
                     # unquoted path the cron output shows (s46-promotion bug)
                     path = (w.group(1) or w.group(3) or "").strip("'\"")
                     if path and path != "/dev/null" and code == 0:
+                        key = file_key(cmd, path)
                         f = self.files.setdefault(
-                            path, FileFact(path=path, kind=_kind(path)))
+                            key, FileFact(path=key, kind=_kind(path)))
                         f.attempts += 1
                         f.writes += 1
                 if tgt := _run_target(cmd):
+                    key = file_key(cmd, tgt)
                     f = self.files.setdefault(
-                        tgt, FileFact(path=tgt, kind=_kind(tgt)))
+                        key, FileFact(path=key, kind=_kind(tgt)))
                     f.runs += 1
                     if code is not None:
                         f.last_exit = code
                 if rt := read_target(cmd):
+                    key = file_key(cmd, rt)
                     self.files.setdefault(
-                        rt, FileFact(path=rt, kind=_kind(rt))).reads += 1
+                        key, FileFact(path=key, kind=_kind(rt))).reads += 1
             parsed = parse_output(cmd, strip_ansi(out or ""))
             self.apply_delta(parsed)
             # loot digest: a file read that yielded secrets/leads leaves a
@@ -354,8 +377,11 @@ class FactsDB:
             # root code-exec (not just a discovered schedule) — the cap must
             # outlive the history that produced it
             for entry in parsed.get("cap_cron") or ():
+                # entry is 'path@host' — the file's key when its write ran
+                # through ssh to that host; bare-path fallback for local or
+                # un-attributed writes
                 path = str(entry).split("@", 1)[0]
-                ff = self.files.get(path)
+                ff = self.files.get(str(entry)) or self.files.get(path)
                 if ff and ff.writes:
                     self._merge_caps([f"root-exec via {entry}"])
             # timeout with no marker text — curl exit 28 on an empty reply

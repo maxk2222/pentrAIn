@@ -204,8 +204,26 @@ def test_reads_count_via_observe_and_survive_replay():
     # writes are NOT reads
     f.observe_output("cat > /tmp/w.py <<'EOF'\nx\nEOF", "", 0)
     assert f.files["/tmp/config.env"].reads == 1
-    assert f.files["/etc/secret.conf"].reads == 1
+    # ssh-wrapped reads key the file by host — /etc/secret.conf on h is a
+    # DIFFERENT file than on Kali (s46: agent searched Kali /tmp for loot
+    # written on shop01 — the fact must say WHERE the file lives)
+    assert f.files["/etc/secret.conf@h"].reads == 1
     assert "/tmp/w.py" not in f.files or f.files["/tmp/w.py"].reads == 0
+
+
+def test_file_key_host_attribution():
+    from coach.facts import FactsDB, file_key
+    assert file_key("sshpass -p 'x' ssh deploy@shop01 'cat /tmp/f'",
+                    "/tmp/f") == "/tmp/f@shop01"
+    assert file_key("cat /tmp/f", "/tmp/f") == "/tmp/f"
+    f = FactsDB()
+    # same path on two hosts = two distinct facts
+    f.observe_output("ssh deploy@shop01 'cat /tmp/f'", "a", 0)
+    f.observe_output("cat /tmp/f", "b", 0)
+    assert f.files["/tmp/f@shop01"].reads == 1
+    assert f.files["/tmp/f"].reads == 1
+    # renders with the @host suffix — the model sees where the file lives
+    assert "/tmp/f@shop01" in f.render(2000)
 
 
 def test_loot_digest_on_secret_yielding_read():

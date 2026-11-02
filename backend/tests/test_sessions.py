@@ -802,6 +802,34 @@ async def test_session_context_returns_plan_and_coach_notes(db_with_packs):
     await _abort_done(db, s.id)
 
 
+async def test_session_context_returns_worker_orphans(db_with_packs):
+    """worker_orphans — spawned workers that neither finished (report) nor
+    were killed resurface so the parent knows their intent died with a
+    coach restart (their command outputs already reseed via coach_outputs)."""
+    from app.services import coach_bridge
+    from app.models.domain import CoachAction, CoachMessage
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    db.add(CoachAction(session_id=s.id, tool="spawn_agent",
+                       args={"worker_id": "w1", "task": "enum api"}))
+    db.add(CoachAction(session_id=s.id, tool="spawn_agent",
+                       args={"worker_id": "w2", "task": "modify backup.sh"}))
+    db.add(CoachAction(session_id=s.id, tool="spawn_agent",
+                       args={"worker_id": "w3", "task": "dead task"}))
+    db.add(CoachAction(session_id=s.id, tool="kill_agent",
+                       args={"worker_id": "w3"}))
+    # w1 finished — its report merges; only w2 is a true orphan
+    db.add(CoachMessage(session_id=s.id, role="coach", kind="action_report",
+                        content='{"summary":"w1 done"}',
+                        meta={"agent": "w1"}))
+    await db.commit()
+    ctx = await coach_bridge.session_context(db, s.id)
+    assert ctx["worker_orphans"] == [
+        {"agent": "w2", "task": "modify backup.sh"}]
+    await _abort_done(db, s.id)
+
+
 async def test_set_coach_enabled_pauses_and_resumes(db_with_packs):
     """Per-session pause: coach_enabled flips in DB (the coach reads it
     from session_context each tick), posts a system note, and locks in
