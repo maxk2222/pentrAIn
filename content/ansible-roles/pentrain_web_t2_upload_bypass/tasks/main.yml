@@ -75,7 +75,7 @@
 
 - name: healthcheck systemd units
   ansible.builtin.copy:
-    src: "{{ item }}"
+    src: "systemd/{{ item }}"
     dest: "/etc/systemd/system/{{ item }}"
     mode: "0644"
   loop: [webapp-health.service, webapp-health.timer]
