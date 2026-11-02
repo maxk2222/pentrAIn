@@ -43,7 +43,7 @@
   notify: restart apache
 
 - name: seed git history — v1 leaks the deploy key, v2 scrubs it (sloppily)
-  ansible.builtin.block:
+  block:
     - name: git init
       ansible.builtin.command: git init -q
       args:
