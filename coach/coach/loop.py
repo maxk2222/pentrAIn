@@ -26,7 +26,11 @@ from . import percept
 from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
-from .facts import FLAG_RE, WRITE_RE, FactsDB
+from .facts import FLAG_RE, WRITE_RE, FactsDB, _USER_AT_HOST
+
+# settled-denial forms rendered by percept: denied:{svc}-{user}@{host},
+# denied:{svc}-auth@{host}, denied:sudo|docker@{host}, unreachable:{ip}@{v}
+_DENIAL_FORM = re.compile(r"denied:(\w+)(?:-([\w.\-]+))?@(\S+)")
 from . import facts as facts_mod
 from .llm import LlmClient, LlmError
 from .policy import Policy
@@ -1184,6 +1188,40 @@ class SessionCoach:
             return lit
         return None
 
+    def _denial_match(self, cmd: str) -> str | None:
+        """Exec cmd vs. settled denial facts — the FIRST matching dead end
+        or None. Conservative: only fires on same evidence, never fuzzy.
+          unreachable:{ip}@{vantage} — same ip, same vantage (a different
+            pivot may still route; e.g. unreachable-from-shop01 does not
+            block a direct Kali probe)
+          denied:{svc}-{user}@{h}     — same binary + user + pivot host
+          denied:sudo|docker@{h}      — same keyword + pivot host
+        ({svc}-auth denials are NOT matched: they don't record which cred
+        failed, and the working pivot uses the same svc+host pair — an
+        ssh-auth@shop01 entry would brick every valid sshpass pivot.)"""
+        if not self.facts.denials:
+            return None
+        ssh = _USER_AT_HOST.search(cmd or "")
+        pivot = ssh.group(2) if ssh else "kali"
+        for dn in self.facts.denials:
+            if dn.startswith("unreachable:"):
+                rest = dn.split(":", 1)[1]
+                ip, _, vantage = rest.rpartition("@")
+                if ip and ip in cmd and vantage == pivot:
+                    return dn
+                continue
+            m = _DENIAL_FORM.match(dn)
+            if not m:
+                continue
+            svc, user, host = m.group(1), m.group(2), m.group(3)
+            if host != pivot or user == "auth" \
+                    or not re.search(rf"\b{re.escape(svc)}\b", cmd or ""):
+                continue
+            if user is None or re.search(rf"\b{re.escape(user)}\b",
+                                         cmd or ""):
+                return dn
+        return None
+
     async def _dispatch(self, a: dict, *, proactive: bool = False,
                         window: str | None = None) -> tuple[bool, str]:
         """Guard-denial audit: every 'denied:' result self-reports to the
@@ -1302,6 +1340,15 @@ class SessionCoach:
                     cmd = (a.get("command") or a.get("content", "")).strip()
                     if not cmd:
                         return spoke, "error: empty command"
+                    # denied-facts guard: evidence already settled this exact
+                    # path (same cred+svc+host, same unreachable target) — the
+                    # facts render shows it, but renders don't STOP retries
+                    # (s46: mysql root+DEPLOY_PASS denied at 21:14, retried
+                    # verbatim at 00:37 after a restart)
+                    if dn := self._denial_match(cmd):
+                        return spoke, (f"denied: prior evidence — {dn}. "
+                                       "Try a different user, host, "
+                                       "or vector.")
                     # rewrite guard: a solver that was written ≥2× and never
                     # ran (or ran clean) does NOT need another version — the
                     # model 'perfects' scripts forever otherwise. Deny before

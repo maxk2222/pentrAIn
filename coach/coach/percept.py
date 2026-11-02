@@ -90,6 +90,15 @@ _AUTH_FAIL = re.compile(
 # s46 spent 4 execs on `sudo` over ssh before finding `sudo -S`.
 _TTY_REQ = re.compile(
     r"a terminal is required|sudo: no tty|sudo: unable to allocate pty", re.I)
+# a host that TIMES OUT / has no route is unreachable from this vantage —
+# distinct from auth-denied (reachable, wrong cred). Without this fact the
+# model re-curls docker-internal IPs directly after every restart (s46: 4x).
+_UNREACHABLE = re.compile(
+    r"Connection timed out|No route to host|connect: Network is unreachable|"
+    r"Operation timed out|Failed to connect .* timed out", re.I)
+# curl's own exit-code vocabulary when stderr is empty (28=timeout, 7=refused
+# is NOT unreachable — refused means the host answered)
+_CURL_TIMEOUT_EXIT = 28
 
 # proven-primitive detectors → `caps:` facts. Distinct from `creds.valid_on`
 # (access) — caps are *capabilities* the model must reuse for later objectives
@@ -162,6 +171,13 @@ def _p_denials(cmd: str, out: str, d: dict) -> None:
     if _TTY_REQ.search(out) and "sudo" in (cmd or ""):
         d["findings"].append(
             "hint:sudo needs a pipe — echo $PASS | sudo -S -l")
+    if _UNREACHABLE.search(out):
+        # the unreachable TARGET is the cmd IP that isn't the ssh pivot —
+        # `ssh deploy@shop01 'curl 172.20.1.2'` → 172.20.1.2 unreachable
+        # FROM shop01's vantage (docker-internal net)
+        ips = [i for i in _IP_RE.findall(cmd or "") if i != h]
+        target = ips[-1] if ips else h
+        d["denials"].append(f"unreachable:{target}@{h}")
 
 
 def _p_nmap(out: str, d: dict) -> None:

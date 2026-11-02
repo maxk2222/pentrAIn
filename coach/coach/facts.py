@@ -358,6 +358,18 @@ class FactsDB:
                 ff = self.files.get(path)
                 if ff and ff.writes:
                     self._merge_caps([f"root-exec via {entry}"])
+            # timeout with no marker text — curl exit 28 on an empty reply
+            # is the unreachable-host signal too (s46: direct curls to a
+            # docker-internal IP retried every restart)
+            if code == 28:
+                ssh = _USER_AT_HOST.search(cmd)
+                h = ssh.group(2) if ssh else "kali"
+                ips = [i for i in IP_RE.findall(cmd) if i != h]
+                tgt = ips[-1] if ips else h
+                dn = f"unreachable:{tgt}@{h}"
+                if dn not in self.denials:
+                    self.denials.append(dn)
+                del self.denials[:-10]
         except Exception:      # fact extraction must never break a turn
             log.debug("observe_output failed", cmd=(cmd or "")[:120],
                       exc_info=True)

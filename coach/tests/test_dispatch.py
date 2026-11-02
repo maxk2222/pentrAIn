@@ -124,6 +124,44 @@ async def test_takeover_budget_cap():
     assert not ok and "budget" in res and c.execs == ["a", "b"]
 
 
+async def test_denial_match_blocks_retry():
+    """s46: `mysql -u root` + DEPLOY_PASS was 1045-denied, then retried
+    verbatim after a restart. Settled denials must STOP the exec before
+    typing — the facts render alone doesn't."""
+    coach, c = _coach(autonomy=4)
+    coach.facts.denials = [
+        "denied:mysql-root@shop01",
+        "denied:sudo@shop01",
+        "unreachable:172.20.1.2@shop01",
+    ]
+    # same svc + user + pivot → blocked before typing
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "sshpass -p 'x' ssh deploy@shop01 'mysql -h 172.20.1.3 -u root -pY'"})
+    assert res.startswith("denied: prior evidence")
+    assert not c.execs
+    # bare sudo on the same pivot → blocked
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "sshpass -p 'x' ssh deploy@shop01 'sudo docker ps'"})
+    assert "denied" in res and not c.execs
+    # unreachable target via the same vantage → blocked
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "sshpass -p 'x' ssh deploy@shop01 'curl http://172.20.1.2:8080/'"})
+    assert "denied" in res and not c.execs
+    # DIFFERENT user is a new path → allowed
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "sshpass -p 'x' ssh deploy@shop01 'mysql -h 172.20.1.3 -u shop_ro -pY'"})
+    assert not res.startswith("denied") and c.execs
+    # unreachable from a DIFFERENT vantage stays allowed (may route)
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "curl -s --max-time 10 http://172.20.1.2:8080/"})
+    assert not res.startswith("denied: prior")
+    # -auth denials must NOT brick the working pivot
+    coach.facts.denials.append("denied:ssh-auth@shop01")
+    ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "sshpass -p 'GOOD' ssh deploy@shop01 'id'"})
+    assert not res.startswith("denied: prior")
+
+
 async def test_budget_grace_window():
     """s46: a hard stop froze the agent mid-flag-chain. Over-budget execs
     run inside a labelled grace window, then the wall still stands."""

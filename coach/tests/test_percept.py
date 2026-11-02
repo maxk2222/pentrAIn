@@ -208,3 +208,16 @@ def test_caps_detectors():
                      "*/2 * * * * root /opt/shop/backup.sh")
     assert d["cap_cron"] == ["/opt/shop/backup.sh@shop01"]
     assert d["caps"] == []          # not yet proven — needs our write
+
+
+def test_unreachable_marker_becomes_denial():
+    from coach.percept import parse_output
+    d = parse_output(
+        "ssh deploy@shop01 'curl -s --max-time 15 http://172.20.1.2:8080/'",
+        "curl: (7) Failed to connect to 172.20.1.2 port 8080: "
+        "Connection timed out")
+    assert "unreachable:172.20.1.2@shop01" in d["denials"]
+    # no foreign IP in the command → target falls back to vantage
+    d = parse_output("ssh u@h 'ping -c1 8.8.8.8'",
+                     "connect: Network is unreachable")
+    assert "unreachable:8.8.8.8@h" in d["denials"]

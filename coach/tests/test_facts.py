@@ -309,6 +309,24 @@ def test_caps_promotion_and_render():
     assert "caps:" in out and "root-exec" in out
 
 
+def test_unreachable_facts():
+    """s46: direct curls to the docker-internal API retried every restart —
+    timeout/unreachable must become a persistent denial fact."""
+    from coach.facts import FactsDB
+    f = FactsDB()
+    # curl exit 28, empty output — the unreachable signal
+    f.observe_output("curl -s --max-time 15 http://172.20.1.2:8080/", "", 28)
+    assert "unreachable:172.20.1.2@kali" in f.denials
+    # via ssh pivot — vantage is the pivot, target is the other IP
+    f.observe_output(
+        "ssh deploy@shop01 'curl -s --max-time 15 http://172.20.1.2:8080/'",
+        "", 28)
+    assert "unreachable:172.20.1.2@shop01" in f.denials
+    # refused (exit 7) is NOT unreachable — the host answered
+    f.observe_output("curl -s http://172.20.1.9:99/", "", 7)
+    assert not any("172.20.1.9" in d for d in f.denials)
+
+
 def test_caps_direct_and_bound():
     from coach.facts import FactsDB
     f = FactsDB()
