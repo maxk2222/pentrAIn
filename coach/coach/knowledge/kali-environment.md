@@ -88,6 +88,17 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - Retrying the SAME payload with cosmetic changes (new cookie file,
   added -L, same ../ count) is a loop, not iteration — change exactly
   ONE variable per attempt and keep the rest fixed.
+- A POST that returns an EMPTY body is usually a 302 SUCCESS, not a
+  failure — the login worked and the page lives behind the redirect.
+  Follow it: `curl -sL -c /tmp/jar -b /tmp/jar -d '…' URL` or GET `/`
+  with the same jar. Grepping an empty body for the flag is a dead turn.
+- Exposed `.git` without git-dumper (NOT installed): mirror it with
+  `wget -r -np -nH --cut-dirs=N http://IP/.git/ -P out/` (cut-dirs =
+  path depth). Manual object-fetching needs `mkdir -p` for EVERY parent
+  dir first — `curl -o .git/refs/heads/master` dies with exit 23 when
+  `.git/refs/heads/` doesn't exist locally. A saved Apache 404 page is
+  NOT a ref — `.git/refs/heads/master` returning 404 means there are no
+  commits (dead end), don't re-fetch it.
 
 ## Credentials & access
 
