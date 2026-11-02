@@ -43,11 +43,14 @@
     content: |
       wifi ALL=(root) NOPASSWD: /usr/sbin/iw *, /usr/sbin/iwconfig *, \
         /usr/sbin/airmon-ng *, /usr/sbin/airodump-ng *, /usr/sbin/aireplay-ng *, \
-        /usr/sbin/aircrack-ng *, /usr/sbin/airserv-ng *, /usr/sbin/airtun-ng *, \
+        /usr/bin/aircrack-ng *, /usr/sbin/airserv-ng *, /usr/sbin/airtun-ng *, \
         /usr/sbin/hcxdumptool *, \
         /usr/sbin/rfkill *, \
         /usr/sbin/ip link set *, \
-        /sbin/modprobe mac80211_hwsim, /sbin/modprobe -r mac80211_hwsim, \
+        /sbin/modprobe mac80211_hwsim, /sbin/modprobe mac80211_hwsim radios=3, \
+        /sbin/modprobe -r mac80211_hwsim, \
+        /usr/bin/pkill airodump-ng, /usr/bin/pkill aireplay-ng, \
+        /usr/bin/pkill hostapd, /usr/bin/pkill wpa_supplicant, \
         /usr/bin/systemctl start pentrain-*, /usr/bin/systemctl stop pentrain-*, \
         /usr/bin/systemctl restart pentrain-*, /usr/bin/systemctl status pentrain-*, \
         /usr/local/sbin/wifi-lab, /usr/local/sbin/wifi-lab *
@@ -145,10 +148,15 @@
       # wifi-lab {status|reset} — show virtual radios or bounce the lab AP
       case "${1:-status}" in
         status) iw dev; echo; iwconfig 2>/dev/null | grep -v "no wireless" ;;
-        reset)  sudo systemctl restart pentrain-hwsim || true
-                sudo modprobe -r mac80211_hwsim 2>/dev/null
+        reset)  sudo systemctl stop pentrain-wifi-ap 2>/dev/null || true
+                # hostapd/wpa_supplicant daemonize (-B): the oneshot unit's stop
+                # won't kill them, and they hold the hwsim phys -> reload fails.
+                sudo pkill hostapd 2>/dev/null; sudo pkill wpa_supplicant 2>/dev/null
+                sudo modprobe -r mac80211_hwsim 2>/dev/null; sleep 1
                 sudo modprobe mac80211_hwsim radios=3
-                sudo rfkill unblock all; echo "radios reset"; iw dev ;;
+                sudo rfkill unblock all
+                sudo systemctl restart pentrain-wifi-ap 2>/dev/null || true
+                sleep 3; echo "radios reset"; iw dev ;;
         *) echo "usage: wifi-lab {status|reset}" ;;
       esac
     mode: "0755"
