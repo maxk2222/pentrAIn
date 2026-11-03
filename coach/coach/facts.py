@@ -458,7 +458,7 @@ class FactsDB:
                 dn = f"unreachable:{tgt}@{h}"
                 if dn not in self.denials:
                     self.denials.append(dn)
-                del self.denials[:-10]
+                del self.denials[:-24]
         except Exception:      # fact extraction must never break a turn
             log.debug("observe_output failed", cmd=(cmd or "")[:120],
                       exc_info=True)
@@ -490,7 +490,7 @@ class FactsDB:
             dn = str(dn)[:64]
             if dn not in self.denials:
                 self.denials.append(dn)
-        del self.denials[:-10]
+        del self.denials[:-24]
         self._merge_caps(d.get("caps") or ())
 
     def add_lesson(self, text: str, source: str = "main") -> int:
