@@ -783,9 +783,9 @@ async def coach_lesson_list(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(
         select(CoachLesson).order_by(CoachLesson.id.desc()).limit(100)
     )).scalars().all()
-    return [{"id": l.id, "text": l.text, "tags": l.tags, "applies": l.applies,
-             "status": l.status, "confidence": l.confidence, "hits": l.hits,
-             "session_id": l.session_id} for l in rows]
+    return [{"id": n.id, "text": n.text, "tags": n.tags, "applies": n.applies,
+             "status": n.status, "confidence": n.confidence, "hits": n.hits,
+             "session_id": n.session_id} for n in rows]
 
 
 @coach_router.post("/lesson/{lesson_id}/hit", status_code=204)
@@ -811,12 +811,12 @@ async def admin_lesson_list(db: AsyncSession = Depends(get_db),
     rows = (await db.execute(
         select(CoachLesson).order_by(CoachLesson.id.desc()).limit(200)
     )).scalars().all()
-    return [{"id": l.id, "text": l.text, "tags": l.tags, "applies": l.applies,
-             "status": l.status, "confidence": l.confidence, "hits": l.hits,
-             "misses": l.misses, "evidence": l.evidence,
-             "session_id": l.session_id,
-             "created_at": l.created_at.isoformat() if l.created_at else None}
-            for l in rows]
+    return [{"id": n.id, "text": n.text, "tags": n.tags, "applies": n.applies,
+             "status": n.status, "confidence": n.confidence, "hits": n.hits,
+             "misses": n.misses, "evidence": n.evidence,
+             "session_id": n.session_id,
+             "created_at": n.created_at.isoformat() if n.created_at else None}
+            for n in rows]
 
 
 @router.post("/admin/lessons/{lesson_id}/disable")
@@ -825,12 +825,12 @@ async def admin_lesson_disable(lesson_id: int, db: AsyncSession = Depends(get_db
     """Kill a bad field note — it stops surfacing in ctx, push-hints and
     lookup results on the next coach attach/refresh."""
     from ..models.domain import CoachLesson
-    l = await db.get(CoachLesson, lesson_id)
-    if not l:
+    row = await db.get(CoachLesson, lesson_id)
+    if not row:
         raise HTTPException(404, "lesson not found")
-    l.status = "disabled"
+    row.status = "disabled"
     await db.commit()
-    return {"id": l.id, "status": l.status}
+    return {"id": row.id, "status": row.status}
 
 
 # ---------- kali template builder ----------

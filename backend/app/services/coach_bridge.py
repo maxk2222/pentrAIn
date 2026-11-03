@@ -151,8 +151,8 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
     # observer field notes — session-scoped by applies (global + this
     # track + this quest); consumed via push-hints and lookup_guide only,
     # never rendered into the base prompt
-    field_notes = [{"id": l.id, "text": l.text, "tags": l.tags or []}
-                   for l in await active_lessons(
+    field_notes = [{"id": n.id, "text": n.text, "tags": n.tags or []}
+                   for n in await active_lessons(
                        db, track=quest.track_slug if quest else None,
                        quest_id=session.quest_id)]
     telem = (await db.execute(
@@ -327,16 +327,16 @@ async def record_lesson(db: AsyncSession, session_id: int | None,
     against active lessons (Jaccard ≥0.7 → hit on the existing row),
     bounded. Returns the stored/merged row or None when rejected."""
     clean = sanitize_lesson_text(text)
-    if len(clean) < 10 or clean.lower() in ("<redacted>",):
+    if len(clean) < 10 or clean.lower() == "<redacted>":
         return None
     existing = (await db.execute(
         select(CoachLesson).where(CoachLesson.status == "active")
         .order_by(CoachLesson.id.desc()).limit(60))).scalars().all()
-    for l in existing:
-        if _jaccard(l.text, clean) >= 0.7:
-            l.hits = (l.hits or 0) + 1  # same lesson re-derived → stronger
+    for row in existing:
+        if _jaccard(row.text, clean) >= 0.7:
+            row.hits = (row.hits or 0) + 1  # same lesson re-derived → stronger
             await db.commit()
-            return l
+            return row
     row = CoachLesson(
         session_id=session_id, text=clean,
         tags=[str(t)[:32].lower() for t in (tags or [])][:8],
@@ -351,9 +351,9 @@ async def record_lesson(db: AsyncSession, session_id: int | None,
 async def lesson_hit(db: AsyncSession, lesson_id: int) -> None:
     """Positive-attribution ping — a pushed field note was followed by
     progress. Rough but honest: it just counts later successes."""
-    l = await db.get(CoachLesson, lesson_id)
-    if l:
-        l.hits = (l.hits or 0) + 1
+    row = await db.get(CoachLesson, lesson_id)
+    if row:
+        row.hits = (row.hits or 0) + 1
         await db.commit()
 
 
