@@ -2286,6 +2286,64 @@ async def test_filtered_and_missing_denials_hard_deny():
     assert did                               # curl on kali is fine
 
 
+async def test_denials_scope_local_vs_remote():
+    """missing:/capability denials must only see the REMOTE part of an
+    ssh pivot — `sshpass -p x ssh u@web01 'expect ...'` runs sshpass on
+    KALI, so missing:sshpass@web01 must NOT brick the correct two-hop
+    pivot (observed live: the agent was denied 4x mid-pivot)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials += ["missing:sshpass@web01",
+                            "denied:sudo@web01",
+                            "missing:curl@kali"]
+    # sshpass on KALI → free (this exact shape was bricked in s84)
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'x' ssh -o StrictHostKeyChecking=no "
+                    "deploy@web01 'expect -c \"spawn ssh app01\"'"},
+        proactive=True)
+    assert did, res
+    # sshpass in the REMOTE tail → still denied
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'sshpass -p x ssh app@app01'"},
+        proactive=True)
+    assert not did and "missing:sshpass@web01" in res
+    # sudo on KALI before the ssh → free; sudo in the remote tail → denied
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sudo sshpass -p x ssh deploy@web01 'id'"},
+        proactive=True)
+    assert did, res
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'sudo id'"}, proactive=True)
+    assert not did and "denied:sudo@web01" in res
+    # missing:*@kali sees only the LOCAL head — remote curls stay free
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'curl -s http://app01/'"},
+        proactive=True)
+    assert did, res
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "curl -s http://app01/"},
+        proactive=True)
+    assert not did and "missing:curl@kali" in res
+    # auth denials still match the local invocation incl. the token
+    coach.facts.denials.append("denied:ssh-root@web01")
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh -o StrictHostKeyChecking=no root@web01"},
+        proactive=True)
+    assert not did and "denied:ssh-root@web01" in res
+    # …but a different user@web01 stays free
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "ssh deploy@web01 'id'"},
+        proactive=True)
+    assert did, res
+
+
 async def test_scan_saturation_denies_variant_rescans():
     """Three+ recon scans on a host with zero open ports = settled — the
     next flag-variant scan is denied even without a filtered: denial

@@ -1269,55 +1269,84 @@ class SessionCoach:
     def _denial_match(self, cmd: str) -> str | None:
         """Exec cmd vs. settled denial facts — the FIRST matching dead end
         or None. Conservative: only fires on same evidence, never fuzzy.
-          unreachable:{ip}@{vantage} — same ip, same vantage (a different
-            pivot may still route; e.g. unreachable-from-shop01 does not
-            block a direct Kali probe)
-          denied:{svc}-{user}@{h}     — same binary + user + pivot host
-          denied:sudo|docker@{h}      — same keyword + pivot host
+          unreachable:{ip}@{vantage} — ip named in the REMOTE part of a
+            pivot to {vantage} (or anywhere when vantage is kali)
+          filtered:{ip}@{vantage}    — same scoping, but only scan-family
+            commands (ping/ssh stay free)
+          missing:{tool}@{vantage}   — tool named in the remote part
+          denied:{svc}-{user}@{h}    — same binary + user in the LOCAL
+            invocation incl. the user@host token itself
+          denied:sudo|docker@{h}     — capability dead ON the host: the
+            tool named in the remote part only
         ({svc}-auth denials are NOT matched: they don't record which cred
         failed, and the working pivot uses the same svc+host pair — an
-        ssh-auth@shop01 entry would brick every valid sshpass pivot.)"""
+        ssh-auth@shop01 entry would brick every valid sshpass pivot.)
+        Scoping: `sshpass -p x ssh u@web01 'expect ...'` runs sshpass on
+        KALI and expect ON web01 — a fact about web01 must only see the
+        remote tail, or every correctly-scoped pivot gets bricked."""
         if not self.facts.denials:
             return None
-        ssh = _USER_AT_HOST.search(cmd or "")
-        pivot = ssh.group(2) if ssh else "kali"
+        cmd = cmd or ""
+        first_ssh = _USER_AT_HOST.search(cmd)
+        # everything up to the first user@host token runs on the local box
+        local_head = cmd[:first_ssh.end()] if first_ssh else cmd
+
+        def _tail(host: str) -> str:
+            """The remote portion — what executes ON `host` ('' when the
+            host isn't invoked). For vantage 'kali' there is no remote."""
+            if host == "kali":
+                return ""
+            m = re.search(rf"\S+@{re.escape(host)}\b", cmd)
+            return cmd[m.end():] if m else ""
+
         for dn in self.facts.denials:
-            if dn.startswith("unreachable:"):
+            if dn.startswith(("unreachable:", "filtered:", "missing:")):
                 rest = dn.split(":", 1)[1]
-                ip, _, vantage = rest.rpartition("@")
-                if ip and ip in cmd and vantage == pivot:
+                key, _, vantage = rest.rpartition("@")
+                if not key:
+                    continue
+                # vantage-scoped: search only the part of cmd that runs on
+                # that box — kali facts see the local head, pivot facts
+                # see the remote tail after the user@vantage token
+                scope = local_head if vantage == "kali" else _tail(vantage)
+                if not scope or not re.search(rf"\b{re.escape(key)}\b",
+                                              scope):
+                    continue
+                if dn.startswith("missing:"):
+                    # the tool can never appear — no internet means nothing
+                    # to install it with; deny the binary on that host
                     return dn
-                continue
-            if dn.startswith("filtered:"):
-                rest = dn.split(":", 1)[1]
-                ip, _, vantage = rest.rpartition("@")
-                # tier-isolated from THIS vantage — only scan-family cmds
-                # to that ip are dead ends (ping/ssh stay free, another
-                # vantage stays free via the pivot check)
-                if (ip and ip in cmd and vantage == pivot
-                        and re.search(
-                            r"\b(nmap|masscan|rustscan|unicornscan|nc|"
-                            r"netcat|fping)\b", cmd or "")):
+                if dn.startswith("unreachable:"):
                     return dn
-                continue
-            if dn.startswith("missing:"):
-                rest = dn.split(":", 1)[1]
-                tool, _, vantage = rest.rpartition("@")
-                # the tool can never appear — no internet means nothing to
-                # install it with; deny the same binary on the same host
-                if (tool and vantage == pivot
-                        and re.search(rf"\b{re.escape(tool)}\b", cmd or "")):
+                if re.search(
+                        r"\b(nmap|masscan|rustscan|unicornscan|nc|"
+                        r"netcat|fping)\b", scope):
                     return dn
                 continue
             m = _DENIAL_FORM.match(dn)
             if not m:
                 continue
             svc, user, host = m.group(1), m.group(2), m.group(3)
-            if host != pivot or user == "auth" \
-                    or not re.search(rf"\b{re.escape(svc)}\b", cmd or ""):
+            if user == "auth":
                 continue
-            if user is None or re.search(rf"\b{re.escape(user)}\b",
-                                         cmd or ""):
+            tail = _tail(host)
+            if user and svc == "ssh":
+                # the denied thing IS the connection to host — ssh+user in
+                # the local invocation incl. the user@host token itself
+                mh = re.search(rf"\S+@{re.escape(host)}\b", cmd)
+                head = cmd[:mh.end()] if mh else ""
+                if (head
+                        and re.search(r"\bssh\b", head)
+                        and re.search(rf"\b{re.escape(user)}\b", head)):
+                    return dn
+                continue
+            # client-tool or capability denial — the command ran ON the
+            # host, so only the remote tail counts (`sudo sshpass ssh
+            # u@h 'id'` runs sudo on Kali and must stay free)
+            if (tail
+                    and re.search(rf"\b{re.escape(svc)}\b", tail)
+                    and (user is None
+                         or re.search(rf"\b{re.escape(user)}\b", tail))):
                 return dn
         return None
 
