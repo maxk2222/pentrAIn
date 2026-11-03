@@ -111,6 +111,13 @@ class ObserverService:
         except Exception:
             return ""
 
+    def drop(self, sid: int) -> None:
+        """Forget detector state for a session. Called on reset: the traj
+        file is rotated, so a surviving watch would hold a byte offset into
+        a renamed file — and, worse, its counters would still carry the dead
+        attempt's stuck evidence into the clean run."""
+        self._watch.pop(sid, None)
+
     # ---------- main loop ----------
 
     async def run(self) -> None:

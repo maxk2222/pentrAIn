@@ -70,3 +70,17 @@ def for_session(session_id: int) -> TrajLog | NullTrajLog:
         return TrajLog(Path(d) / f"session-{session_id}.jsonl")
     except Exception:
         return NullTrajLog()
+
+
+def rotate(session_id: int) -> None:
+    """Soft-reset boundary: rename session-{sid}.jsonl aside so the new
+    attempt starts a clean file. The old run's record survives for post-hoc
+    eval — the file's whole purpose — but the observer's fresh scan must not
+    re-consume pre-reset evidence (s84: stale advisory fired on a clean run
+    because the tailer rebuilt counters from the dead attempt's turns)."""
+    d = os.environ.get("PENTRAIN_TRAJ_DIR", "./traj")
+    if not d:
+        return
+    p = Path(d) / f"session-{session_id}.jsonl"
+    with contextlib.suppress(OSError):
+        p.rename(p.with_name(f"{p.stem}.{int(time.time())}.jsonl"))

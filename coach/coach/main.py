@@ -7,6 +7,7 @@ import time
 
 import structlog
 
+from . import traj as _traj
 from .client import BackendClient
 from .loop import SessionCoach
 from .observer import ObserverService
@@ -19,6 +20,7 @@ class CoachService:
         self.client = BackendClient()
         self.cfg: dict = {}
         self.coaches: dict[int, SessionCoach] = {}
+        self.observer: ObserverService | None = None
         self._cfg_ts = 0.0
         # shared daily LLM-token accounting across all SessionCoaches
         self.usage: dict = {"day": "", "tokens": 0}
@@ -88,6 +90,13 @@ class CoachService:
                     "solved", "aborted", "failed", "resetting"):
                 await asyncio.sleep(2)
                 await self._drop(sid)
+                if data.get("state") == "resetting":
+                    # attempt boundary: close happened in coach.stop() —
+                    # rotate the traj aside and reset observer state so the
+                    # next attempt isn't judged by the dead run's evidence
+                    _traj.rotate(sid)
+                    if self.observer is not None:
+                        self.observer.drop(sid)
 
     async def _drop(self, sid: int) -> None:
         coach = self.coaches.pop(sid, None)
@@ -120,8 +129,8 @@ async def amain() -> None:
     # observer: own task in the same container — shares the backend client
     # and the cfg getter, tails /traj, tips the live coach and distills
     # stuck→recovery windows into coach_lessons (knowledge's write side)
-    obs_task = asyncio.create_task(
-        ObserverService(svc.client, svc._config, svc.coaches).run())
+    svc.observer = ObserverService(svc.client, svc._config, svc.coaches)
+    obs_task = asyncio.create_task(svc.observer.run())
     try:
         await svc.run()
     finally:
