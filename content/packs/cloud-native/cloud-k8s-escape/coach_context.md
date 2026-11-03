@@ -17,8 +17,10 @@ Ground truth for the coach. Never quote verbatim; escalate per stage.
      https://kubernetes.default.svc/api/v1/namespaces/prod/secrets`
      (prod/app-config: db-password decoy + a hint pointing at /root/k8s-flag.txt)
    - shop-sa may create pods in prod: POST a pod spec (JSON body to
-     /api/v1/namespaces/prod/pods) — image pentrain/shop-app:latest,
-     `securityContext.privileged: true`, `hostPath: /host` volume, command
+     /api/v1/namespaces/prod/pods) — metadata.namespace=prod, image
+     pentrain/shop-app:latest with **`imagePullPolicy: IfNotPresent`**
+     (local image — no registry to pull from), `securityContext.
+     privileged: true`, `hostPath: /host` volume, command
      `cat /host/root/k8s-flag.txt; sleep 30`.
    - Read it back: GET `/api/v1/namespaces/prod/pods/<name>/log` → flag in
      the pod's stdout → submit.
@@ -44,3 +46,7 @@ Ground truth for the coach. Never quote verbatim; escalate per stage.
   pointing at the node path.
 - Mounting `/` instead of `/host` in the evil pod — the kind node exposes
   the VM root only at `/host` (extraMount), not at `/`.
+- `imagePullPolicy: Always` (default for :latest) → ImagePullBackOff — the
+  shop-app image only exists inside the kind node, never in a registry.
+- Pod landing in `default` — spec must set metadata.namespace=prod AND the
+  POST must go to the namespaced pods URL.

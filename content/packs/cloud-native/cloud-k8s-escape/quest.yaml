@@ -58,7 +58,7 @@ hints:
   - id: h3
     cost: 90
     stage: post
-    text: "shop-sa can CREATE pods in prod. POST a pod spec (namespace prod, image pentrain/shop-app:latest, privileged:true, hostPath volume mounting /host, command ['sh','-c','cat /host/root/k8s-flag.txt; sleep 30']) to /api/v1/namespaces/prod/pods — then read its log at /api/v1/namespaces/prod/pods/<name>/log."
+    text: "shop-sa can CREATE pods in prod. POST a pod spec (metadata.namespace=prod, image pentrain/shop-app:latest WITH imagePullPolicy:IfNotPresent, privileged:true, hostPath volume mounting /host, command ['sh','-c','cat /host/root/k8s-flag.txt; sleep 30']) to /api/v1/namespaces/prod/pods — then read its log at /api/v1/namespaces/prod/pods/<name>/log."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

