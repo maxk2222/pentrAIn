@@ -223,6 +223,22 @@ class LudusProvider:
                     await self.pve.wait_task(upid, timeout_s=300)
                 except Exception as e:
                     await log.awarning("rollback failed", vmid=vm.vmid, error=str(e))
+        # disk-snapshot rollback powers every VM off — without the restart
+        # the range lands "ready" but dead: QGA flag injection, telemetry
+        # and every kali channel fail until someone starts the VMs by hand
+        # (s84: all 5 nordwind VMs stayed stopped after soft reset)
+        for vm in st.vms:
+            if vm.vmid:
+                try:
+                    await self.pve.vm_start(vm.vmid)
+                except Exception as e:
+                    await log.awarning("post-rollback start failed",
+                                       vmid=vm.vmid, error=str(e))
+        # guests need a moment for qemu-guest-agent — flag injection and
+        # telemetry config call it immediately after this returns
+        await asyncio.gather(*(
+            self.pve.wait_agent(vm.vmid, 120)
+            for vm in st.vms if vm.vmid))
 
     async def testing_mode(self, enable: bool, allow_ips: list[str] | None = None) -> None:
         # ludus 2: PUT /testing/start|stop; allowed ips via POST /testing/allow

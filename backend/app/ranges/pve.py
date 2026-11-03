@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import shlex
 import ssl
 import urllib.parse
 from dataclasses import dataclass
@@ -202,12 +203,13 @@ class PveClient:
         )
 
     async def agent_file_read(self, vmid: int, path: str) -> bytes:
-        data = await self.get(
-            f"/nodes/{self.creds.node}/qemu/{vmid}/agent/file-read",
-            params={"file": path},
-        )
-        raw = data.get("content", "") if isinstance(data, dict) else ""
-        return base64.b64decode(raw)
+        # PVE's agent/file-read response shape has proven unreliable on this
+        # host — 'content' arrived as non-base64 garbage while the file on
+        # disk was perfectly fine (verified via exec+cat). Read through the
+        # exec channel instead: deterministic across PVE versions and it is
+        # the same path every other guest read already uses.
+        res = await self.agent_exec_sh(vmid, f"base64 {shlex.quote(path)}")
+        return base64.b64decode((res.get("out") or "").strip())
 
     async def agent_file_write(self, vmid: int, path: str, content: str | bytes) -> None:
         """guest-file-write — the only safe way to ship multi-line scripts into
