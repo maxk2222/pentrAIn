@@ -726,6 +726,20 @@ async def coach_config(db: AsyncSession = Depends(get_db)):
             "worker_turn_cap": await settings_svc.get_setting(db, "coach.worker_turn_cap", 10),
             "worker_time_cap_s": await settings_svc.get_setting(db, "coach.worker_time_cap_s", 300),
             "collect_wait_s": await settings_svc.get_setting(db, "coach.collect_wait_s", 40),
+            # observer + effort keys — without these the settings exist in the
+            # UI but never reach the coach service (defaults masked the gap)
+            "observer_enabled": await settings_svc.get_setting(db, "coach.observer_enabled", True),
+            "observer_tick_s": await settings_svc.get_setting(db, "coach.observer_tick_s", 60),
+            "observer_stuck_s": await settings_svc.get_setting(db, "coach.observer_stuck_s", 600),
+            "observer_min_denials": await settings_svc.get_setting(db, "coach.observer_min_denials", 2),
+            "observer_max_proposals": await settings_svc.get_setting(db, "coach.observer_max_proposals", 2),
+            "observer_max_lessons_session": await settings_svc.get_setting(db, "coach.observer_max_lessons_session", 4),
+            "observer_cooldown_s": await settings_svc.get_setting(db, "coach.observer_cooldown_s", 900),
+            "observer_hint_min_level": await settings_svc.get_setting(db, "coach.observer_hint_min_level", 3),
+            "effort_chat": await settings_svc.get_setting(db, "coach.effort_chat", "low"),
+            "effort_routine": await settings_svc.get_setting(db, "coach.effort_routine", "medium"),
+            "effort_deep": await settings_svc.get_setting(db, "coach.effort_deep", ""),
+            "effort_worker": await settings_svc.get_setting(db, "coach.effort_worker", "medium"),
         },
     }
 

@@ -95,6 +95,10 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `coach.observer_max_lessons_session` | `4` | Lesson cap per session |
 | `coach.observer_cooldown_s` | `900` | Min gap between analyses |
 | `coach.observer_hint_min_level` | `3` | Live tips need autonomy ≥ this |
+| `coach.effort_chat` | `low` | Reasoning effort for trainee-facing replies |
+| `coach.effort_routine` | `medium` | Effort for stage 0–1 proactive turns |
+| `coach.effort_deep` | *(empty)* | Stage 2 effort — empty = `llm.reasoning_effort` |
+| `coach.effort_worker` | `medium` | Effort for subagent exec chains |
 
 ### Content & data
 

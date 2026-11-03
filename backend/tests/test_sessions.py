@@ -934,6 +934,34 @@ async def test_session_context_returns_coach_outputs(db_with_packs):
     await _abort_done(db, s.id)
 
 
+async def test_session_context_replays_errored_execs(db_with_packs):
+    """error-status exec rows are REAL executions: their outputs carry the
+    dead-end evidence (command not found → missing:, Permission denied →
+    denied:) the coach rebuilds from coach_outputs — and every one burned
+    a turn, so exec_count must count them (s84: ~18 error execs turned
+    GRACE 23→1 across a restart and denied facts had to be re-earned)."""
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    await coach_bridge.record_action(
+        db, s.id, "exec_in_kali", {"command": "nmap -sV t"},
+        {"out": "22/tcp open ssh", "exitcode": 0}, status="ok")
+    await coach_bridge.record_action(
+        db, s.id, "exec_in_kali", {"command": "sshpass -p x ssh u@h 'id'"},
+        {"out": "Permission denied", "exitcode": 5}, status="error")
+    await coach_bridge.record_action(
+        db, s.id, "exec_in_kali", {"command": "rm -rf /"},
+        {"reason": "denied pattern"}, status="denied")
+    ctx = await coach_bridge.session_context(db, s.id)
+    # ok + error ran on the box — denied never executed
+    assert ctx["exec_count"] == 2
+    outs = {o["command"]: o["out"] for o in ctx["coach_outputs"]}
+    assert outs.get("sshpass -p x ssh u@h 'id'") == "Permission denied"
+    assert "rm -rf /" not in outs
+    await _abort_done(db, s.id)
+
+
 async def test_session_context_returns_flag_submits_and_worker_reports(db_with_packs):
     """flag_submits + worker_reports — the resync seeds that keep submitted
     flags and finished worker findings alive across coach restarts."""

@@ -66,6 +66,13 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.observer_max_lessons_session": (4, False),
     "coach.observer_cooldown_s": (900, False),   # min gap between analyses/session
     "coach.observer_hint_min_level": (3, False), # hints need an autonomous loop
+    # adaptive llm reasoning effort per turn class — stage-2 escalations
+    # keep the configured llm.reasoning_effort (usually "high"); routine
+    # turns run cheaper or a local 27B blows the 600s turn budget (s84)
+    "coach.effort_chat": ("low", False),         # trainee-facing replies
+    "coach.effort_routine": ("medium", False),   # stage 0-1 proactive turns
+    "coach.effort_deep": ("", False),            # stage 2 ("" = llm default)
+    "coach.effort_worker": ("medium", False),    # subagent exec chains
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

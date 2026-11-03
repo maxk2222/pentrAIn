@@ -161,11 +161,15 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
     msgs = (await db.execute(
         select(CoachMessage).where(CoachMessage.session_id == session_id)
         .order_by(CoachMessage.id.desc()).limit(30))).scalars().all()
+    # "error" counts: a failed command still executed on the box and burned
+    # a turn — excluding it lets thrash loops dodge the action budget (s84:
+    # ~18 error execs turned GRACE 23→1 across a coach restart). Only
+    # "denied" stays out — those never reached the agent.
     action_count = (await db.execute(
         select(func.count(CoachAction.id)).where(
             CoachAction.session_id == session_id,
             CoachAction.tool == "exec_in_kali",
-            CoachAction.status.in_(["ok", "confirmed"])))).scalar() or 0
+            CoachAction.status.in_(["ok", "confirmed", "error"])))).scalar() or 0
     # exact commands the coach ran — replayed telemetry marks these
     # `from_coach` again so they never count as trainee activity after a
     # coach restart (keeps idle detection and anti-loop guards honest)
@@ -176,7 +180,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                    func.json_extract(CoachAction.result, "$.exitcode")).where(
                 CoachAction.session_id == session_id,
                 CoachAction.tool == "exec_in_kali",
-                CoachAction.status.in_(["ok", "confirmed"]))
+                CoachAction.status.in_(["ok", "confirmed", "error"]))
             .order_by(CoachAction.id.desc()).limit(60))).all() if r[0]]
     # every tool output that ever showed a flag — replayed into the coach's
     # seen-flag evidence so a restart doesn't lose it (unverified submits
@@ -202,7 +206,10 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                    func.json_extract(CoachAction.result, "$.exitcode")).where(
                 CoachAction.session_id == session_id,
                 CoachAction.tool.in_(["exec_in_kali", "type_in_pane"]),
-                CoachAction.status.in_(["ok", "confirmed"]))
+                # errored outputs carry the dead-end evidence (command not
+                # found → missing:, Permission denied → denied:) — without
+                # them a restart loses the denial facts and re-probes them
+                CoachAction.status.in_(["ok", "confirmed", "error"]))
             .order_by(CoachAction.id.desc()).limit(160))).all() if r[0] or r[1]]
     profile = await db.get(UserProfile, 1)
     # home-lab LAN assessment: scope comes from the lan.scope_cidr setting,

@@ -2542,3 +2542,83 @@ async def test_lookup_guide_union_searches_field_notes():
         {"type": "lookup_guide", "query": "unrelated-zzz"},
         proactive=True)
     assert "FIELD NOTE" not in res2
+
+
+async def test_cred_spray_note_after_two_failed_hosts():
+    """A credential that auth-failed on ≥2 hosts is a scope fact — the
+    agent gets ONE advisory per (secret,host) instead of learning nothing
+    (s84: deploy/web01-pw sprayed across .31/.32/.33). Advisory only —
+    password reuse on an untried host stays legitimate."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    c = coach.facts.add_cred("deploy", "Nw#Deploy!24", source="loot")
+    c.tested_on.update({"web01", "10.1.10.31", "10.1.10.32"})
+    c.valid_on.add("web01")
+    # third distinct host with the same dead cred → advisory on the result
+    _d, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'Nw#Deploy!24' ssh deploy@10.1.10.33 'id'"},
+        proactive=True)
+    assert "NOTE:" in res and "host-scoped" in res and "10.1.10.31" in res
+    # pop-once: the same (secret,host) never nags twice — other NOTEs
+    # (output dedup) may still fire, only the spray marker must not
+    _d3, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'Nw#Deploy!24' ssh deploy@10.1.10.33 'id'"},
+        proactive=True)
+    assert "host-scoped" not in res
+    # but a NEW host with the same cred still gets the scope warning
+    _d2, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'Nw#Deploy!24' ssh deploy@10.1.10.34 'id'"},
+        proactive=True)
+    assert "NOTE:" in res and "host-scoped" in res
+    # a cred with <2 prior failures → silent (reuse is fine)
+    c2 = coach.facts.add_cred("root", "other-pw", source="loot")
+    c2.tested_on.add("10.1.10.31")
+    _d, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'other-pw' ssh root@10.1.10.35 'id'"},
+        proactive=True)
+    assert "host-scoped" not in res
+
+
+async def test_turn_effort_threads_to_llm_call():
+    """adaptive effort: chat replies run 'low', routine proactive turns
+    'medium', stage-2 escalations keep 'high' — otherwise a local model
+    burns the whole 600s turn budget thinking (s84: 3 cancels/h)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    llm = FakeLlm(actions=[{"type": "send_chat", "content": "hi"}])
+    coach.llm = llm
+    # chat answer → low effort
+    await coach._llm_turn("reply", force_reply=True, effort="low")
+    assert llm.kwargs[-1].get("reasoning_effort") == "low"
+    # proactive stage-2 → deep (configured or 'high')
+    await coach._llm_turn("work", proactive=True, effort="high")
+    assert llm.kwargs[-1].get("reasoning_effort") == "high"
+
+
+async def test_llm_client_per_call_effort_override():
+    """chat(reasoning_effort=X) overrides the client default in the request
+    body — the whole point of the per-turn adaptive mapping."""
+    from coach.llm import LlmClient
+    llm = LlmClient("http://x", "", "m", reasoning_effort="high")
+    seen: list[dict] = []
+    class _R:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}],
+                    "usage": {"total_tokens": 1}}
+    async def _post(path, json=None):
+        seen.append(json or {})
+        return _R()
+    llm._client.post = _post          # type: ignore[attr-defined]
+    await llm.chat([{"role": "user", "content": "x"}], json_mode=False,
+                   reasoning_effort="low")
+    assert seen[-1].get("reasoning_effort") == "low"
+    # no override → client default wins
+    await llm.chat([{"role": "user", "content": "x"}], json_mode=False)
+    assert seen[-1].get("reasoning_effort") == "high"

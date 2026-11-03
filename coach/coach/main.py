@@ -121,7 +121,7 @@ async def amain() -> None:
     # and the cfg getter, tails /traj, tips the live coach and distills
     # stuck→recovery windows into coach_lessons (knowledge's write side)
     obs_task = asyncio.create_task(
-        ObserverService(svc.client, svc._config).run())
+        ObserverService(svc.client, svc._config, svc.coaches).run())
     try:
         await svc.run()
     finally:

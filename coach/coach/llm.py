@@ -56,6 +56,7 @@ class LlmClient:
     async def chat(self, messages: list[dict], *, json_mode: bool = True,
                    tools: list[dict] | None = None,
                    model: str | None = None,
+                   reasoning_effort: str | None = None,
                    on_delta: Callable[[str, str], Awaitable[None]] | None = None
                    ) -> dict:
         body: dict = {
@@ -67,10 +68,13 @@ class LlmClient:
         # conventions: chat_template_kwargs.enable_thinking (Qwen3/vLLM chat
         # template switch) and reasoning_effort (OpenAI-compat field). Servers
         # that don't know a key ignore it; failures surface in the UI test.
+        # per-call effort overrides the client default — chat replies need
+        # speed while stage-2 escalations keep deep reasoning (s84: turns
+        # at uniform 'high' kept blowing the 600s turn budget on a local 27B)
         if not self.reasoning:
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        elif self.reasoning_effort:
-            body["reasoning_effort"] = self.reasoning_effort
+        elif effort := (reasoning_effort or self.reasoning_effort):
+            body["reasoning_effort"] = effort
         if tools and "no_tools" not in self._compat:
             body["tools"] = tools
             body["tool_choice"] = "auto"

@@ -145,3 +145,26 @@ def test_window_text_marks_denied_and_caps():
     big = [_turn([{"t": "e", "arg": "x" * 300, "res": "y" * 400}])
            for _ in range(300)]
     assert len(s._window_text(big)) <= 8000
+
+
+# ---------- live facts snapshot ----------
+
+def test_facts_snapshot_reads_live_coach_registry():
+    """The advisor must see the coach's CURRENT facts (proven access,
+    tunnels, dead ends) — traj-window denial evidence alone produced stale
+    advice (s84: `-J` tip while sshuttle already routed the net)."""
+    class _C:  # minimal stand-in for SessionCoach
+        def __init__(self):
+            from coach.facts import FactsDB
+            self.facts = FactsDB()
+    coach = _C()
+    coach.facts.add_cred("deploy", "pw", valid_on="web01")
+    coach.facts.denials.append("missing:sshpass@web01")
+    svc = ObserverService(client=None, cfg_getter=dict,
+                          coaches={84: coach})
+    snap = svc._facts_snapshot(84)
+    assert "valid:web01" in snap and "missing:sshpass@web01" in snap
+    # unknown sid / coach without facts → empty, never an exception
+    assert svc._facts_snapshot(999) == ""
+    svc2 = ObserverService(client=None, cfg_getter=dict)
+    assert svc2._facts_snapshot(84) == ""

@@ -85,14 +85,31 @@ class ObserverService:
     """Async sibling of CoachService — polls active sessions, tails their
     traj files, runs the detectors, and writes back via the backend."""
 
-    def __init__(self, client, cfg_getter) -> None:
+    def __init__(self, client, cfg_getter, coaches: dict | None = None) -> None:
         self.client = client
         self._cfg_getter = cfg_getter       # async callable → cfg dict
+        # live view into CoachService.coaches — the advisor reads the running
+        # coach's FactsDB so tips reflect CURRENT state (proven access,
+        # tunnels, dead ends), not just the stale denial evidence in the
+        # traj window (s84: advised `-J` while sshuttle already routed)
+        self._coaches = coaches if coaches is not None else {}
         self._watch: dict[int, _Watch] = {}
         self._llm: LlmClient | None = None
         self._llm_sig: tuple = ()
         self._lesson_texts: list[str] = []  # dedupe base (cached 5 min)
         self._lessons_ts = 0.0
+
+    def _facts_snapshot(self, sid: int) -> str:
+        """Bounded live-state block for the advisory prompt — same render the
+        coach sees, compact. Read-only; never let it break the tick."""
+        try:
+            coach = self._coaches.get(sid)
+            if coach is None or not getattr(coach, "facts", None):
+                return ""
+            txt = coach.facts.render(600, compact=True)
+            return f"\n\ncoach live state:\n{txt}" if txt else ""
+        except Exception:
+            return ""
 
     # ---------- main loop ----------
 
@@ -299,7 +316,8 @@ class ObserverService:
             "text only (no markdown).")}, {"role": "user", "content": (
             f"quest: {quest.get('title','?')} track={quest.get('track','?')} "
             f"tier={quest.get('tier','?')}\n\n"
-            f"recent actions (newest last):\n{self._window_text(list(w.window))}")}]
+            f"recent actions (newest last):\n{self._window_text(list(w.window))}"
+            f"{self._facts_snapshot(w.sid)}")}]
         w.analyses += 1
         try:
             resp = await llm.chat(msgs, json_mode=False)
