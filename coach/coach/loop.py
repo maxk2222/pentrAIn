@@ -172,6 +172,9 @@ class SessionCoach:
         # note id → (progress_ts, exec_count) at push for hit feedback
         self._notes_hinted: dict[str, set[int]] = {}
         self._notes_pushed: dict[int, tuple[float, int]] = {}
+        # cred-spray advisory: (secret, host) pairs already noted — the hint
+        # is pop-once per target so password-reuse tries stay legitimate
+        self._spray_noted: set[tuple[str, str]] = set()
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -186,7 +189,13 @@ class SessionCoach:
         if not s.get("id") or not self.ctx.get("quest"):
             await log.awarning("coach attach aborted — no session context", session=self.sid)
             return False
-        if s.get("state") in ("solved", "aborted", "failed"):
+        if s.get("state") in ("solved", "aborted", "failed",
+                              "resetting", "aborting"):
+            # "resetting" is not terminal but equally poisonous: the drop
+            # fires on the state event, yet telemetry/terminal events keep
+            # arriving and _ensure_coach would re-attach a coach that then
+            # execs against a rolling-back VM (s84: actions kept logging
+            # through the whole snapshot rollback)
             return False
         self.state.autonomy_level = int(s.get("autonomy_level", 2))
         self.state.subagents_enabled = bool(s.get("subagents_enabled", False))
@@ -789,6 +798,14 @@ class SessionCoach:
         if not decision.may_proactive:
             return
         budget = int(self.cfg.get("coach", {}).get("action_budget", 400))
+        cc = self.cfg.get("coach", {})
+        # adaptive effort: stage-2 escalations keep deep reasoning; routine
+        # takeover turns run medium — at uniform 'high' a local 27B kept
+        # exceeding the 600s turn budget (s84: 3 cancels/h ≈ 30min burned)
+        effort = (cc.get("effort_deep")
+                  or self.cfg.get("llm", {}).get("reasoning_effort")
+                  or "high") if decision.stage >= 2 else (
+            cc.get("effort_routine") or "medium")
         try:
             # a single wedged turn (stuck HTTP call, lock holder that never
             # returns) must not take the whole session loop down with it
@@ -799,7 +816,7 @@ class SessionCoach:
                                       decision.urgency, stage=decision.stage,
                                       action_budget=budget,
                                       facts=self.facts),
-                    proactive=True),
+                    proactive=True, effort=effort),
                 timeout=LLM_TURN_BUDGET_S)
             # L4 stall correction: a proactive turn that produced NO real work
             # (chat-only announce, bare `none`, denied write) gets ONE bounded
@@ -830,7 +847,7 @@ class SessionCoach:
                                           stage=decision.stage,
                                           action_budget=budget,
                                           facts=self.facts),
-                        proactive=True),
+                        proactive=True, effort=effort),
                     timeout=left)
             # continuous agent loop: the last chain DID work — keep the
             # pipeline flowing at takeover pace instead of the reflect
@@ -849,7 +866,9 @@ class SessionCoach:
             return
         await asyncio.wait_for(
             self._llm_turn(chat_prompt(user_msg), force_reply=True,
-                           record_user=user_msg),
+                           record_user=user_msg,
+                           effort=self.cfg.get("coach", {}).get(
+                               "effort_chat") or "low"),
             timeout=LLM_TURN_BUDGET_S)
 
     async def _on_solved(self) -> None:
@@ -875,8 +894,8 @@ class SessionCoach:
         return budget > 0 and self.usage["tokens"] >= budget
 
     async def _llm_turn(self, user_msg: str, *, force_reply: bool = False,
-                        proactive: bool = False, record_user: str | None = None
-                        ) -> bool:
+                        proactive: bool = False, record_user: str | None = None,
+                        effort: str | None = None) -> bool:
         """Draft-safety wrapper — EVERY exit path of a turn (normal return,
         dispatch exception, cancel at the turn budget) must close the UI's
         streaming draft, or an open 'thinking' bubble ghosts forever."""
@@ -884,7 +903,7 @@ class SessionCoach:
         try:
             return await self._llm_turn_body(
                 user_msg, force_reply=force_reply, proactive=proactive,
-                record_user=record_user)
+                record_user=record_user, effort=effort)
         finally:
             self._turn_deadline = None
             await self._close_draft()
@@ -903,7 +922,8 @@ class SessionCoach:
 
     async def _llm_turn_body(self, user_msg: str, *, force_reply: bool = False,
                              proactive: bool = False,
-                             record_user: str | None = None) -> bool:
+                             record_user: str | None = None,
+                             effort: str | None = None) -> bool:
         """One LLM turn, serialized via lock (chat + reflect must not interleave).
         `record_user` = the raw text remembered as the trainee's message (the
         wrapped prompt itself is scaffolding, not conversation).
@@ -971,7 +991,8 @@ class SessionCoach:
                     if tools_active else None)
                 try:
                     resp = await self.llm.chat(messages, on_delta=on_delta,
-                                               tools=tools)
+                                               tools=tools,
+                                               reasoning_effort=effort)
                 except (LlmError, httpx.HTTPError) as e:
                     # one quiet retry — a slow/flaky endpoint shouldn't kill
                     # the turn outright; the turn budget keeps worst-case
@@ -979,7 +1000,8 @@ class SessionCoach:
                     await log.awarning("llm call failed, retrying once",
                                        error=str(e))
                     try:
-                        resp = await self.llm.chat(messages, tools=tools)
+                        resp = await self.llm.chat(messages, tools=tools,
+                                                   reasoning_effort=effort)
                     except (LlmError, httpx.HTTPError) as e2:
                         await log.awarning("llm call failed", error=str(e2))
                         return False
@@ -1431,6 +1453,38 @@ class SessionCoach:
                 break  # one note per result — never a wall of hints
         return out
 
+    def _cred_spray_note(self, a: dict) -> str:
+        """Advisory when one credential already failed on ≥2 hosts —
+        password reuse is worth ONE try per host, but the spray pattern is
+        a scope fact the model keeps re-testing (s84: deploy/web01-pw
+        sprayed across .31/.32/.33 — every host rejected it). Advisory,
+        not a denial: reuse could still work on an untried host. Pop-once
+        per (secret, host) so the channel can't be spammed."""
+        if a.get("type") not in ("exec_in_kali", "type_in_pane"):
+            return ""
+        cmd = str(a.get("command") or a.get("text") or "")
+        for user, secret, tgt in facts_mod._cmd_creds(cmd):
+            if not tgt or (secret, tgt) in self._spray_noted:
+                continue
+            # the secret is the spray signal — user can be '?' when the
+            # extractor can't tie it (sshpass -p PW ssh u@host → ('?', PW))
+            c = next((x for x in self.facts.creds
+                      if x.secret == secret
+                      and (user == "?" or x.user == user)), None)
+            if not c:
+                continue
+            # prior failures EXCLUDING this target — tested_on/valid_on
+            # update only in observe_output after the result lands
+            failed = c.tested_on - c.valid_on - {tgt}
+            if len(failed) >= 2:
+                self._spray_noted.add((secret, tgt))
+                proven = ",".join(sorted(c.valid_on)[:2]) or "none"
+                return (f"\nNOTE: {user}-cred already auth-failed on "
+                        f"{','.join(sorted(failed)[:3])} (valid on: {proven})"
+                        " — the password is host-scoped, not reusable. "
+                        "Rotate credentials instead of spraying.")
+        return ""
+
     def _lookup_field_note(self, q: str, window: str | None) -> str | None:
         """Pull-side of the observer's knowledge: a field note whose tags or
         text overlap the query — labeled, capped, hit-tracked like a push."""
@@ -1497,6 +1551,8 @@ class SessionCoach:
         # guaranteed-read channels last: observer hints + tag-matched field
         # notes land on whatever result the model is about to read — they
         # cannot scroll past unnoticed (pop-once, bounded)
+        if spray := self._cred_spray_note(a):
+            result += spray
         result = self._drain_observer_hints(result, a, window)
         return spoke, result
 
@@ -2531,7 +2587,10 @@ class SessionCoach:
                                     "NOW and emit your report JSON with "
                                     "everything found so far.")})
                 try:
-                    resp = await self.llm.chat(msgs, tools=worker_tools())
+                    resp = await self.llm.chat(
+                        msgs, tools=worker_tools(),
+                        reasoning_effort=self.cfg.get("coach", {}).get(
+                            "effort_worker") or "medium")
                 except Exception as e:
                     # transient endpoint hiccup (ReadTimeout str() is empty —
                     # log the type) — one retry, then the worker legitimately
