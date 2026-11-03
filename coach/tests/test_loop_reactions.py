@@ -932,6 +932,31 @@ async def test_flag_solve_auto_marks_plan_steps():
     assert "auto-marked" in result
 
 
+async def test_flag_solve_auto_marks_generic_numbered_keys():
+    """s84: flag key 'flag-1' has NO distinctive token — normalized-key
+    matching must still retire 'Solve flag-1' while leaving 'flag-2' open,
+    and the first solve retires the recon step too."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.state.plan = [
+        {"t": "Recon: nmap all targets", "s": "doing"},
+        {"t": "Solve flag-1", "s": "todo"},
+        {"t": "Solve flag-2, flag-3, flag-4", "s": "todo"}]
+
+    async def submit(sid, value):
+        return {"correct": True, "flag_key": "flag-1", "all_solved": False}
+    c.submit_flag = submit
+    coach.facts.flags["pentrAIn{x}"] = facts_mod.FlagFact(seen=1)
+    _, result = await coach._dispatch(
+        {"type": "submit_flag", "value": "pentrAIn{x}"}, proactive=True)
+    plan = coach.state.plan
+    assert plan[0]["s"] == "done"    # recon retired by first solve
+    assert plan[1]["s"] == "done"    # normalized 'flag1' match
+    assert plan[2]["s"] == "todo"    # 'flag-2/3/4' step stays open
+    assert "auto-marked" in result
+
+
 async def test_check_flag_solve_auto_marks_and_closes_on_all_solved():
     coach, c = _coach()
     coach.state.autonomy_level = 4

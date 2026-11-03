@@ -49,15 +49,15 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.reflect_interval_s": (60, False),
     "coach.nudge_after_s": (480, False),
     "coach.hint_after_s": (900, False),
-    "coach.action_budget": (200, False),
-    "coach.action_grace": (40, False),           # soft-cap window after budget
+    "coach.action_budget": (400, False),
+    "coach.action_grace": (80, False),           # soft-cap window after budget
     "coach.takeover_pace_s": (10, False),        # min gap between L4 chains
-    "coach.takeover_chain_max": (24, False),     # max LLM calls per L4 turn
+    "coach.takeover_chain_max": (48, False),     # max LLM calls per L4 turn
     "coach.max_workers": (8, False),             # parallel L4 subagent panes
-    "coach.worker_turn_cap": (40, False),        # LLM turns per worker task
-    "coach.worker_time_cap_s": (1800, False),    # wall-clock per worker task
-    "coach.collect_wait_s": (120, False),        # collect_agent block bound
-    "coach.wait_max_s": (300, False),            # cap per wait-tool call
+    "coach.worker_turn_cap": (80, False),        # LLM turns per worker task
+    "coach.worker_time_cap_s": (3600, False),    # wall-clock per worker task
+    "coach.collect_wait_s": (240, False),        # collect_agent block bound
+    "coach.wait_max_s": (600, False),            # cap per wait-tool call
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

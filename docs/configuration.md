@@ -78,15 +78,15 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `coach.reflect_interval_s` | `60` | Wall-clock reflection tick |
 | `coach.nudge_after_s` | `480` | Idle → nudge threshold |
 | `coach.hint_after_s` | `900` | Idle → hint threshold |
-| `coach.action_budget` | `200` | Max coach executions/session (parent) |
-| `coach.action_grace` | `40` | Soft-cap window after the budget |
+| `coach.action_budget` | `400` | Max coach executions/session (parent) |
+| `coach.action_grace` | `80` | Soft-cap window after the budget |
 | `coach.takeover_pace_s` | `10` | Min gap between L4 chains |
-| `coach.takeover_chain_max` | `24` | Max LLM calls per L4 turn |
+| `coach.takeover_chain_max` | `48` | Max LLM calls per L4 turn |
 | `coach.max_workers` | `8` | Parallel subagent panes (`w1`–`w8`) |
-| `coach.worker_turn_cap` | `40` | LLM turns per worker |
-| `coach.worker_time_cap_s` | `1800` | Wall-clock per worker |
-| `coach.collect_wait_s` | `120` | `collect_agent` block bound |
-| `coach.wait_max_s` | `300` | Cap per `wait` tool call |
+| `coach.worker_turn_cap` | `80` | LLM turns per worker |
+| `coach.worker_time_cap_s` | `3600` | Wall-clock per worker |
+| `coach.collect_wait_s` | `240` | `collect_agent` block bound |
+| `coach.wait_max_s` | `600` | Cap per `wait` tool call |
 
 ### Content & data
 
@@ -120,7 +120,7 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `PENTRAIN_BACKEND_URL` | `http://backend:8000` | REST base |
 | `PENTRAIN_BACKEND_WS_URL` | `ws://backend:8000/ws/coach` | Event feed |
 | `PENTRAIN_COACH_SERVICE_TOKEN` | `dev-coach-token` | Must match the backend's |
-| `PENTRAIN_LLM_TIMEOUT_S` | `120` | Per-request LLM timeout |
+| `PENTRAIN_LLM_TIMEOUT_S` | `600` | Per-request LLM timeout |
 | `PENTRAIN_LLM_STREAM` | `true` | SSE draft streaming (auto-fallback) |
 | `PENTRAIN_LLM_*` | — | `PENTRAIN_LOG_LEVEL` as above |
 

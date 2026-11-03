@@ -749,7 +749,7 @@ class SessionCoach:
                         stuck_s=int(self.state.stuck_s()))
         if not decision.may_proactive:
             return
-        budget = int(self.cfg.get("coach", {}).get("action_budget", 200))
+        budget = int(self.cfg.get("coach", {}).get("action_budget", 400))
         try:
             # a single wedged turn (stuck HTTP call, lock holder that never
             # returns) must not take the whole session loop down with it
@@ -919,7 +919,7 @@ class SessionCoach:
             worked = False
             t0 = time.monotonic()
             chain_max = int(self.cfg.get("coach", {}).get(
-                "takeover_chain_max", 24))
+                "takeover_chain_max", 48))
             chain_len = 0
             while True:
                 pushed = False
@@ -1351,12 +1351,43 @@ class SessionCoach:
             return 0
         toks = {t for t in re.split(r"[^a-z0-9]+", (flag_key or "").lower())
                 if len(t) >= 3 and t not in self._PLAN_GENERIC_TOKENS}
+        # generic numbered keys ('flag-1', 'host2') carry no distinctive
+        # token — match the normalized key itself ('flag-1'→'flag1')
+        # against normalized step text ('Solve flag-1'→'solveflag1').
+        # Digits keep it specific; a bare 'flag' would match everything.
+        norm = re.sub(r"[^a-z0-9]", "", (flag_key or "").lower())
+        if norm.isalpha() or len(norm) < 4:
+            norm = ""
         closed = 0
         for i in self.state.plan:
             if i["s"] == "done":
                 continue
             txt = i["t"].lower()
-            if any(t in txt for t in toks):
+            if (any(t in txt for t in toks)
+                    or (norm and norm in re.sub(r"[^a-z0-9]", "", txt))):
+                i["s"] = "done"
+                closed += 1
+        if closed:
+            self.state.plan_updated = time.time()
+        return closed
+
+    _PLAN_RECON_TOKENS = frozenset({"recon", "enumerate", "enumeration",
+                                    "scan", "discover", "map", "mapping",
+                                    "foothold"})
+
+    def _plan_close_recon(self) -> int:
+        """First flag solve implies initial enumeration finished — retire a
+        still-open recon/discovery step so the checklist tracks reality even
+        when its steps don't name the flag (s84: 'Recon' stayed 'doing'
+        while flag-1 was already submitted)."""
+        if not self.state.plan:
+            return 0
+        closed = 0
+        for i in self.state.plan:
+            if i["s"] == "done":
+                continue
+            toks = set(re.split(r"[^a-z0-9]+", i["t"].lower()))
+            if toks & self._PLAN_RECON_TOKENS:
                 i["s"] = "done"
                 closed += 1
         if closed:
@@ -1439,8 +1470,8 @@ class SessionCoach:
             if level < 4:
                 result = f"denied: autonomy level {level} < 4"
             else:
-                budget = int(self.cfg.get("coach", {}).get("action_budget", 200))
-                grace = int(self.cfg.get("coach", {}).get("action_grace", 40))
+                budget = int(self.cfg.get("coach", {}).get("action_budget", 400))
+                grace = int(self.cfg.get("coach", {}).get("action_grace", 80))
                 grace_note = ""
                 # workers carry their own bounds (turn/time caps) — the
                 # parent's action budget must not starve their execs, and
@@ -1828,6 +1859,7 @@ class SessionCoach:
                 text = f"Submitted flag `{val[:80]}` → **{verdict}**"
                 if res.get("correct"):
                     marked = self._plan_mark_solved(res.get("flag_key") or "")
+                    marked += self._plan_close_recon()
                     if marked:
                         result += f"; plan: {marked} step(s) auto-marked done"
                         self._plan_push_card("auto-mark")
@@ -1862,6 +1894,7 @@ class SessionCoach:
                 text = f"Ran server check for `{key}` → **{verdict}**"
                 if res.get("correct"):
                     marked = self._plan_mark_solved(key)
+                    marked += self._plan_close_recon()
                     if marked:
                         result += f"; plan: {marked} step(s) auto-marked done"
                         self._plan_push_card("auto-mark")
@@ -1926,7 +1959,7 @@ class SessionCoach:
                     n = int(float(a.get("seconds") or a.get("content") or 30))
                 except (TypeError, ValueError):
                     n = 30
-                cap = int(self.cfg.get("coach", {}).get("wait_max_s", 300))
+                cap = int(self.cfg.get("coach", {}).get("wait_max_s", 600))
                 n = max(1, min(n, cap))
                 # don't sleep into a dying turn — the outer wait_for budget
                 # would cancel mid-wait and the model never sees the result.
@@ -1936,7 +1969,7 @@ class SessionCoach:
                     w = self._workers.get(window)
                     deadline = (w.started + float(
                         self.cfg.get("coach", {}).get(
-                            "worker_time_cap_s", 300))) if w else None
+                            "worker_time_cap_s", 3600))) if w else None
                 else:
                     deadline = self._turn_deadline
                 left = (deadline - time.monotonic()) if deadline else None
@@ -2082,7 +2115,7 @@ class SessionCoach:
         if w.status == "running":
             # wait in slices so operator chat can preempt — a blocking
             # collect must not hold the turn hostage for the full timeout
-            wait_s = float(self.cfg.get("coach", {}).get("collect_wait_s", 120))
+            wait_s = float(self.cfg.get("coach", {}).get("collect_wait_s", 240))
             deadline = time.monotonic() + wait_s
             while w.status == "running" and time.monotonic() < deadline:
                 if self.state.pending_chat:
@@ -2193,8 +2226,8 @@ class SessionCoach:
         touches _history: interleaved tool pairs would corrupt the parent's
         call/result pairing), shared guards/budgets via _dispatch(window)."""
         cc = self.cfg.get("coach", {})
-        turn_cap = int(cc.get("worker_turn_cap", 40))
-        time_cap = int(cc.get("worker_time_cap_s", 1800))
+        turn_cap = int(cc.get("worker_turn_cap", 80))
+        time_cap = int(cc.get("worker_time_cap_s", 3600))
         msgs = [{"role": "system",
                  "content": render_worker_prompt(
                      self.ctx, w, self.facts.render(500, compact=True),

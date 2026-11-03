@@ -352,8 +352,8 @@ def chat_prompt(question: str) -> str:
 
 
 def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
-                         plan_txt: str = "", *, turn_cap: int = 40,
-                         time_cap_s: int = 1800) -> str:
+                         plan_txt: str = "", *, turn_cap: int = 80,
+                         time_cap_s: int = 3600) -> str:
     """System prompt for a spawned worker agent — scoped to its task,
     exec-only toolset, last message is the report to the parent."""
     q = ctx.get("quest", {})
