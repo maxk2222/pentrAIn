@@ -173,6 +173,10 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - API enumeration: fetch `/` for the endpoint list, then probe each
   route with `?path=`/`?file=`/`?table=` style params — file-read
   parameters are the usual escape route into container loot.
+- Reaching a downstream internal API? Read the CALLING application's
+  source on the compromised host first — frontend/portal code holds the
+  real contract (endpoint paths, auth headers, tokens). Blind-fuzzing
+  endpoint names burns turns when the source already names them.
 
 ## Log analysis field traps
 
