@@ -116,9 +116,28 @@ the live probe — anything absent there is NOT installed, don't retry it):
   `.git/refs/heads/` doesn't exist locally. A saved Apache 404 page is
   NOT a ref — `.git/refs/heads/master` returning 404 means there are no
   commits (dead end), don't re-fetch it.
+- `wget -r` CANNOT enumerate `objects/` (no HTML index) — mirrors stay
+  incomplete. Walk objects by hash instead (this is what git-dumper does):
+  1. `curl http://IP/.git/logs/HEAD` → commit shas oldest→newest
+  2. fetch `.git/objects/<first2>/<rest38>` raw → zlib-decompress:
+     `curl -s URL | python3 -c "import sys,zlib;
+     sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))"`
+  3. `commit` object → `tree <sha>` → tree object lists `mode sha name`
+     per entry (binary!) → fetch blobs → file contents
+  4. cleaner: drop objects into a local `/tmp/repo/.git/objects/xx/`
+     layout (mkdir -p first) + fetch HEAD/refs/config → then ordinary
+     `git -C /tmp/repo log` / `git cat-file -p <sha>` work offline
+- Rotated secrets: when a commit message says creds/config changed,
+  diff the file ACROSS commits — the old value lives in the older
+  blob (password archaeology, not the current tree).
 
 ## Credentials & access
 
+- NEVER brute-force a credential you invented: hydra with a guessed or
+  leetspeak-mutated password wastes turns and can trip lockouts. Creds
+  come ONLY from artifacts literally seen in output (configs, repos,
+  notes, hashes you cracked). Missing creds = unfound evidence — hunt
+  the artifact, don't fuzz auth.
 - A credential belongs to the service where it was found — DEPLOY_PASS
   from config.env is for ssh, NOT mysql/docker. Missing DB/service creds
   live in init.sql, docker-compose.yml, .env files — hunt them down,
@@ -256,6 +275,19 @@ the live probe — anything absent there is NOT installed, don't retry it):
   "Authorization: Bearer $T" https://kubernetes.default.svc/api/v1/... ->
   privileged pod (metadata.namespace + imagePullPolicy:IfNotPresent for
   local images + hostPath + privileged:true) -> flag via pods/<name>/log.
+
+## Enumeration discipline
+
+- A concrete artifact lead (exposed .git/backup/config, leaked file,
+  looted creds) outranks widening enumeration — finish exploiting what
+  you found before scanning further. Re-scans and re-reads of settled
+  files without a new hypothesis are loops, not iteration.
+- Host alive (ping/routed) but EVERY port filtered = ACL/firewall tier
+  isolation — that host is reached by pivoting through a compromised
+  machine or an exposed service, never by more nmap variants.
+- Track where downloaded artifacts land (mirror dirs, /tmp files) —
+  `find /tmp -name '.git' -o -name '*.cap' -o -name '*.txt'` recovers a
+  lost working dir faster than re-downloading it.
 
 ## Agent-side tool discipline
 

@@ -16,10 +16,10 @@ from .objective import render as objective_render
 # curated environment knowledge (tool inventory, shell quirks, recipes) —
 # loaded once into the system prompt so it stays in the cacheable prefix.
 # Versioned with the coach, updated from live-test lessons.
-def _knowledge() -> str:
+def _knowledge(limit: int = 18000) -> str:
     try:
         p = Path(__file__).parent / "knowledge" / "kali-environment.md"
-        return p.read_text(encoding="utf-8")[:6000]
+        return p.read_text(encoding="utf-8")[:limit]
     except OSError:
         return ""
 
@@ -422,4 +422,6 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
          "Omit empty sections. If you can't produce JSON, plain prose is "
          "accepted — but structured reports lose nothing."),
     ]
+    if kb := _knowledge():
+        lines += ["", "# Kali environment field notes", kb]
     return "\n".join(lines)
