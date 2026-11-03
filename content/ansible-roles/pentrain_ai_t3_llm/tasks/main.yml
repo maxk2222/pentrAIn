@@ -1,0 +1,20 @@
+---
+# ai-security "AskOps" — deterministic LLM-attack lab in one container.
+- name: app sources
+  ansible.builtin.copy:
+    src: assist/
+    dest: /opt/askops/
+    mode: preserve
+
+- name: build assist image
+  ansible.builtin.command: docker build -t pentrain/askops /opt/askops
+  register: b1
+  changed_when: b1.rc == 0
+
+- name: run assist (:80)
+  ansible.builtin.command: >-
+    docker run -d --name assist --restart unless-stopped
+    -p 80:80 pentrain/askops
+  register: c1
+  changed_when: c1.rc == 0
+  failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))

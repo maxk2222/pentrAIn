@@ -1,0 +1,68 @@
+---
+# cloud-native "Soft-Schedule" — a real kind cluster on the VM.
+# Requires pentrain_docker_host first (dockerd + build tools).
+- name: kubectl + kind binaries
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: "0755"
+  loop:
+    - { url: "https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl",
+        dest: /usr/local/bin/kubectl }
+    - { url: "https://github.com/kubernetes-sigs/kind/releases/download/v0.26.0/kind-linux-amd64",
+        dest: /usr/local/bin/kind }
+
+- name: lab tree + injected flag bundle dir
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/opt/lab, /opt/labflags]
+
+- name: placeholder flag files (platform injects real values at session start)
+  ansible.builtin.copy:
+    dest: "{{ item.dest }}"
+    content: "{{ item.content }}"
+    mode: "0640"
+    owner: root
+    group: root
+  loop:
+    - { dest: /opt/labflags/api-secret.txt, content: "pending-injection\n" }
+    - { dest: /root/k8s-flag.txt, content: "pending-injection\n" }
+
+- name: app + cluster sources
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: preserve
+  loop:
+    - { src: "shop-app/", dest: "/opt/lab/shop-app/" }
+    - { src: "cluster.yml", dest: "/opt/lab/cluster.yml" }
+    - { src: "manifests.yml", dest: "/opt/lab/manifests.yml" }
+
+- name: build shop-app image
+  ansible.builtin.command: docker build -t pentrain/shop-app /opt/lab/shop-app
+  register: b1
+  changed_when: b1.rc == 0
+
+- name: create the kind cluster
+  ansible.builtin.command: kind create cluster --config /opt/lab/cluster.yml
+  register: kc
+  changed_when: kc.rc == 0
+  failed_when: kc.rc != 0 and 'exists' not in (kc.stderr | default(''))
+
+- name: load image into the cluster
+  ansible.builtin.command: kind load docker-image pentrain/shop-app:latest --name lab
+  register: li
+  changed_when: li.rc == 0
+
+- name: apply lab manifests
+  ansible.builtin.command: kubectl --kubeconfig /root/.kube/config apply -f /opt/lab/manifests.yml
+  register: mf
+  changed_when: "'created' in mf.stdout or 'configured' in mf.stdout"
+
+- name: wait for shop-app rollout
+  ansible.builtin.command: >-
+    kubectl --kubeconfig /root/.kube/config -n shop
+    rollout status deployment/shop-app --timeout=180s
+  register: ro

@@ -1,0 +1,44 @@
+---
+# web-t4 "Split-Second" — HTTP request smuggling (0.CL desync).
+# edge = naive proxy: header ACL on /internal/*, then transparent piping.
+# backend = flask app behind the shared network — its request log is the
+# proof a smuggled request ever executed.
+- name: app sources
+  ansible.builtin.copy:
+    src: "{{ item }}/"
+    dest: /opt/smuggle/{{ item }}/
+    mode: preserve
+  loop: [edge, backend]
+  register: copied
+
+- name: build backend image
+  ansible.builtin.command: docker build -t pentrain/smuggle-backend /opt/smuggle/backend
+  register: b1
+  changed_when: b1.rc == 0
+
+- name: build edge image
+  ansible.builtin.command: docker build -t pentrain/smuggle-edge /opt/smuggle/edge
+  register: b2
+  changed_when: b2.rc == 0
+
+- name: shared network
+  ansible.builtin.command: docker network create smuggle-net
+  register: net
+  changed_when: net.rc == 0
+  failed_when: net.rc != 0 and 'already exists' not in (net.stderr | default(''))
+
+- name: run backend (unpublished)
+  ansible.builtin.command: >-
+    docker run -d --name backend --restart unless-stopped
+    --network smuggle-net pentrain/smuggle-backend
+  register: c1
+  changed_when: c1.rc == 0
+  failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))
+
+- name: run edge (:80 only exposed port)
+  ansible.builtin.command: >-
+    docker run -d --name edge --restart unless-stopped
+    --network smuggle-net -p 80:80 pentrain/smuggle-edge
+  register: c2
+  changed_when: c2.rc == 0
+  failed_when: c2.rc != 0 and 'Conflict' not in (c2.stderr | default(''))

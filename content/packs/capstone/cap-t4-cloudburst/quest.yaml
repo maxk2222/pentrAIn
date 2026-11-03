@@ -1,0 +1,103 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: cap-t4-cloudburst
+  track: capstone
+  tier: 4
+  title: "Cloudburst"
+  version: 1
+display:
+  tagline: "From a public preview feature to the kubernetes node — the full cloud-native kill chain, end to end."
+requirements:
+  min_ram_gb: 16
+  min_vcpus: 10
+  min_disk_gb: 110
+  est_deploy_min: 20
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: edge01
+      template: debian-12-x64-server-template
+      ram_gb: 3
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 30
+      roles: [pentrain_docker_host, pentrain_cap_t4_edge]
+    - name: k8s01
+      template: debian-12-x64-server-template
+      ram_gb: 5
+      cpus: 3
+      vlan: 10
+      ip_last_octet: 31
+      roles: [pentrain_docker_host, pentrain_cloud_t1_k8s]
+flags:
+  - id: edge-lfi
+    name: "Edge flag — a file inside the public-web container"
+    kind: file
+    points: 150
+    vm: edge01
+    container: public-web
+    file_path: /srv/app/flag.txt
+  - id: pod-shell
+    name: "RCE inside the shop-app pod — /tmp/.pwned via the SSRF"
+    kind: command
+    points: 150
+    command:
+      vm: k8s01
+      cmd: "docker exec kind-control-plane sh -c 'CID=$(crictl ps --name shop-app -q | head -1); crictl exec \"$CID\" test -f /tmp/.pwned'"
+  - id: api-secret
+    name: "Operator seed — /etc/labflags/api-secret.txt inside the pod"
+    kind: file
+    points: 200
+    vm: k8s01
+    file_path: /opt/labflags/api-secret.txt
+  - id: node-flag
+    name: "Cluster escaped — /root/k8s-flag.txt on the node"
+    kind: file
+    points: 300
+    vm: k8s01
+    file_path: /root/k8s-flag.txt
+  - id: chain-report
+    name: "Engagement report — /root/cloudburst-report.txt on kali"
+    kind: command
+    points: 200
+    command:
+      vm: kali
+      cmd: "test -f /root/cloudburst-report.txt && grep -qi 'cloudburst' /root/cloudburst-report.txt"
+hints:
+  - id: h1
+    cost: 60
+    stage: recon
+    text: "edge01's /preview fetches URLs server-side — and urllib honours file://. file:///srv/app/flag.txt is the warm-up; http://k8s01/ is the real direction."
+  - id: h2
+    cost: 80
+    stage: exploit
+    text: "k8s01:80 answers through the preview — it's the same debuggable shop pod pattern: /exec?cmd=. Drive every post-exploit step through the SSRF: url-encode each inner command inside ?url=."
+  - id: h3
+    cost: 100
+    stage: post
+    text: "The pod's SA token reads prod secrets AND creates pods: privileged pod, hostPath /host, command 'cat /host/root/k8s-flag.txt; sleep 30' — read its log. Write your chain notes to /root/cloudburst-report.txt on kali for the report flag."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-edge
+      name: "Probed the preview/SSRF"
+      detect: { command_match: "(preview|url=|file://)" }
+      hint_after_s: 600
+    - id: cp-pod
+      name: "Code exec inside the pod"
+      detect: { command_match: "(exec\\?cmd|k8s01)" }
+      hint_after_s: 900
+    - id: cp-node
+      name: "Escalating to the node"
+      detect: { command_match: "(serviceaccount|privileged|hostPath|pods)" }
+      hint_after_s: 1200
+  escalation: { observe_grace_s: 300, nudge_s: 720, hint_s: 1500 }
+scoring:
+  base: 1000
+  time_bonus_max: 300
+  par_s: 4200
+  takeover_cost: 250

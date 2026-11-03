@@ -1,0 +1,78 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t4-request-smuggling
+  track: web-appsec
+  tier: 4
+  title: "Split-Second"
+  version: 1
+display:
+  tagline: "The front-end says /internal is denied — the back-end never got the memo. Desync them."
+requirements:
+  min_ram_gb: 12
+  min_vcpus: 6
+  min_disk_gb: 90
+  est_deploy_min: 10
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: app01
+      template: debian-12-x64-server-template
+      ram_gb: 4
+      cpus: 2
+      vlan: 10
+      ip_last_octet: 26
+      roles: [pentrain_docker_host, pentrain_web_t4_smuggle]
+flags:
+  - id: smuggle-flag
+    name: "Smuggled flag — /internal/flag behind the edge ACL"
+    kind: file
+    points: 350
+    vm: app01
+    container: backend
+    file_path: /srv/api/flag.txt
+  - id: trace-marker
+    name: "State-changing smuggle — POST /internal/report reached the backend"
+    kind: command
+    points: 300
+    command:
+      vm: app01
+      container: backend
+      cmd: "grep -q 'POST /internal/report' /var/log/requests.log"
+hints:
+  - id: h1
+    cost: 50
+    stage: recon
+    text: "GET /internal/* is denied at the edge, but the edge only parses the request HEAD once — afterwards it pipes bytes. curl can't build this request; craft raw bytes over a socket (python3 socket or printf | nc)."
+  - id: h2
+    cost: 70
+    stage: exploit
+    text: "The edge trusts Content-Length literally: 'POST /track' with 'Content-Length: 0' tells it there is no body — but any bytes you append still stream to the backend as the start of the next request. Append a whole 'GET /internal/flag HTTP/1.1' request."
+  - id: h3
+    cost: 90
+    stage: exploit
+    text: "One request, two responses: python3 socket → send 'POST /track HTTP/1.1\\r\\nHost: app01\\r\\nContent-Length: 0\\r\\n\\r\\nGET /internal/flag HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n' → the second response body carries the flag. Repeat the same trick with 'POST /internal/report' for the marker."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-recon
+      name: "Mapped the public surface"
+      detect: { command_match: "(curl |nikto|dirb|gobuster|ffuf|whatweb|nmap)" }
+      hint_after_s: 600
+    - id: cp-raw
+      name: "Crafting raw requests"
+      detect: { command_match: "(socket|nc |ncat|/dev/tcp|http1\\.1)" }
+      hint_after_s: 900
+    - id: cp-smuggled
+      name: "Smuggled a request past the ACL"
+      detect: { command_match: "(internal/flag|Content-Length: 0|internal/report)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 540, hint_s: 1080 }
+scoring:
+  base: 750
+  time_bonus_max: 250
+  par_s: 2700
+  takeover_cost: 180

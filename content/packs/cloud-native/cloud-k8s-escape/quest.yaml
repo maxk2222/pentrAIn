@@ -1,0 +1,82 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: cloud-k8s-escape
+  track: cloud-native
+  tier: 1
+  title: "Soft-Schedule"
+  version: 1
+display:
+  tagline: "A debug endpoint inside a pod, a service account that can see prod, and a host that thinks it's safe — escape the cluster."
+requirements:
+  min_ram_gb: 14
+  min_vcpus: 8
+  min_disk_gb: 100
+  est_deploy_min: 15
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+  vms:
+    - name: app01
+      template: debian-12-x64-server-template
+      ram_gb: 5
+      cpus: 3
+      vlan: 10
+      ip_last_octet: 28
+      roles: [pentrain_docker_host, pentrain_cloud_t1_k8s]
+flags:
+  - id: pod-shell
+    name: "RCE inside the shop-app pod — /tmp/.pwned written"
+    kind: command
+    points: 150
+    command:
+      vm: app01
+      cmd: "docker exec kind-control-plane sh -c 'CID=$(crictl ps --name shop-app -q | head -1); crictl exec \"$CID\" test -f /tmp/.pwned'"
+  - id: api-secret
+    name: "Operator seed — /etc/labflags/api-secret.txt inside the pod"
+    kind: file
+    points: 200
+    vm: app01
+    file_path: /opt/labflags/api-secret.txt
+  - id: node-flag
+    name: "Cluster escaped — /root/k8s-flag.txt on the node"
+    kind: file
+    points: 400
+    vm: app01
+    file_path: /root/k8s-flag.txt
+hints:
+  - id: h1
+    cost: 40
+    stage: recon
+    text: "Port 80 is a NodePort into a real k8s cluster. The index page admits a debug endpoint survived to prod: /exec?cmd=id. Every command runs INSIDE the pod."
+  - id: h2
+    cost: 60
+    stage: exploit
+    text: "Pods carry service-account tokens at /var/run/secrets/kubernetes.io/serviceaccount/token. Talk to the API at https://kubernetes.default.svc with curl -k -H 'Authorization: Bearer <tok>'. Try /api/v1/namespaces/prod/secrets."
+  - id: h3
+    cost: 90
+    stage: post
+    text: "shop-sa can CREATE pods in prod. POST a pod spec (namespace prod, image pentrain/shop-app:latest, privileged:true, hostPath volume mounting /host, command ['sh','-c','cat /host/root/k8s-flag.txt; sleep 30']) to /api/v1/namespaces/prod/pods — then read its log at /api/v1/namespaces/prod/pods/<name>/log."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-rce
+      name: "Got code exec inside the pod"
+      detect: { command_match: "(/exec|cmd=)" }
+      hint_after_s: 600
+    - id: cp-token
+      name: "Found the service account token"
+      detect: { command_match: "(serviceaccount|Bearer|kubernetes.default)" }
+      hint_after_s: 900
+    - id: cp-escalate
+      name: "Creating a privileged pod"
+      detect: { command_match: "(privileged|hostPath|pods|namespaces/prod)" }
+      hint_after_s: 1080
+  escalation: { observe_grace_s: 240, nudge_s: 600, hint_s: 1200 }
+scoring:
+  base: 800
+  time_bonus_max: 300
+  par_s: 3000
+  takeover_cost: 200

@@ -1,0 +1,21 @@
+---
+# cap-t4 edge01 — public web app with a URL-preview SSRF (urllib honours
+# file:// AND http:// — both are intentional for the capstone chain).
+- name: app sources
+  ansible.builtin.copy:
+    src: public-web/
+    dest: /opt/cloudburst/public-web/
+    mode: preserve
+
+- name: build public-web image
+  ansible.builtin.command: docker build -t pentrain/cloudburst-web /opt/cloudburst/public-web
+  register: b1
+  changed_when: b1.rc == 0
+
+- name: run public-web (:80)
+  ansible.builtin.command: >-
+    docker run -d --name public-web --restart unless-stopped
+    -p 80:80 pentrain/cloudburst-web
+  register: c1
+  changed_when: c1.rc == 0
+  failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))
