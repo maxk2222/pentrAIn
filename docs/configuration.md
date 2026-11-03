@@ -40,9 +40,17 @@ Quests that exceed the budget stay locked in the library (`check_unlock`).
 
 | Key | Default |
 |---|---|
+| `resources.gate_mode` | `live` |
+| `resources.ram_headroom` | `0.85` |
+| `resources.vcpu_overcommit` | `4.0` |
 | `resources.max_ram_gb` | `48` |
 | `resources.max_vcpus` | `16` |
 | `resources.max_disk_gb` | `500` |
+
+`gate_mode`: `live` weighs each quest's ballooning floor against free host
+RAM × `ram_headroom`, host cores × `vcpu_overcommit`, disk, and template
+presence (falls back to `static` budgets when PVE is unreachable);
+`static` = the `max_*` budgets only; `off` = no capacity gate.
 
 ### LLM
 
@@ -53,7 +61,7 @@ Quests that exceed the budget stay locked in the library (`check_unlock`).
 | `llm.model` | `huihui-ai/Qwen3-30B-A3B-abliterated` | Chat/tool-calling model |
 | `llm.vision_model` | — | Enables `capture_screen` |
 | `llm.temperature` | `0.4` | |
-| `llm.daily_token_budget` | `2000000` | 0 = unlimited |
+| `llm.daily_token_budget` | `10000000` | 0 = unlimited |
 | `llm.reasoning` | `true` | Let thinking models reason before answering |
 | `llm.reasoning_effort` | `medium` | `low`/`medium`/`high` — values probed per endpoint |
 
@@ -70,14 +78,15 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `coach.reflect_interval_s` | `60` | Wall-clock reflection tick |
 | `coach.nudge_after_s` | `480` | Idle → nudge threshold |
 | `coach.hint_after_s` | `900` | Idle → hint threshold |
-| `coach.action_budget` | `50` | Max coach executions/session |
+| `coach.action_budget` | `200` | Max coach executions/session (parent) |
+| `coach.action_grace` | `40` | Soft-cap window after the budget |
 | `coach.takeover_pace_s` | `10` | Min gap between L4 chains |
-| `coach.takeover_chain_max` | `12` | Max LLM calls per L4 turn |
-| `coach.max_workers` | `3` | Parallel subagent panes (`w1`–`w3`) |
-| `coach.worker_turn_cap` | `10` | LLM turns per worker |
-| `coach.worker_time_cap_s` | `300` | Wall-clock per worker |
-| `coach.collect_wait_s` | `40` | `collect_agent` block bound |
-| `coach.wait_max_s` | `180` | Cap per `wait` tool call |
+| `coach.takeover_chain_max` | `24` | Max LLM calls per L4 turn |
+| `coach.max_workers` | `8` | Parallel subagent panes (`w1`–`w8`) |
+| `coach.worker_turn_cap` | `40` | LLM turns per worker |
+| `coach.worker_time_cap_s` | `1800` | Wall-clock per worker |
+| `coach.collect_wait_s` | `120` | `collect_agent` block bound |
+| `coach.wait_max_s` | `300` | Cap per `wait` tool call |
 
 ### Content & data
 

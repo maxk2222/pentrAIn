@@ -1,6 +1,6 @@
 # Tracks & quests
 
-**57 quests across 9 tracks**, organized in tiers 1–3. Quests ship a
+**61 quests across 11 tracks**, organized in tiers 1–4. Quests ship a
 briefing, coach checkpoints, staged hints and a `defense.md` (what broke, how
 to detect it, how to fix it) — capstone quests are the exception: they go in
 blind.
@@ -25,8 +25,13 @@ flowchart TD
   quest of its track+tier is solved — the capstone for that tier.
 - Exams never count as tier predecessors — solving the T1 exam alone does not
   open T2.
-- A **resource budget** (Settings → `resources.max_*`) additionally locks
-  quests your engine can't fit.
+- A **capacity gate** additionally locks quests the host can't fit right
+  now: `resources.gate_mode = live` (default) weighs each topology's
+  *ballooning floor* — not nominal RAM — against free host RAM, CPU
+  overcommit, disk, and whether every referenced template exists on the
+  node. `static` falls back to `resources.max_*` budgets; `off` unlocks
+  everything. Locked quests always name the reason (missing template,
+  prerequisite, or capacity).
 
 ## The tracks
 
@@ -46,7 +51,7 @@ multi-host chains.
 | The Pivot | 3 | Web host is the only path to the DB — pivot through |
 | **Exam: Supply Chain** | 3 | Three hosts deep, creds leak at every hop |
 
-### 🌐 Web AppSec — `web-appsec` (11)
+### 🌐 Web AppSec — `web-appsec` (12)
 
 OWASP vulnerability classes from basics to chained auth-bypass.
 
@@ -63,6 +68,7 @@ OWASP vulnerability classes from basics to chained auth-bypass.
 | Broken Trust | 3 | SSRF into an internal API |
 | Signed & Confused | 3 | JWT secret → IDOR → admin |
 | **Exam: The Reporting API** | 3 | JWT + IDOR + API → root shell |
+| Split-Second | 4 | 0.CL request smuggling: nginx front-end vs. Flask back-end desync |
 
 ### 📡 Network & Recon — `network-recon` (8)
 
@@ -158,12 +164,31 @@ regeneration: [ops.md — wireless labs](ops.md#wireless-hwsim-labs).
 > read-only probes, and a shared action budget — but the ROE is on you:
 > only devices you own, no DoS, no aggressive brute force.
 
-### 👑 Capstone — `capstone` (2)
+### ☁️ Cloud-Native — `cloud-native` (1)
+
+Kubernetes attack paths on a real `kind` cluster — from a pod debug
+endpoint to node compromise.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Soft-Schedule | 1 | Pod RCE → over-permissive service account → secrets → privileged pod → host flag |
+
+### 🤖 AI Security — `ai-security` (1)
+
+LLM application attacks — OWASP LLM Top-10 against a deterministic
+embedded assistant (no external API key needed).
+
+| Quest | Tier | Focus |
+|---|---|---|
+| AskOps | 1 | Prompt injection: guard bypass → system-prompt leak → indirect injection via trusted docs → tool abuse |
+
+### 👑 Capstone — `capstone` (3)
 
 | Quest | Tier | Focus |
 |---|---|---|
 | Nordmarkt Feinkost | 2 | Single-box engagement: web enum → backup leak → foothold → internal API cmd-injection → DB LOAD_FILE → cron privesc → written report |
 | Nordwind Logistics | 3 | Full engagement: recon → source leak → foothold → two pivots → API compromise → DB creds → hash crack → privesc → written report |
+| Cloudburst | 4 | Cloud-native kill chain: edge SSRF → k8s API abuse → privileged escape → node loot — end to end |
 
 > [!NOTE]
 > Capstone quests ship **no hints, no checkpoints, no cheatsheet and no

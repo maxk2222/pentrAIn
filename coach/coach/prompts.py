@@ -352,7 +352,8 @@ def chat_prompt(question: str) -> str:
 
 
 def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
-                         plan_txt: str = "") -> str:
+                         plan_txt: str = "", *, turn_cap: int = 40,
+                         time_cap_s: int = 1800) -> str:
     """System prompt for a spawned worker agent — scoped to its task,
     exec-only toolset, last message is the report to the parent."""
     q = ctx.get("quest", {})
@@ -402,8 +403,12 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
          "(scan/discovery result) — enumerate first, then connect."),
         ("- Read-only, non-destructive, no persistence — these may be real "
          "devices, not lab VMs."),
-        ("- Your steps share the session action budget — never re-run a "
-         "command whose result is already known."),
+        (f"- Your budget is ~{turn_cap} turns / ~{time_cap_s // 60} min — "
+         "plan the task to fit and report EARLY with partial findings "
+         "rather than being cut off mid-work; a wrap-up warning arrives "
+         "before the cap."),
+        ("- Never re-run a command whose result is already known — each "
+         "exec costs a turn you don't get back."),
         "",
         ("When done (or fully blocked): reply with ONE JSON object and NO "
          "tool call — that object IS your report to the parent coach, it "

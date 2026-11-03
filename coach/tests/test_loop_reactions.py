@@ -1713,6 +1713,76 @@ async def test_finished_worker_frees_its_slot():
     await coach.stop()
 
 
+async def test_worker_execs_do_not_drain_parent_budget():
+    """Worker execs are bounded by their own turn/time caps — they must
+    neither consume the parent's action_budget nor be denied by it (a busy
+    worker pool would otherwise hard-deny the parent's own chain)."""
+    coach, _c = _l4_coach()
+    coach.cfg["coach"]["action_budget"] = 1
+    coach.cfg["coach"]["action_grace"] = 0
+    await coach.start()
+    coach.llm = _WorkerScriptLlm()
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "id"}, window="w1")
+    assert not r.startswith("denied:")
+    assert coach.state.exec_count == 0      # parent's budget untouched
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "id"})
+    assert not r.startswith("denied:")
+    assert coach.state.exec_count == 1
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "id"})
+    assert r.startswith("denied:")          # parent hits its own cap …
+    _v, r = await coach._dispatch({"type": "exec_in_kali",
+                                   "command": "id"}, window="w1")
+    assert not r.startswith("denied:")      # … but workers still run
+    await coach.stop()
+
+
+async def test_worker_budget_low_wrapup_produces_report():
+    """Approaching its caps the worker gets ONE 'report now' injection —
+    it finishes done with a structured report instead of a timeout
+    output-tail."""
+    class NeverDoneLlm(FakeLlm):
+        def __init__(self):
+            super().__init__()
+            self.saw_wrapup = False
+
+        async def chat(self, messages, **kw):
+            if "worker agent" in (messages[0].get("content") or ""):
+                if any("BUDGET LOW" in (m.get("content") or "")
+                       for m in messages):
+                    self.saw_wrapup = True
+                    return {"content": '{"summary": "partial: 22/80 open"}',
+                            "actions": [{"type": "none", "reason": "wrap"}],
+                            "tool_calls": [],
+                            "raw": {"usage": {"total_tokens": 1}}}
+                return {"content": "",
+                        "actions": [{"type": "exec_in_kali",
+                                     "command": "id", "_call_id": "c1"}],
+                        "tool_calls": [{"id": "c1", "type": "function",
+                                        "function": {
+                                            "name": "exec_in_kali",
+                                            "arguments": "{}"}}],
+                        "raw": {"usage": {"total_tokens": 1}}}
+            return {"content": "", "actions": [{"type": "none"}],
+                    "tool_calls": [], "raw": {"usage": {"total_tokens": 1}}}
+
+    coach, _c = _l4_coach()
+    coach.cfg["coach"]["worker_turn_cap"] = 4
+    coach.cfg["coach"]["worker_time_cap_s"] = 900
+    await coach.start()
+    llm = NeverDoneLlm()
+    coach.llm = llm
+    await coach._dispatch({"type": "spawn_agent", "task": "enum"})
+    await asyncio.sleep(0.4)
+    w = coach._workers["w1"]
+    assert llm.saw_wrapup              # wrap-up turn actually reached it
+    assert w.status == "done"          # graceful exit, not a timeout
+    assert "partial: 22/80" in w.report
+    await coach.stop()
+
+
 async def test_busy_bounces_escalate_to_wedge_directive():
     """Two consecutive execs that never finished (bounced off a held pane
     or still running) must escalate to a hard C-c/type_in_pane directive —

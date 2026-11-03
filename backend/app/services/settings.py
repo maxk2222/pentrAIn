@@ -26,6 +26,11 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "lan.scope_cidr": ("", False),                  # authorized LAN scope for home-lab mode; empty = auto-detect /24 from WAN lease
     "kali.builder_vmid": (0, False),                # internal: in-flight template-builder VM
     "platform.api_url": ("http://pentrain-app:8000", False),  # backend URL reachable from ranges
+    "resources.gate_mode": ("live", False),      # live|static|off — how quest
+                                               # unlock weighs host capacity
+    "resources.ram_headroom": (0.85, False),     # floor must fit under
+                                               # free_ram × this fraction
+    "resources.vcpu_overcommit": (4.0, False),   # vcpus vs host cores factor
     "resources.max_ram_gb": (48, False),
     "resources.max_vcpus": (16, False),
     "resources.max_disk_gb": (500, False),
@@ -34,7 +39,7 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "llm.model": ("huihui-ai/Qwen3-30B-A3B-abliterated", False),
     "llm.vision_model": ("", False),
     "llm.temperature": (0.4, False),
-    "llm.daily_token_budget": (2_000_000, False),
+    "llm.daily_token_budget": (10_000_000, False),
     "llm.reasoning": (True, False),               # let thinking models reason before answering
     "llm.reasoning_effort": ("medium", False),    # low|medium|high (reasoning_effort field)
     "coach.default_autonomy": (2, False),
@@ -44,14 +49,15 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.reflect_interval_s": (60, False),
     "coach.nudge_after_s": (480, False),
     "coach.hint_after_s": (900, False),
-    "coach.action_budget": (50, False),
+    "coach.action_budget": (200, False),
+    "coach.action_grace": (40, False),           # soft-cap window after budget
     "coach.takeover_pace_s": (10, False),        # min gap between L4 chains
-    "coach.takeover_chain_max": (12, False),     # max LLM calls per L4 turn
-    "coach.max_workers": (3, False),             # parallel L4 subagent panes
-    "coach.worker_turn_cap": (10, False),        # LLM turns per worker task
-    "coach.worker_time_cap_s": (300, False),     # wall-clock per worker task
-    "coach.collect_wait_s": (40, False),         # collect_agent block bound
-    "coach.wait_max_s": (180, False),            # cap per wait-tool call
+    "coach.takeover_chain_max": (24, False),     # max LLM calls per L4 turn
+    "coach.max_workers": (8, False),             # parallel L4 subagent panes
+    "coach.worker_turn_cap": (40, False),        # LLM turns per worker task
+    "coach.worker_time_cap_s": (1800, False),    # wall-clock per worker task
+    "coach.collect_wait_s": (120, False),        # collect_agent block bound
+    "coach.wait_max_s": (300, False),            # cap per wait-tool call
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

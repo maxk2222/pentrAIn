@@ -131,7 +131,7 @@ export function SubagentsToggle({ enabled, onToggle }: {
   return (
     <button
       title={enabled
-        ? "Subagents on — the coach can spawn parallel workers on panes w1–w3 (same as /subagents on)"
+        ? "Subagents on — the coach can spawn parallel workers on tmux panes w1, w2, … (same as /subagents on)"
         : "Subagents off — enable parallel worker agents (same as /subagents on)"}
       onClick={() => onToggle(!enabled)}
       className={cn(

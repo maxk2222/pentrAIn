@@ -14,8 +14,11 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - creds/exploit: hydra, john, hashcat, medusa, msfconsole, evil-winrm
 - pivot/remote: ssh, sshpass, expect, sshuttle, proxychains4, xfreerdp3
 - files/forensics: python3 (pexpect), tcpdump, tshark, binwalk, exiftool
-- wordlists: /usr/share/wordlists/ (rockyou.txt.gz → gunzip first,
-  dirb/dirbuster lists under /usr/share/wordlists/dirb/)
+- wordlists: /usr/share/wordlists/ — rockyou.txt is ALREADY unzipped
+  (use it directly), seclists/ is present, there is NO dirb/ dir. First
+  choice for web content discovery:
+  /usr/share/wordlists/seclists/Discovery/Web-Content/common.txt
+  (bigger: DirBuster-2007_directory-list-2.3-medium.txt in the same dir).
 
 ## Range topology
 

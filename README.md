@@ -19,7 +19,7 @@
 <p align="center">
   <img alt="stack" src="https://img.shields.io/badge/stack-FastAPI%20·%20React%2019%20·%20SQLite-1f6feb?style=flat-square" />
   <img alt="engine" src="https://img.shields.io/badge/engine-Proxmox%20VE%20%2B%20Ludus-e9761a?style=flat-square" />
-  <img alt="quests" src="https://img.shields.io/badge/quests-57%20in%209%20tracks-2ea44f?style=flat-square" />
+  <img alt="quests" src="https://img.shields.io/badge/quests-61%20in%2011%20tracks-2ea44f?style=flat-square" />
   <img alt="coach" src="https://img.shields.io/badge/coach-4%20autonomy%20levels%20·%20tool%20calling-8250df?style=flat-square" />
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" />
 </p>
@@ -54,9 +54,10 @@ and adapting to how you work.
   <tr>
     <td width="50%">
       <h3>🗺️ Quest library</h3>
-      <b>57 quests in 9 tracks</b> — Linux, web appsec, network recon, AD,
-      forensics, scripting, wireless, home-lab, capstone. Tiered progression,
-      exam capstones, staged hints that cost points.
+      <b>61 quests in 11 tracks</b> — Linux, web appsec, network recon, AD,
+      forensics, scripting, wireless, home-lab, capstone, cloud-native
+      (k8s), AI security (LLM). Tiered progression, exam capstones, staged
+      hints that cost points.
     </td>
     <td width="50%">
       <h3>🖥️ Browser workspace</h3>
@@ -120,7 +121,7 @@ flowchart TB
     MODE --> GATE{"policy gate<br/>silence by default<br/>budgets · scope"}
     GATE --> LLM["LLM turn — tool schema rebuilt<br/>from level + Sub toggle"]
     LLM --> MAIN["main feed<br/>coach messages · exec reports"]
-    LLM <-->|"spawn_agent → collect_agent<br/>(level 4 + Sub)"| W["workers w1–w3<br/>exec-only toolset<br/>own tmux windows"]
+    LLM <-->|"spawn_agent → collect_agent<br/>(level 4 + Sub)"| W["workers w1–w8<br/>exec-only toolset<br/>own tmux windows"]
     W -.->|"meta.agent tagged"| FEED["per-worker feeds<br/>clickable chips above the composer"]
 ```
 

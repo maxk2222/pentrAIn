@@ -49,7 +49,9 @@ log = structlog.get_logger(__name__)
 
 HISTORY_CAP = 14           # user/assistant messages kept in-context
 CHAT_DEBOUNCE_S = 1.5      # coalesce rapid trainee messages into one turn
-LLM_TURN_BUDGET_S = 300    # hard bound for one LLM turn incl. action dispatch;
+LLM_TURN_BUDGET_S = 600    # hard bound for one LLM turn incl. action dispatch;
+                           # local models are slow — a full takeover chain
+                           # must fit inside this
                          # a wedged call gets cancelled, releasing the lock
 # tool types that keep an in-turn chain alive — they have server-side effects
 # whose results the model should see immediately (send_chat/offer_hint/none
@@ -83,6 +85,7 @@ class _Worker:
     # never the parent's state.plan; audit-only persistence (workers die
     # on restart)
     plan: list[dict] = field(default_factory=list)
+    wrap_nudged: bool = False   # budget-low wrap-up already injected
     task_obj: asyncio.Task | None = None
 
 
@@ -746,7 +749,7 @@ class SessionCoach:
                         stuck_s=int(self.state.stuck_s()))
         if not decision.may_proactive:
             return
-        budget = int(self.cfg.get("coach", {}).get("action_budget", 50))
+        budget = int(self.cfg.get("coach", {}).get("action_budget", 200))
         try:
             # a single wedged turn (stuck HTTP call, lock holder that never
             # returns) must not take the whole session loop down with it
@@ -916,7 +919,7 @@ class SessionCoach:
             worked = False
             t0 = time.monotonic()
             chain_max = int(self.cfg.get("coach", {}).get(
-                "takeover_chain_max", 12))
+                "takeover_chain_max", 24))
             chain_len = 0
             while True:
                 pushed = False
@@ -1436,10 +1439,14 @@ class SessionCoach:
             if level < 4:
                 result = f"denied: autonomy level {level} < 4"
             else:
-                budget = int(self.cfg.get("coach", {}).get("action_budget", 50))
-                grace = int(self.cfg.get("coach", {}).get("action_grace", 10))
+                budget = int(self.cfg.get("coach", {}).get("action_budget", 200))
+                grace = int(self.cfg.get("coach", {}).get("action_grace", 40))
                 grace_note = ""
-                n_over = self.state.exec_count - budget
+                # workers carry their own bounds (turn/time caps) — the
+                # parent's action budget must not starve their execs, and
+                # worker execs must not drain the parent's budget either
+                n_over = (self.state.exec_count - budget
+                          if window is None else -1)
                 if n_over >= grace:
                     result = ("denied: action budget exhausted (incl. "
                               f"{grace} grace) — raise coach.action_budget "
@@ -1599,7 +1606,12 @@ class SessionCoach:
                         # user-typed identical command
                         self._coach_cmds.pop()
                     else:
-                        self.state.exec_count += 1
+                        # parent-only budget accounting — workers have their
+                        # own turn/time caps; their execs must not eat the
+                        # parent's exploration budget (s84: a busy worker
+                        # pool would hard-deny the parent's own chain)
+                        if window is None:
+                            self.state.exec_count += 1
                         typed = True
                     out = (res.get("out") or res.get("err") or res.get("error") or "")
                     code = res.get("exitcode")
@@ -1914,7 +1926,7 @@ class SessionCoach:
                     n = int(float(a.get("seconds") or a.get("content") or 30))
                 except (TypeError, ValueError):
                     n = 30
-                cap = int(self.cfg.get("coach", {}).get("wait_max_s", 180))
+                cap = int(self.cfg.get("coach", {}).get("wait_max_s", 300))
                 n = max(1, min(n, cap))
                 # don't sleep into a dying turn — the outer wait_for budget
                 # would cancel mid-wait and the model never sees the result.
@@ -2031,7 +2043,7 @@ class SessionCoach:
         task = (a.get("task") or a.get("content") or "").strip()
         if not task:
             return "error: empty task"
-        max_w = int(self.cfg.get("coach", {}).get("max_workers", 3))
+        max_w = int(self.cfg.get("coach", {}).get("max_workers", 6))
         if max_w < 1:
             return "denied: workers disabled (coach.max_workers < 1)"
         running = sum(1 for w in self._workers.values()
@@ -2070,7 +2082,7 @@ class SessionCoach:
         if w.status == "running":
             # wait in slices so operator chat can preempt — a blocking
             # collect must not hold the turn hostage for the full timeout
-            wait_s = float(self.cfg.get("coach", {}).get("collect_wait_s", 40))
+            wait_s = float(self.cfg.get("coach", {}).get("collect_wait_s", 120))
             deadline = time.monotonic() + wait_s
             while w.status == "running" and time.monotonic() < deadline:
                 if self.state.pending_chat:
@@ -2180,21 +2192,37 @@ class SessionCoach:
         """One worker's act→observe→act loop — private message list (never
         touches _history: interleaved tool pairs would corrupt the parent's
         call/result pairing), shared guards/budgets via _dispatch(window)."""
+        cc = self.cfg.get("coach", {})
+        turn_cap = int(cc.get("worker_turn_cap", 40))
+        time_cap = int(cc.get("worker_time_cap_s", 1800))
         msgs = [{"role": "system",
                  "content": render_worker_prompt(
                      self.ctx, w, self.facts.render(500, compact=True),
                      plan_render(self.state.plan, cap=350,
-                                 title="OPERATOR_PLAN"))},
+                                 title="OPERATOR_PLAN"),
+                     turn_cap=turn_cap, time_cap_s=time_cap)},
                 {"role": "user", "content": w.task}]
-        cc = self.cfg.get("coach", {})
-        turn_cap = int(cc.get("worker_turn_cap", 10))
-        time_cap = int(cc.get("worker_time_cap_s", 300))
+        t0 = time.monotonic()
         t0 = time.monotonic()
         last_out = ""
         try:
             llm_fails = 0
             while (w.turns < turn_cap
                    and time.monotonic() - t0 < time_cap):
+                # soft wrap-up: a worker that is about to hit its hard caps
+                # gets ONE explicit "report now" turn so findings leave as a
+                # structured report instead of a timeout output-tail
+                turns_left = turn_cap - w.turns
+                time_left = time_cap - (time.monotonic() - t0)
+                if (not w.wrap_nudged
+                        and (turns_left <= 5 or time_left <= 180)):
+                    w.wrap_nudged = True
+                    msgs.append({
+                        "role": "user",
+                        "content": (f"BUDGET LOW — {turns_left} turns / "
+                                    f"{int(time_left)}s left. STOP new work "
+                                    "NOW and emit your report JSON with "
+                                    "everything found so far.")})
                 try:
                     resp = await self.llm.chat(msgs, tools=worker_tools())
                 except Exception as e:
