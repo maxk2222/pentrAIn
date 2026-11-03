@@ -31,6 +31,19 @@ quest, get a fresh isolated lab — router, targets, and a real Kali desktop
 streamed into your browser — with an AI coach watching your command stream
 and adapting to how you work.
 
+> [!IMPORTANT]
+> **Active development — read before installing.**
+>
+> - **Requires a Proxmox host.** Either a fresh, dedicated machine
+>   (`--mode direct`) or an existing PVE server (`--mode nested`, runs the
+>   whole range inside one VM with nested virtualization).
+> - **Not every quest runs on every host.** Quests are gated on the host's
+>   live capacity — small hosts skip the RAM-hungry ones (Active Directory
+>   needs the most; the unlock list always says why a quest is locked).
+> - **Active Directory is untested** — the AD track and its Windows
+>   templates have not been verified on a live range yet.
+> - **No GPU integration yet** — the Kali worker is CPU-only for now.
+
 <p align="center">
   <img src="docs/assets/gifs/quest-start.gif" alt="starting a quest" width="780" />
 </p>

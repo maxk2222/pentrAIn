@@ -105,6 +105,9 @@
   ansible.builtin.shell: |
     set -e
     cd /var/www/portal
+    # docroot is www-data-owned — git's ownership guard rejects the repo
+    # for the root-run task otherwise ("not in a git directory")
+    git config --system --add safe.directory /var/www/portal
     git init -q
     git config user.email "netops@nordwind.local"
     git config user.name "nordwind-netops"
