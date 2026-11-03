@@ -857,6 +857,7 @@ const Message = memo(function Message({ m, onConfirm, onSelectAgent }: {
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
             {style.label}
             {m.kind === "hint" && m.meta?.level != null && ` · level ${m.meta.level}`}
+            {m.meta?.source === "observer" && " · observer"}
           </div>
         )}
         {typeof m.meta?.reasoning === "string" && m.meta.reasoning && (

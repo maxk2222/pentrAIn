@@ -9,6 +9,7 @@ import structlog
 
 from .client import BackendClient
 from .loop import SessionCoach
+from .observer import ObserverService
 
 log = structlog.get_logger(__name__)
 
@@ -115,7 +116,17 @@ async def amain() -> None:
     asyncio.create_task(_task_watchdog())
     svc = CoachService()
     await svc._config(force=True)
-    await svc.run()
+    # observer: own task in the same container — shares the backend client
+    # and the cfg getter, tails /traj, tips the live coach and distills
+    # stuck→recovery windows into coach_lessons (knowledge's write side)
+    obs_task = asyncio.create_task(
+        ObserverService(svc.client, svc._config).run())
+    try:
+        await svc.run()
+    finally:
+        obs_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await obs_task
 
 
 def main() -> None:

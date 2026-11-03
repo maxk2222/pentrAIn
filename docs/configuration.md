@@ -87,6 +87,14 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `coach.worker_time_cap_s` | `3600` | Wall-clock per worker |
 | `coach.collect_wait_s` | `240` | `collect_agent` block bound |
 | `coach.wait_max_s` | `600` | Cap per `wait` tool call |
+| `coach.observer_enabled` | `true` | Session observer: tips + field notes |
+| `coach.observer_tick_s` | `60` | Trajectory poll interval |
+| `coach.observer_stuck_s` | `600` | No-progress window = stuck |
+| `coach.observer_min_denials` | `2` | Denial floor for stuck detection |
+| `coach.observer_max_proposals` | `2` | Lessons per analysis call |
+| `coach.observer_max_lessons_session` | `4` | Lesson cap per session |
+| `coach.observer_cooldown_s` | `900` | Min gap between analyses |
+| `coach.observer_hint_min_level` | `3` | Live tips need autonomy ≥ this |
 
 ### Content & data
 

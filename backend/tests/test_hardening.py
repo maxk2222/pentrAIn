@@ -411,3 +411,68 @@ def test_coach_action_log_status_contract():
     # denied/error stay unrestricted (guard self-reports under real names)
     CoachActionLogIn(session_id=1, tool="exec_in_kali", status="denied")
     CoachActionLogIn(session_id=1, tool="exec_in_kali", status="error")
+
+
+# ---------- observer lessons ----------
+
+def test_sanitize_lesson_strips_loot():
+    """Observer lessons carry the move, never the loot: flag values,
+    passwords and tokens are redacted before storage."""
+    from app.services.coach_bridge import sanitize_lesson_text
+    out = sanitize_lesson_text(
+        "flag was pentrAIn{n0rdw1nd} after password=Hunter2 via ssh")
+    assert "pentrAIn{" not in out and "Hunter2" not in out
+    assert "<redacted>" in out
+    assert sanitize_lesson_text("Bearer eyJabc123") .find("eyJabc123") < 0
+    assert len(sanitize_lesson_text("x" * 500)) == 240
+
+
+async def test_record_lesson_dedupes_and_hits(db):
+    """Re-deriving the same lesson (different wording) merges into a hit
+    on the existing row instead of a duplicate."""
+    from app.services import coach_bridge
+    a = await coach_bridge.record_lesson(
+        db, 1, "ssh -D 9050 on a pivot host gives SOCKS to internal hosts",
+        ["ssh", "pivot"], "global", 0.8, {"session_id": 1})
+    assert a and a.id
+    b = await coach_bridge.record_lesson(
+        db, 2, "ssh -D 9050 on a pivot host gives SOCKS for internal hosts",
+        ["ssh"], "global", 0.6, {"session_id": 2})
+    assert b.id == a.id and (b.hits or 0) == 1   # merged, not duplicated
+    c = await coach_bridge.record_lesson(
+        db, 3, "gobuster uses --timeout never --max-time", ["gobuster"],
+        "global", 0.7, {})
+    assert c.id != a.id                            # distinct lesson stored
+    # pure-loot lesson rejected
+    assert await coach_bridge.record_lesson(
+        db, 4, "pentrAIn{abc}", [], "global", 0.9, {}) is None
+
+
+async def test_session_context_carries_field_notes(db_with_packs):
+    """field_notes reach session_context so an attaching coach gets the
+    observer's notes — scoped global/track/quest, active only."""
+    from app.services import coach_bridge
+    db = db_with_packs
+    s = Session(quest_id="linux-t1-first-foothold", state="active")
+    db.add(s)
+    await db.commit()
+    await coach_bridge.record_lesson(
+        db, s.id, "web01 pivot via ssh -D works for internal http",
+        ["ssh"], "global", 0.8, {})
+    ctx = await coach_bridge.session_context(db, s.id)
+    notes = ctx.get("field_notes") or []
+    assert any("pivot" in n["text"] for n in notes)
+
+
+def test_internal_audit_tools_cover_observer_and_knowledge():
+    """status=ok stays for bookkeeping only — observer/knowledge tools
+    included, real exec/flag tools still excluded."""
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas import CoachActionLogIn
+    for tool in ("observe_hint", "observe_lesson",
+                 "record_lesson", "lookup_guide"):
+        CoachActionLogIn(session_id=1, tool=tool, status="ok")
+    with pytest.raises(ValidationError):
+        CoachActionLogIn(session_id=1, tool="exec_in_kali", status="ok")

@@ -108,6 +108,10 @@ class FakeClient:
         self.logged.append({"tool": tool, "args": args, "status": status})
         return {}
 
+    async def lesson_hit(self, lesson_id: int) -> None:
+        self.hits = getattr(self, "hits", [])
+        self.hits.append(lesson_id)
+
 
 def _coach(cfg=None) -> tuple[SessionCoach, FakeClient]:
     c = FakeClient()
@@ -2447,3 +2451,70 @@ async def test_lessons_replay_after_restart():
     assert len(coach.facts.lessons) == 2
     rendered = coach.facts.render()
     assert "lessons:" in rendered and "[w1]" in rendered
+
+
+async def test_observer_hint_queued_then_injected_once():
+    """observer_hint event → pending queue → lands on the NEXT tool result
+    (guaranteed-read), pop-once, labeled unverified."""
+    coach, _c = _coach()
+    await coach._handle_event({"type": "observer_hint", "topic": "session.1",
+                               "session_id": 1,
+                               "data": {"text": "try gobuster --timeout"}})
+    assert coach.state.pending_observer_hints == ["try gobuster --timeout"]
+    _s, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "ls /tmp"}, proactive=True)
+    assert "OBSERVER (unverified): try gobuster --timeout" in res
+    # drained — second result carries no hint
+    _s, res2 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "ls /tmp"}, proactive=True)
+    assert "OBSERVER" not in res2
+
+
+async def test_field_note_tag_match_push_once_per_window():
+    """A field note whose tag appears in the tool call gets pushed once —
+    labeled, then stays quiet for that window."""
+    coach, _c = _coach()
+    coach.facts.set_field_notes([
+        {"id": 7, "text": "gobuster wants --timeout, not --max-time",
+         "tags": ["gobuster", "enum"]}])
+    _s, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "gobuster dir -u http://x"},
+        proactive=True)
+    assert "FIELD NOTE (unverified): gobuster wants --timeout" in res
+    _s, res2 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "gobuster dir -u http://y"},
+        proactive=True)
+    assert "FIELD NOTE" not in res2
+
+
+async def test_field_note_hit_feedback_on_progress():
+    """Pushed note + subsequent progress → lesson_hit(nid) fires once."""
+    coach, c = _coach()
+    coach.facts.set_field_notes([
+        {"id": 9, "text": "n", "tags": ["ssh"]}])
+    await coach._dispatch({"type": "exec_in_kali", "command": "ssh x"},
+                         proactive=True)
+    assert coach._notes_pushed.get(9) is not None
+    coach.state.progress()          # a flag/checkpoint landed
+    await coach._dispatch({"type": "exec_in_kali", "command": "id"},
+                         proactive=True)
+    await asyncio.sleep(0)
+    assert c.hits == [9]
+    assert 9 not in coach._notes_pushed
+
+
+async def test_lookup_guide_union_searches_field_notes():
+    """lookup_guide answers from modules AND unverified field notes — note
+    appended under a module hit, note alone when no module matches."""
+    coach, _c = _coach()
+    coach.facts.set_field_notes([
+        {"id": 3, "text": "app01 needs Bearer from config.js",
+         "tags": ["app01", "bearer"]}])
+    _s, res = await coach._dispatch(
+        {"type": "lookup_guide", "query": "app01 bearer"},
+        proactive=True)
+    assert "FIELD NOTE" in res and "config.js" in res
+    _s, res2 = await coach._dispatch(
+        {"type": "lookup_guide", "query": "unrelated-zzz"},
+        proactive=True)
+    assert "FIELD NOTE" not in res2

@@ -20,11 +20,13 @@ from ..schemas import (
     CoachExecIn,
     CoachFlagCheckIn,
     CoachFlagIn,
+    CoachLessonIn,
     CoachMessageIn,
     CoachStreamIn,
     CoachSuggestIn,
     CoachTypeIn,
     LoginIn,
+    ObserverHintIn,
     SettingsPatch,
     TelemetryBatchIn,
     TokenOut,
@@ -758,6 +760,77 @@ async def coach_llm_usage(body: dict, db: AsyncSession = Depends(get_db)):
         latency_ms=int(body.get("latency_ms") or 0),
     ))
     await db.commit()
+
+
+@coach_router.post("/lesson", status_code=201)
+async def coach_lesson_create(body: CoachLessonIn,
+                              db: AsyncSession = Depends(get_db)):
+    """Observer-written field note — sanitized + deduped server-side;
+    merged notes return the existing row id."""
+    row = await coach_bridge.record_lesson(
+        db, body.session_id, body.text, body.tags, body.applies,
+        body.confidence, body.evidence)
+    if row is None:
+        raise HTTPException(422, "lesson rejected by sanitizer")
+    return {"id": row.id}
+
+
+@coach_router.get("/lessons")
+async def coach_lesson_list(db: AsyncSession = Depends(get_db)):
+    """All active field notes — the observer's dedupe base plus a debug
+    view of what the knowledge base learned so far."""
+    from ..models.domain import CoachLesson
+    rows = (await db.execute(
+        select(CoachLesson).order_by(CoachLesson.id.desc()).limit(100)
+    )).scalars().all()
+    return [{"id": l.id, "text": l.text, "tags": l.tags, "applies": l.applies,
+             "status": l.status, "confidence": l.confidence, "hits": l.hits,
+             "session_id": l.session_id} for l in rows]
+
+
+@coach_router.post("/lesson/{lesson_id}/hit", status_code=204)
+async def coach_lesson_hit(lesson_id: int, db: AsyncSession = Depends(get_db)):
+    """Positive attribution: a pushed field note was followed by progress."""
+    await coach_bridge.lesson_hit(db, lesson_id)
+
+
+@coach_router.post("/observer-hint", status_code=202)
+async def coach_observer_hint(body: ObserverHintIn,
+                              db: AsyncSession = Depends(get_db)):
+    """Live advisory into a running coach — lands on the next tool result
+    via session event (guaranteed-read) plus a hint message for the UI."""
+    await coach_bridge.post_observer_hint(db, body.session_id, body.text)
+    return {"delivered": True}
+
+
+@router.get("/admin/lessons")
+async def admin_lesson_list(db: AsyncSession = Depends(get_db),
+                            _=Depends(get_current_user)):
+    """Review queue for observer-authored field notes."""
+    from ..models.domain import CoachLesson
+    rows = (await db.execute(
+        select(CoachLesson).order_by(CoachLesson.id.desc()).limit(200)
+    )).scalars().all()
+    return [{"id": l.id, "text": l.text, "tags": l.tags, "applies": l.applies,
+             "status": l.status, "confidence": l.confidence, "hits": l.hits,
+             "misses": l.misses, "evidence": l.evidence,
+             "session_id": l.session_id,
+             "created_at": l.created_at.isoformat() if l.created_at else None}
+            for l in rows]
+
+
+@router.post("/admin/lessons/{lesson_id}/disable")
+async def admin_lesson_disable(lesson_id: int, db: AsyncSession = Depends(get_db),
+                               _=Depends(get_current_user)):
+    """Kill a bad field note — it stops surfacing in ctx, push-hints and
+    lookup results on the next coach attach/refresh."""
+    from ..models.domain import CoachLesson
+    l = await db.get(CoachLesson, lesson_id)
+    if not l:
+        raise HTTPException(404, "lesson not found")
+    l.status = "disabled"
+    await db.commit()
+    return {"id": l.id, "status": l.status}
 
 
 # ---------- kali template builder ----------

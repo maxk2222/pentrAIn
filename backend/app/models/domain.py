@@ -232,6 +232,28 @@ class CoachAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class CoachLesson(Base):
+    """Observer-authored field note — reusable tips distilled from real
+    coach sessions (stuck→recovery analysis, postmortems). Distinct from
+    curated knowledge modules: written by the observer service, labeled
+    'unverified' when shown to the coach, scoped global/track/quest."""
+    __tablename__ = "coach_lessons"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int | None] = mapped_column(
+        Integer, index=True, nullable=True)  # origin session (no FK — survives deletion)
+    text: Mapped[str] = mapped_column(String(240))
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    applies: Mapped[str] = mapped_column(String(80), default="global")  # global|track:X|quest:Y
+    status: Mapped[str] = mapped_column(String(16), default="active")   # active|disabled
+    confidence: Mapped[float] = mapped_column(default=0.5)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)          # {session_id, summary, window}
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    misses: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(24), default="observer")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class HintUse(Base):
     __tablename__ = "hint_uses"
 

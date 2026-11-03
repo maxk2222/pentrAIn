@@ -168,6 +168,10 @@ class SessionCoach:
         # parent's next turn — a worker's prompt snapshot is frozen)
         self._guides_hinted: set[str] = set()  # modules already hinted on
         # the guaranteed-read channel — one push per module per session
+        # observer field-note tracking: window → note ids already pushed;
+        # note id → (progress_ts, exec_count) at push for hit feedback
+        self._notes_hinted: dict[str, set[int]] = {}
+        self._notes_pushed: dict[int, tuple[float, int]] = {}
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -397,6 +401,9 @@ class SessionCoach:
                                       str(lt.get("agent") or "main"))
             else:
                 self.facts.add_lesson(str(lt))
+        # observer field notes — memory only: reachable via lookup_guide and
+        # tag-matched push-hints, deliberately NOT rendered into the prompt
+        self.facts.set_field_notes(self.ctx.get("field_notes"))
         # orphaned workers: spawned pre-restart, killed with the process —
         # their command outputs reseeded via coach_outputs but the TASK died.
         # A note is all the parent needs to not re-do (or misplace) their work
@@ -704,6 +711,13 @@ class SessionCoach:
             # suggest_command_confirm broadcasts on the session.* topic
             elif etype == "coach_action" and data.get("status") in ("confirmed", "rejected"):
                 self.state.progress()  # trainee engaged with a suggestion
+            elif etype == "observer_hint":
+                # queued, pop-once — lands on the next tool result where the
+                # model is guaranteed to read it; not a user message
+                text = str(data.get("text") or "")[:400]
+                if text:
+                    self.state.pending_observer_hints.append(text)
+                    del self.state.pending_observer_hints[:-4]
         elif topic.startswith("coach."):
             if etype == "coach_message" and data.get("role") == "user":
                 if self.state.coach_enabled:
@@ -1356,6 +1370,71 @@ class SessionCoach:
                 return dn
         return None
 
+    def _drain_observer_hints(self, result: str, a: dict,
+                              window: str | None) -> str:
+        """Observer channels on the guaranteed-read result:
+        1. queued observer_hint events — pop-once, labeled unverified
+        2. tag-matched field notes — pushed once per note per window
+        3. hit feedback — progress within ~10 turns after a push → hit++
+        Everything is bounded so the channel can never swamp a result."""
+        out = result
+        if self.state.pending_observer_hints:
+            hint = self.state.pending_observer_hints.pop(0)
+            out += f"\nOBSERVER (unverified): {hint}"
+        # hit feedback: did a note we pushed earlier actually help?
+        if self._notes_pushed:
+            done = []
+            for nid, (ts_push, turn_push) in self._notes_pushed.items():
+                if self.state.last_progress_ts > ts_push:
+                    done.append(nid)
+                    asyncio.create_task(self.client.lesson_hit(nid))
+                elif self.state.exec_count - turn_push > 10:
+                    done.append(nid)  # window expired without progress
+            for nid in done:
+                self._notes_pushed.pop(nid, None)
+        # tag-matched push: a field note whose tags appear in this tool's
+        # call/output is probably relevant right now — once per window
+        if self.facts.field_notes:
+            text = f"{a.get('type','')} {a.get('command','')} {result[:1500]}".lower()
+            hinted = self._notes_hinted.setdefault(window or "main", set())
+            for n in self.facts.field_notes:
+                nid = int(n.get("id") or 0)
+                if not nid or nid in hinted:
+                    continue
+                tags = [t.lower() for t in n.get("tags") or [] if len(t) > 2]
+                if not tags or not any(t in text for t in tags):
+                    continue
+                hinted.add(nid)
+                self._notes_pushed[nid] = (
+                    self.state.last_progress_ts, self.state.exec_count)
+                out += (f"\nFIELD NOTE (unverified): {n['text']}")
+                break  # one note per result — never a wall of hints
+        return out
+
+    def _lookup_field_note(self, q: str, window: str | None) -> str | None:
+        """Pull-side of the observer's knowledge: a field note whose tags or
+        text overlap the query — labeled, capped, hit-tracked like a push."""
+        if not self.facts.field_notes:
+            return None
+        terms = {w for w in re.findall(r"[a-z0-9_.-]{3,}", q.lower())}
+        if not terms:
+            return None
+        best, best_score = None, 0
+        for n in self.facts.field_notes:
+            tags = {str(t).lower() for t in n.get("tags") or []}
+            score = len(terms & tags) * 2
+            body = str(n.get("text") or "").lower()
+            score += sum(1 for t in terms if t in body)
+            if score > best_score:
+                best, best_score = n, score
+        if best is None or best_score < 2:
+            return None
+        nid = int(best.get("id") or 0)
+        if nid:
+            self._notes_pushed[nid] = (
+                self.state.last_progress_ts, self.state.exec_count)
+        return f"FIELD NOTE (unverified): {best['text']}"
+
     async def _dispatch(self, a: dict, *, proactive: bool = False,
                         window: str | None = None) -> tuple[bool, str]:
         """Guard-denial audit: every 'denied:' result self-reports to the
@@ -1395,6 +1474,10 @@ class SessionCoach:
                     f"roadmap is {int(age / 60)}min stale — refresh via "
                     "update_plan: mark done steps, break the current "
                     "blocker into substeps (free action)"))
+        # guaranteed-read channels last: observer hints + tag-matched field
+        # notes land on whatever result the model is about to read — they
+        # cannot scroll past unnoticed (pop-once, bounded)
+        result = self._drain_observer_hints(result, a, window)
         return spoke, result
 
     # tokens that say nothing about WHICH flag a step belongs to
@@ -2190,11 +2273,21 @@ class SessionCoach:
             # pull a technique recipe — internal knowledge consult, costs no
             # exec budget, nothing shown to the trainee (the recipe lands in
             # the model's tool reply where the next turn can act on it)
-            q = a.get("query") or a.get("content") or ""
-            result = guides.lookup(str(q)[:120])
+            q = str(a.get("query") or a.get("content") or "")[:120]
+            result = guides.lookup(q)
+            # union search: observer field notes ride the same pull channel
+            # — one tool answers with curated modules AND unverified session
+            # lessons (always labeled). A module hit still appends a matching
+            # note: the recipe is general, the note is this session's scar.
+            note = self._lookup_field_note(q, window)
+            if result.startswith(("error:", "multiple")):
+                if note is not None:
+                    result = note
+            elif note is not None:
+                result += f"\n\n{note}"
             asyncio.create_task(self.client.log_action(
                 self.sid, "lookup_guide",
-                {"query": str(q)[:120], "agent": window or "main"},
+                {"query": q, "agent": window or "main"},
                 {"hit": not result.startswith(("error:", "multiple"))}))
         elif t == "record_lesson":
             # agent-authored session knowledge — lands in FACTS.lessons,

@@ -259,7 +259,8 @@ class CoachFlagCheckIn(BaseModel):
 # must NEVER be fabricatable through this audit sink
 _OK_AUDIT_TOOLS = frozenset({
     "spawn_agent", "collect_agent", "agent_status", "kill_agent",
-    "update_plan", "note"})
+    "update_plan", "note", "record_lesson", "lookup_guide",
+    "observe_hint", "observe_lesson"})
 
 
 class CoachActionLogIn(BaseModel):
@@ -279,6 +280,36 @@ class CoachActionLogIn(BaseModel):
                 f"{sorted(_OK_AUDIT_TOOLS)} — {self.tool!r} claims a real "
                 f"action it can't prove")
         return self
+
+
+class CoachLessonIn(BaseModel):
+    """Observer-written field note — distilled from a real session's
+    stuck→recovery window. Server-side sanitize+dedupe decide whether it
+    lands as a new row or merges into an existing one."""
+    session_id: int | None = None
+    text: str = Field(min_length=10, max_length=240)
+    tags: list[str] = Field(default_factory=list, max_length=8)
+    applies: str = Field(default="global", max_length=80)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _valid_shape(self):
+        if not (self.applies == "global" or self.applies.startswith(
+                ("track:", "quest:"))):
+            raise ValueError("applies must be 'global', 'track:<x>' or 'quest:<y>'")
+        if len(self.tags) < 1:
+            raise ValueError("at least one tag required for trigger matching")
+        self.tags = [str(t)[:32].lower() for t in self.tags]
+        return self
+
+
+class ObserverHintIn(BaseModel):
+    """Live advisory tip from the observer to a running coach — delivered
+    via session event onto the next tool result (guaranteed-read) plus a
+    hint message for UI transparency."""
+    session_id: int
+    text: str = Field(min_length=10, max_length=400)
 
 
 class EngineStatusOut(BaseModel):

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.domain import (
     AutonomyLevel,
     CoachAction,
+    CoachLesson,
     CoachMessage,
     Flag,
     FlagSubmission,
@@ -147,6 +148,13 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                    .order_by(CoachAction.id.desc()).limit(10))).all()
                if r[0]]
     lessons.reverse()
+    # observer field notes — session-scoped by applies (global + this
+    # track + this quest); consumed via push-hints and lookup_guide only,
+    # never rendered into the base prompt
+    field_notes = [{"id": l.id, "text": l.text, "tags": l.tags or []}
+                   for l in await active_lessons(
+                       db, track=quest.track_slug if quest else None,
+                       quest_id=session.quest_id)]
     telem = (await db.execute(
         select(TelemetryEvent).where(TelemetryEvent.session_id == session_id)
         .order_by(TelemetryEvent.id.desc()).limit(60))).scalars().all()
@@ -277,9 +285,106 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         "plan": plan,
         "coach_notes": coach_notes,
         "lessons": lessons,
+        "field_notes": field_notes,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},
     }
+
+
+_SECRET_PATTERNS = [
+    re.compile(r"pentrAIn\{[^}]*\}"),
+    re.compile(r"(?:-p|password|passwd|secret|token|apikey|api_key)\s*"
+               r"[=: ]\s*['\"]?\S+", re.IGNORECASE),
+    re.compile(r"Bearer\s+\S+", re.IGNORECASE),
+]
+
+
+def sanitize_lesson_text(text: str) -> str:
+    """Strip flags/credentials from observer output before it becomes
+    knowledge — a lesson must teach the move, never carry the loot."""
+    t = str(text or "")
+    for p in _SECRET_PATTERNS:
+        t = p.sub("<redacted>", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:240]
+
+
+def _jaccard(a: str, b: str) -> float:
+    """Token-set similarity for lesson dedupe — order-independent,
+    catches the 'same tip, different wording' case."""
+    ta = {w for w in re.findall(r"[a-z0-9_./-]+", a.lower()) if len(w) > 2}
+    tb = {w for w in re.findall(r"[a-z0-9_./-]+", b.lower()) if len(w) > 2}
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+async def record_lesson(db: AsyncSession, session_id: int | None,
+                        text: str, tags: list, applies: str = "global",
+                        confidence: float = 0.5,
+                        evidence: dict | None = None) -> CoachLesson | None:
+    """Observer-written field note. Sanitized (no flags/creds), deduped
+    against active lessons (Jaccard ≥0.7 → hit on the existing row),
+    bounded. Returns the stored/merged row or None when rejected."""
+    clean = sanitize_lesson_text(text)
+    if len(clean) < 10 or clean.lower() in ("<redacted>",):
+        return None
+    existing = (await db.execute(
+        select(CoachLesson).where(CoachLesson.status == "active")
+        .order_by(CoachLesson.id.desc()).limit(60))).scalars().all()
+    for l in existing:
+        if _jaccard(l.text, clean) >= 0.7:
+            l.hits = (l.hits or 0) + 1  # same lesson re-derived → stronger
+            await db.commit()
+            return l
+    row = CoachLesson(
+        session_id=session_id, text=clean,
+        tags=[str(t)[:32].lower() for t in (tags or [])][:8],
+        applies=applies, confidence=min(1.0, max(0.0, confidence or 0.5)),
+        evidence=evidence or {}, source="observer")
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+async def lesson_hit(db: AsyncSession, lesson_id: int) -> None:
+    """Positive-attribution ping — a pushed field note was followed by
+    progress. Rough but honest: it just counts later successes."""
+    l = await db.get(CoachLesson, lesson_id)
+    if l:
+        l.hits = (l.hits or 0) + 1
+        await db.commit()
+
+
+async def post_observer_hint(db: AsyncSession, session_id: int,
+                             text: str) -> None:
+    """Live advisory from the observer into a running coach: persists a
+    hint message (UI transparency + replay) and publishes a session event
+    the coach picks up for guaranteed-read delivery on the next result."""
+    clean = sanitize_lesson_text(text)[:400]
+    if len(clean) < 10:
+        return
+    await post_message(db, session_id, "system", "hint", clean,
+                       {"source": "observer"})
+    await publish_session(session_id, "observer_hint", {"text": clean})
+
+
+async def active_lessons(db: AsyncSession, *, track: str | None = None,
+                         quest_id: int | None = None,
+                         limit: int = 24) -> list[CoachLesson]:
+    """Field notes a session may consume: global + its track + its quest,
+    newest first. Disabled rows never surface."""
+    scopes = ["global"]
+    if track:
+        scopes.append(f"track:{track}")
+    if quest_id is not None:
+        scopes.append(f"quest:{quest_id}")
+    return (await db.execute(
+        select(CoachLesson).where(
+            CoachLesson.status == "active",
+            CoachLesson.applies.in_(scopes))
+        .order_by(CoachLesson.id.desc()).limit(limit))).scalars().all()
 
 
 async def post_message(db: AsyncSession, session_id: int, role: str, kind: str,

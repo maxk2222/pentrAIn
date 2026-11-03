@@ -58,6 +58,14 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.worker_time_cap_s": (3600, False),    # wall-clock per worker task
     "coach.collect_wait_s": (240, False),        # collect_agent block bound
     "coach.wait_max_s": (600, False),            # cap per wait-tool call
+    "coach.observer_enabled": (True, False),     # session observer learns+advises
+    "coach.observer_tick_s": (60, False),        # poll interval for traj tails
+    "coach.observer_stuck_s": (600, False),      # no-progress window = stuck
+    "coach.observer_min_denials": (2, False),    # denial floor for stuck detect
+    "coach.observer_max_proposals": (2, False),  # lessons per analysis call
+    "coach.observer_max_lessons_session": (4, False),
+    "coach.observer_cooldown_s": (900, False),   # min gap between analyses/session
+    "coach.observer_hint_min_level": (3, False), # hints need an autonomous loop
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

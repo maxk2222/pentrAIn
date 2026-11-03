@@ -157,6 +157,30 @@ class BackendClient:
             session_id, tool, args, {"reason": reason[:300]},
             status="denied")
 
+    async def create_lesson(self, session_id: int | None, text: str,
+                            tags: list, applies: str = "global",
+                            confidence: float = 0.5,
+                            evidence: dict | None = None) -> dict:
+        """Observer-written field note — backend sanitizes + dedupes."""
+        return await self._post("/api/coach/lesson", {
+            "session_id": session_id, "text": text[:240],
+            "tags": list(tags or [])[:8], "applies": applies[:80],
+            "confidence": float(confidence),
+            "evidence": evidence or {}})
+
+    async def list_lessons(self) -> list:
+        """All field notes — the observer's dedupe base."""
+        return await self._get("/api/coach/lessons")
+
+    async def lesson_hit(self, lesson_id: int) -> None:
+        """Positive-attribution ping for a pushed field note."""
+        await self._post(f"/api/coach/lesson/{lesson_id}/hit", {})
+
+    async def observer_hint(self, session_id: int, text: str) -> dict:
+        """Live advisory into a running coach — guaranteed-read delivery."""
+        return await self._post("/api/coach/observer-hint", {
+            "session_id": session_id, "text": text[:400]})
+
     async def report_llm_usage(self, session_id: int | None, model: str,
                                kind: str, usage: dict | None,
                                latency_ms: int | None) -> dict:

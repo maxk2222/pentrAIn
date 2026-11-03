@@ -246,6 +246,9 @@ class FactsDB:
         self.denials: list[str] = []      # bounded dead ends (denied:svc@host)
         self.caps: list[str] = []         # proven primitives (root-exec via …)
         self.lessons: list[str] = []      # agent-authored lessons (record_lesson)
+        # observer field notes — {id,text,tags} from coach_lessons; never
+        # rendered into the prompt, consumed via lookup_guide + push-hints
+        self.field_notes: list[dict] = []
         # — bounded: the agent's own distilled knowledge, replayed into the
         # store from coach_actions on restart so it survives context loss
         self._pending: tuple[str, str, float] | None = None  # (path, kind, ts)
@@ -506,6 +509,19 @@ class FactsDB:
             self.lessons.append(entry)
         del self.lessons[:-10]
         return len(self.lessons)
+
+    def set_field_notes(self, notes) -> None:
+        """Observer field notes from session_context — kept in memory for
+        lookup_guide union search and tag-matched push-hints. Never rendered
+        into the prompt (the user's call: pull/push only)."""
+        out = []
+        for n in notes or []:
+            if not isinstance(n, dict) or not n.get("text"):
+                continue
+            out.append({"id": int(n.get("id") or 0),
+                        "text": str(n["text"])[:240],
+                        "tags": [str(t)[:32] for t in (n.get("tags") or [])][:8]})
+        self.field_notes = out[-24:]
 
     def _merge_caps(self, entries) -> None:
         for cp in entries:
