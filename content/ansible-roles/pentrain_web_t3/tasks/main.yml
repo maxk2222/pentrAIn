@@ -4,8 +4,9 @@
 # Flags are injected post-deploy via docker exec — containers only need /bin/sh.
 - name: app sources
   ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: /opt/webt3/{{ item }}
+    src: "{{ item }}/"      # trailing slash = contents into dest — a bare
+                            # dir src nests into an existing dest (retry-safe)
+    dest: /opt/webt3/{{ item }}/
     mode: preserve
   loop: [public-web, internal-api]
   register: copied
