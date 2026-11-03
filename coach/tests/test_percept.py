@@ -258,3 +258,21 @@ def test_all_filtered_nmap_becomes_denial():
         "Nmap scan report for h (10.0.0.1)\nHost is up.\n"
         "80/tcp closed http\nNmap done")
     assert d["denials"] == []
+
+
+def test_missing_tool_becomes_scoped_denial():
+    """'command not found' must scope to the host the command ran ON —
+    minimal pivot boxes lack curl/wget/nmap and the agent retried them
+    after every restart (s84)."""
+    from coach.percept import parse_output
+    d = parse_output("ssh deploy@web01 'curl http://10.1.10.33/'",
+                     "bash: curl: command not found")
+    assert "missing:curl@web01" in d["denials"]
+    d = parse_output("wget http://x/", "zsh: command not found: wget")
+    assert "missing:wget@kali" in d["denials"]
+    d = parse_output("ssh u@app01 'nmap 10.0.0.9'",
+                     "sh: 5: nmap: not found")
+    assert "missing:nmap@app01" in d["denials"]
+    # normal output invents no missing facts
+    d = parse_output("id", "uid=0(root) gid=0(root)")
+    assert not any(x.startswith("missing:") for x in d["denials"])

@@ -93,6 +93,12 @@ _TTY_REQ = re.compile(
 # a host that TIMES OUT / has no route is unreachable from this vantage —
 # distinct from auth-denied (reachable, wrong cred). Without this fact the
 # model re-curls docker-internal IPs directly after every restart (s46: 4x).
+# "bash: curl: command not found" | "zsh: command not found: wget" |
+# busybox "sh: 5: nmap: not found"
+_MISSING_TOOL = re.compile(
+    r"(?:bash|dash|ash|sh):\s*(?:(?:line\s+)?\d+:\s*)?([\w./-]+):\s*"
+    r"(?:command\s+)?not found"
+    r"|zsh:\s*command not found:\s*([\w./-]+)")
 _UNREACHABLE = re.compile(
     r"Connection timed out|No route to host|connect: Network is unreachable|"
     r"Operation timed out|Failed to connect .* timed out", re.IGNORECASE)
@@ -178,6 +184,15 @@ def _p_denials(cmd: str, out: str, d: dict) -> None:
         ips = [i for i in _IP_RE.findall(cmd or "") if i != h]
         target = ips[-1] if ips else h
         d["denials"].append(f"unreachable:{target}@{h}")
+    # missing binary on the host the command ran ON — a minimal pivot box
+    # without curl/wget/nmap must produce a scoped dead-end fact or the
+    # same tool gets retried after every restart/context loss (s84)
+    for m in _MISSING_TOOL.finditer(out):
+        tool = (m.group(1) or m.group(2) or "").rsplit("/", 1)[-1]
+        if tool:
+            vm = _SSH_TARGET.search(cmd or "")
+            vantage = vm.group(2) if vm else "kali"
+            d["denials"].append(f"missing:{tool}@{vantage}")
     if re.search(r"\bnmap\b", cmd or ""):
         # a scan that proves ports exist but every one is filtered/closed =
         # ACL/tier isolation from THIS vantage — a fact workers and
