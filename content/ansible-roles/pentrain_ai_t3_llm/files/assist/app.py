@@ -31,12 +31,15 @@ DOCS = {
 
 LEAK_RE = re.compile(
     r"(repeat|print|tell|show|reveal|output|read|recite|verbatim|"
-    r"translate|encode|summar\w+|what)\S*\s+\S*\s*"
-    r"(above|system|initial|brief|prompt|instruction|rule|told|given)",
+    r"translate|encode|summar\w+|what|give|disclose|share|leak)"
+    r"\S*(?:\s+\S+){0,3}\s*"
+    r"(above|system|initial|brief|prompt|instruction|rule|told|given|"
+    r"directive|context|configuration)\S*",
     re.I)
 TOOL_RE = re.compile(
-    r"(file|send|write|run|execute|use|trigger|start)\S*\s+\S*\s*"
-    r"(report|tool|action|task|job)", re.I)
+    r"(file|send|write|run|execute|use|trigger|start|invoke|call|fire)"
+    r"\S*(?:\s+\S+){0,3}\s*"
+    r"(report|tool|action|task|job)\S*", re.I)
 AUTH_RE = re.compile(r"(as|the|am|an)\s+(admin|operator|root|manager)", re.I)
 SUMMARY_RE = re.compile(r"summar\w+|read|review|check|open", re.I)
 
