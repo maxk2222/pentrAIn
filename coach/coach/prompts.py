@@ -16,7 +16,7 @@ from .objective import render as objective_render
 # curated environment knowledge (tool inventory, shell quirks, recipes) —
 # loaded once into the system prompt so it stays in the cacheable prefix.
 # Versioned with the coach, updated from live-test lessons.
-def _knowledge(limit: int = 18000) -> str:
+def _knowledge(limit: int = 22000) -> str:
     try:
         p = Path(__file__).parent / "knowledge" / "kali-environment.md"
         return p.read_text(encoding="utf-8")[:limit]
