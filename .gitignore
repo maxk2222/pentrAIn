@@ -49,3 +49,6 @@ installer/.secrets/
 .terraform/
 *.tsbuildinfo
 traj/
+
+# pytest sqlite artifacts (WAL mode)
+backend/tests/_api_test.db*
