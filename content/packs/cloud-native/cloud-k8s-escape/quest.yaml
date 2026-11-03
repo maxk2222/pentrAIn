@@ -33,7 +33,7 @@ flags:
     points: 150
     command:
       vm: app01
-      cmd: "docker exec kind-control-plane sh -c 'CID=$(crictl ps --name shop-app -q | head -1); crictl exec \"$CID\" test -f /tmp/.pwned'"
+      cmd: "docker exec lab-control-plane sh -c 'CID=$(crictl ps --name shop-app -q | head -1); crictl exec \"$CID\" test -f /tmp/.pwned'"
   - id: api-secret
     name: "Operator seed — /etc/labflags/api-secret.txt inside the pod"
     kind: file
