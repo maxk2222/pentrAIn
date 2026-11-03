@@ -101,12 +101,12 @@
 
 # Real commit history — the "rotation" is a deletion commit, which is exactly
 # why recovering history is the lesson.
+# git's ownership guard rejects repos inside the www-data-owned docroot for
+# the root-run task — mark it safe first (same trap web_t1_exam documents)
 - name: build the shipped .git history
   ansible.builtin.shell: |
     set -e
     cd /var/www/portal
-    # docroot is www-data-owned — git's ownership guard rejects the repo
-    # for the root-run task otherwise ("not in a git directory")
     git config --system --add safe.directory /var/www/portal
     git init -q
     git config user.email "netops@nordwind.local"

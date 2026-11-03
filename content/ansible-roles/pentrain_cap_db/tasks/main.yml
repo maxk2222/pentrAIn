@@ -77,6 +77,13 @@
   changed_when: false
   no_log: true   # cmd carries the api_ro password + planted hashes
 
+- name: ops + backup dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/var/lib/ops, /opt/backup, /var/backups]
+
 - name: ops data dir (something to back up)
   ansible.builtin.copy:
     dest: /var/lib/ops/README

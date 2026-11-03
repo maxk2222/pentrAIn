@@ -135,6 +135,10 @@ flowchart TB
   <img src="docs/assets/gifs/flag-solve.gif" alt="flag solve" width="49%" />
 </p>
 
+<p align="center">
+  <img src="docs/assets/gifs/agent-autonomous.gif" alt="coach in autonomous mode — live tmux on the Kali desktop" width="780" />
+</p>
+
 <details>
 <summary><b>More screenshots</b></summary>
 <br/>
@@ -147,9 +151,13 @@ flowchart TB
 |---|---|
 | ![quest](docs/assets/screenshots/05-quest-detail.png) | ![settings](docs/assets/screenshots/12-settings.png) |
 
-| Panels tour | Internet toggle |
+| Autonomous session | Panels tour |
 |---|---|
-| ![panels](docs/assets/gifs/workspace-panels.gif) | ![internet](docs/assets/gifs/internet-toggle.gif) |
+| ![autonomous](docs/assets/screenshots/13-session-autonomous.png) | ![panels](docs/assets/gifs/workspace-panels.gif) |
+
+| Internet toggle | |
+|---|---|
+| ![internet](docs/assets/gifs/internet-toggle.gif) | |
 
 </details>
 
