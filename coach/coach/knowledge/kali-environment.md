@@ -31,6 +31,12 @@ the live probe — anything absent there is NOT installed, don't retry it):
   tools there. Pull evidence to Kali first (`sshpass -p … scp … /tmp/` or
   `ssh … 'cat file' > /tmp/file`), analyze locally; scp needs
   `-o StrictHostKeyChecking=no` or it fails on the unknown hostkey.
+- Probe tool availability ONCE per host (`command -v curl wget python3
+  nc nmap`) and remember it — "command not found" NEVER fixes itself;
+  retrying the same missing tool on the same host is a wasted turn.
+  Fallbacks that are almost always present: python3 urllib for HTTP,
+  `bash /dev/tcp/<ip>/<port>` for port probes, `cat`/`base64` for file
+  transfer.
 
 ## Shell quirks that have bitten
 
