@@ -1301,17 +1301,35 @@ class SessionCoach:
         if not self.facts.denials:
             return None
         cmd = cmd or ""
-        first_ssh = _USER_AT_HOST.search(cmd)
-        # everything up to the first user@host token runs on the local box
-        local_head = cmd[:first_ssh.end()] if first_ssh else cmd
+        # shell separators restart the local context — `ssh u@a 'x' | ssh
+        # u@b 'y'` runs 'x' on a but a NEW local command for b. A single
+        # head/tail split would pin b's tools onto a (s84: `ssh u@web01
+        # 'cat f' | sshpass ssh u@app01 'mkdir'` got denied by
+        # missing:sshpass@web01 though that sshpass ran on kali — and the
+        # actually-dead direct connect to app01 went unseen by
+        # filtered:app01@kali).
+        segs = re.split(r"\|{1,2}|&&|;", cmd)
+
+        def _head(seg: str) -> str:
+            """Segment text up to the first user@host token = local part."""
+            m = _USER_AT_HOST.search(seg)
+            return seg[:m.end()] if m else seg
+
+        # kali facts see every segment's local head; a pivot-host fact
+        # sees the tail of the segment(s) that actually invoke that host
+        local_head = " ".join(_head(s) for s in segs)
 
         def _tail(host: str) -> str:
             """The remote portion — what executes ON `host` ('' when the
             host isn't invoked). For vantage 'kali' there is no remote."""
             if host == "kali":
                 return ""
-            m = re.search(rf"\S+@{re.escape(host)}\b", cmd)
-            return cmd[m.end():] if m else ""
+            out = []
+            for s in segs:
+                m = re.search(rf"\S+@{re.escape(host)}\b", s)
+                if m:
+                    out.append(s[m.end():])
+            return " ".join(out)
 
         for dn in self.facts.denials:
             if dn.startswith(("unreachable:", "filtered:", "missing:")):
@@ -1352,13 +1370,15 @@ class SessionCoach:
             tail = _tail(host)
             if user and svc == "ssh":
                 # the denied thing IS the connection to host — ssh+user in
-                # the local invocation incl. the user@host token itself
-                mh = re.search(rf"\S+@{re.escape(host)}\b", cmd)
-                head = cmd[:mh.end()] if mh else ""
-                if (head
-                        and re.search(r"\bssh\b", head)
-                        and re.search(rf"\b{re.escape(user)}\b", head)):
-                    return dn
+                # the local invocation of the segment invoking that host
+                for s in segs:
+                    mh = re.search(rf"\S+@{re.escape(host)}\b", s)
+                    if not mh:
+                        continue
+                    head = s[:mh.end()]
+                    if (re.search(r"\bssh\b", head)
+                            and re.search(rf"\b{re.escape(user)}\b", head)):
+                        return dn
                 continue
             # client-tool or capability denial — the command ran ON the
             # host, so only the remote tail counts (`sudo sshpass ssh

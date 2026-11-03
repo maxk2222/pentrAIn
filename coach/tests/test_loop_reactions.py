@@ -2385,6 +2385,30 @@ async def test_filtered_denies_connect_attempts_not_just_scans():
     assert did, res
 
 
+async def test_denials_see_pipe_segments_as_fresh_local_context():
+    """`ssh u@a 'x' | sshpass ssh u@b 'y'` — the second command is a NEW
+    local invocation, not remote-on-a (s84: key-copy pipe to app01 got
+    denied by missing:sshpass@web01 with the wrong reason while the real
+    dead end — the direct connect to filtered app01 — went unseen)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials += ["missing:sshpass@web01",
+                            "filtered:10.1.10.32@kali"]
+    pipe = ("sshpass -p x ssh deploy@web01 'cat ~/.ssh/id_rsa.pub' "
+            "| sshpass -p x ssh deploy@10.1.10.32 'mkdir -p ~/.ssh'")
+    # segment2 runs locally on kali — sshpass@web01 must not see it…
+    # …but filtered:app01@kali sees the direct connect in segment2's head
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": pipe}, proactive=True)
+    assert not did and "filtered:10.1.10.32@kali" in res
+    # without the filtered fact the pipe is a legit two-hop chain
+    coach.facts.denials.remove("filtered:10.1.10.32@kali")
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": pipe}, proactive=True)
+    assert did, res
+
+
 async def test_scan_saturation_denies_variant_rescans():
     """Three+ recon scans on a host with zero open ports = settled — the
     next flag-variant scan is denied even without a filtered: denial
