@@ -10,18 +10,30 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from . import guides
 from .objective import render as objective_render
 
 
 # curated environment knowledge (tool inventory, shell quirks, recipes) —
 # loaded once into the system prompt so it stays in the cacheable prefix.
-# Versioned with the coach, updated from live-test lessons.
-def _knowledge(limit: int = 22000) -> str:
+# Versioned with the coach, updated from live-test lessons. Technique
+# recipes moved to knowledge/modules/ — the GUIDES index lists them and
+# lookup_guide("<id>") pulls a body on demand.
+def _knowledge(limit: int = 8000) -> str:
     try:
         p = Path(__file__).parent / "knowledge" / "kali-environment.md"
         return p.read_text(encoding="utf-8")[:limit]
     except OSError:
         return ""
+
+
+def _guides_index() -> str:
+    idx = guides.index(1800)
+    if not idx:
+        return ""
+    return ("GUIDES — technique recipe modules; pull a body via "
+            "lookup_guide(\"<id>\") BEFORE attempting a technique you "
+            "haven't done in this session:\n" + idx)
 
 
 SYSTEM_BASE = """\
@@ -138,6 +150,7 @@ Answer format — JSON only:
             {"type":"mark_checkpoint","checkpoint_id":"<id from CHECKPOINTS_OPEN>"},
             {"type":"update_plan","items":[{"t":"<step>","s":"doing"}]},
             {"type":"capture_screen"},
+            {"type":"lookup_guide","query":"<module id from GUIDES>"},
             {"type":"none","reason":"<short private note>"}]}
 Mark a checkpoint only when telemetry shows the trainee actually did the \
 corresponding step. "none" reasons are remembered as your private notes. \
@@ -149,8 +162,12 @@ SYSTEM = SYSTEM_BASE + FORMAT_JSON
 
 
 def system_prompt(tools_active: bool) -> str:
-    return SYSTEM_BASE + (FORMAT_TOOLS if tools_active else FORMAT_JSON) + (
-        "\n\n" + _knowledge() if _knowledge() else "")
+    out = SYSTEM_BASE + (FORMAT_TOOLS if tools_active else FORMAT_JSON)
+    if kb := _knowledge():
+        out += "\n\n" + kb
+    if idx := _guides_index():
+        out += "\n\n" + idx
+    return out
 
 
 _PLAN_STALE_S = 900   # an L4 plan untouched this long is probably forgotten
@@ -424,4 +441,6 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
     ]
     if kb := _knowledge():
         lines += ["", "# Kali environment field notes", kb]
+    if idx := _guides_index():
+        lines += ["", idx]
     return "\n".join(lines)

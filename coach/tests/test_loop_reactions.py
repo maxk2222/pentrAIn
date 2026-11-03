@@ -2217,3 +2217,93 @@ async def test_filtered_host_denial_rides_the_tool_result():
         {"type": "exec_in_kali", "command": "echo probing"},
         proactive=True)
     assert "unreachable/filtered" not in res2
+
+
+async def test_lookup_guide_dispatch_returns_module_body():
+    """lookup_guide is the pull half of the knowledge system — the recipe
+    lands in the tool reply, speaks nothing to the trainee, costs no exec."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _did, res = await coach._dispatch(
+        {"type": "lookup_guide", "query": "git-leak"}, proactive=True)
+    assert "zlib.decompress" in res          # verbatim recipe reached the reply
+    _did, res = await coach._dispatch(
+        {"type": "lookup_guide", "query": "bogus-mod"}, proactive=True)
+    assert "error: unknown guide" in res and "pivoting" in res
+
+
+async def test_guide_trigger_hint_fires_once_per_module():
+    """The deterministic push: output matching a module's triggers appends
+    a GUIDE hint to the tool result — exactly once per module, so a weak
+    model doesn't have to know what to search for."""
+    class GitClient(FakeClient):
+        async def exec_in_kali(self, sid, command, window=None):
+            return {"out": "Index of /.git/  Parent Directory  logs/ objects/",
+                    "exitcode": 0, "visible": True}
+    coach, _ = _coach()
+    coach.client = GitClient()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -s http://web01/.git/"}, proactive=True)
+    assert "GUIDE: module 'git-leak'" in res
+    assert 'lookup_guide("git-leak")' in res
+    _, res2 = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -s http://web01/.git/logs/"}, proactive=True)
+    assert "GUIDE:" not in res2              # once per module — no spam
+
+
+async def test_filtered_and_missing_denials_hard_deny():
+    """filtered:/missing: denials join unreachable: as hard exec denies —
+    a hinted dead end was still retried if the model ignored FACTS."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials += ["filtered:10.1.10.32@kali",
+                            "missing:curl@web01"]
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -sC -p- 10.1.10.32"}, proactive=True)
+    assert not did and "filtered:10.1.10.32@kali" in res
+    # a different vantage is NOT covered by the kali-vantage denial
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'nmap -sV 10.1.10.32'"},
+        proactive=True)
+    assert did
+    # missing tool on the pivot host denies only that tool@host pair
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'curl -s http://10.1.10.33/'"},
+        proactive=True)
+    assert not did and "missing:curl@web01" in res
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "curl -s http://10.1.10.33/"},
+        proactive=True)
+    assert did                               # curl on kali is fine
+
+
+async def test_scan_saturation_denies_variant_rescans():
+    """Three+ recon scans on a host with zero open ports = settled — the
+    next flag-variant scan is denied even without a filtered: denial
+    (e.g. scans that return 'host seems down' produce no port lines)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    h = coach.facts.add_host("10.1.10.32")
+    h.scans = 3
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -A -p- 10.1.10.32"}, proactive=True)
+    assert not did and "scanned 3x" in res and "pivot" in res
+    # a host with discovered ports is NOT saturated — targeted rescans ok
+    h2 = coach.facts.add_host("10.1.10.21")
+    h2.scans = 4
+    h2.ports[22] = "ssh"
+    did, _res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -sV -p 22,80 10.1.10.21"}, proactive=True)
+    assert did

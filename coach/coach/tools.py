@@ -53,6 +53,13 @@ TOOLS: list[dict] = [
         {"checkpoint_id": _str("checkpoint id")}, ["checkpoint_id"]),
     _fn("capture_screen",
         "Request a fresh screenshot description of the Kali desktop.", {}, []),
+    _fn("lookup_guide",
+        "Pull a technique recipe module from the knowledge base — module "
+        "ids are listed under GUIDES in your prompt (e.g. 'git-leak', "
+        "'pivoting'). Call BEFORE attempting a technique you have not done "
+        "in this session: the module carries verbatim commands. Costs no "
+        "action budget.",
+        {"query": _str("module id or topic keyword")}, ["query"]),
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
@@ -102,7 +109,7 @@ TOOLS: list[dict] = [
 # tools a spawned worker may call — exec-only: no chat, flags, checkpoints
 # or nested spawns; completion stays with the parent coach.
 WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none",
-                     "update_plan"}
+                     "update_plan", "lookup_guide"}
 SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
                        "kill_agent"}
 
@@ -112,14 +119,15 @@ TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 # pick an action the gate will refuse anyway, and on takeover don't offer
 # suggest_command at all (its confirm-chip can never be clicked in auto mode)
 _LEVEL_TOOLS = {
-    1: {"send_chat", "offer_hint", "capture_screen", "update_plan", "none"},
+    1: {"send_chat", "offer_hint", "capture_screen", "update_plan",
+        "lookup_guide", "none"},
     2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen",
-        "update_plan", "none"},
+        "update_plan", "lookup_guide", "none"},
     3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
-        "capture_screen", "update_plan", "none"},
+        "capture_screen", "update_plan", "lookup_guide", "none"},
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
-        "wait", "update_plan", "none"},
+        "wait", "update_plan", "lookup_guide", "none"},
 }
 
 

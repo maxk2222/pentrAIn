@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import httpx
 import structlog
 
-from . import percept
+from . import guides, percept
 from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
@@ -166,6 +166,8 @@ class SessionCoach:
         self._denial_seen: set[str] = set()   # denials already surfaced in
         # a guaranteed-read NOTE (facts render alone reaches only the
         # parent's next turn — a worker's prompt snapshot is frozen)
+        self._guides_hinted: set[str] = set()  # modules already hinted on
+        # the guaranteed-read channel — one push per module per session
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -1277,6 +1279,27 @@ class SessionCoach:
                 if ip and ip in cmd and vantage == pivot:
                     return dn
                 continue
+            if dn.startswith("filtered:"):
+                rest = dn.split(":", 1)[1]
+                ip, _, vantage = rest.rpartition("@")
+                # tier-isolated from THIS vantage — only scan-family cmds
+                # to that ip are dead ends (ping/ssh stay free, another
+                # vantage stays free via the pivot check)
+                if (ip and ip in cmd and vantage == pivot
+                        and re.search(
+                            r"\b(nmap|masscan|rustscan|unicornscan|nc|"
+                            r"netcat|fping)\b", cmd or "")):
+                    return dn
+                continue
+            if dn.startswith("missing:"):
+                rest = dn.split(":", 1)[1]
+                tool, _, vantage = rest.rpartition("@")
+                # the tool can never appear — no internet means nothing to
+                # install it with; deny the same binary on the same host
+                if (tool and vantage == pivot
+                        and re.search(rf"\b{re.escape(tool)}\b", cmd or "")):
+                    return dn
+                continue
             m = _DENIAL_FORM.match(dn)
             if not m:
                 continue
@@ -1525,6 +1548,26 @@ class SessionCoach:
                         return spoke, (f"denied: prior evidence — {dn}. "
                                        "Try a different user, host, "
                                        "or vector.")
+                    # scan saturation: >=3 recon scans on a host that still
+                    # shows zero open ports is settled evidence — the next
+                    # flag-variant rescan is a loop, not iteration (s84:
+                    # w1 ran 4 nmap variants at a filtered host)
+                    if re.search(
+                            r"\b(nmap|masscan|rustscan|unicornscan)\b",
+                            cmd or ""):
+                        ips = self._IP_RE.findall(cmd or "")
+                        hh = (self.facts.hosts.get(ips[-1])
+                              if ips else None)
+                        if hh and hh.scans >= 3 and not hh.ports:
+                            await log.ainfo("scan saturated", session=self.sid,
+                                            host=ips[-1], scans=hh.scans)
+                            return spoke, (
+                                f"denied: {ips[-1]} was scanned "
+                                f"{hh.scans}x with zero open ports — "
+                                "the host is settled as unreachable from "
+                                "here. Reach it via a pivot (ssh creds on "
+                                "an adjacent host) or move on; more "
+                                "flag-variant scans change nothing.")
                     # rewrite guard: a solver that was written ≥2× and never
                     # ran (or ran clean) does NOT need another version — the
                     # model 'perfects' scripts forever otherwise. Deny before
@@ -1704,6 +1747,20 @@ class SessionCoach:
                                 " won't change it: reach the host via a "
                                 "pivot (ssh creds from an adjacent host) or"
                                 " move on.")
+                            break
+                        # deterministic guide push: command+output triggers
+                        # name the recipe module that covers this situation —
+                        # a weak model should not have to know what to search
+                        # for; one hint per module per session keeps it quiet
+                        for mid in guides.triggers_for(
+                                f"{cmd}\n{out[:3000]}"):
+                            if mid in self._guides_hinted:
+                                continue
+                            self._guides_hinted.add(mid)
+                            result += (
+                                f"\nGUIDE: module '{mid}' covers this "
+                                f"situation — lookup_guide(\"{mid}\") pulls "
+                                "the recipe (verbatim commands).")
                             break
                     elif code is None:
                         err_hint = res.get("err") or ""
@@ -2084,6 +2141,16 @@ class SessionCoach:
                                         meta=meta)
             self._record_reply(rep)
             spoke = True
+        elif t == "lookup_guide":
+            # pull a technique recipe — internal knowledge consult, costs no
+            # exec budget, nothing shown to the trainee (the recipe lands in
+            # the model's tool reply where the next turn can act on it)
+            q = a.get("query") or a.get("content") or ""
+            result = guides.lookup(str(q)[:120])
+            asyncio.create_task(self.client.log_action(
+                self.sid, "lookup_guide",
+                {"query": str(q)[:120], "agent": window or "main"},
+                {"hit": not result.startswith(("error:", "multiple"))}))
         # "none" or unknown → silence (reason captured above as working memory)
         if t == "none":
             result = "noted"
