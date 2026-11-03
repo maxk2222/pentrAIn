@@ -63,10 +63,22 @@ async def finalize_attempt(db: AsyncSession, session: Session) -> Attempt:
     score = max(0, flag_pts + time_bonus - hint_cost - takeover_penalty)
     breakdown = {"flags": flag_pts, "time_bonus": time_bonus,
                  "hint_cost": hint_cost, "takeover_penalty": takeover_penalty,
-                 "par_s": par}
+                 "par_s": par, "time_bonus_max": bonus_max}
     existing = (await db.execute(
         select(Attempt).where(Attempt.session_id == session.id))).scalar_one_or_none()
-    if existing:  # idempotent — a session finalizes exactly once
+    if existing:
+        # re-solve after a soft reset: the row tracks the LATEST run — the
+        # board sees the current standing, `runs` keeps the replay count.
+        existing.score = score
+        existing.flags_found = len(solved)
+        existing.flags_total = len(flags)
+        existing.hints_used = hint_count
+        existing.coach_interventions = int(interventions)
+        existing.assistance = assistance
+        existing.breakdown = breakdown
+        existing.duration_s = duration
+        existing.runs = (existing.runs or 0) + 1
+        await db.commit()
         return existing
     attempt = Attempt(
         quest_id=session.quest_id, session_id=session.id, score=score,
@@ -157,5 +169,6 @@ def _att(a: Attempt) -> dict:
         "hints_used": a.hints_used, "coach_interventions": a.coach_interventions,
         "assistance": a.assistance or {},
         "breakdown": a.breakdown or {},
-        "duration_s": a.duration_s, "created_at": a.created_at.isoformat() if a.created_at else None,
+        "duration_s": a.duration_s, "runs": a.runs or 1,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
     }

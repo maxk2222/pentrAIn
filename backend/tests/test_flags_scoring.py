@@ -49,7 +49,8 @@ async def test_finalize_attempt_math(db_with_packs):
     assert att.flags_found == 2 and att.flags_total == 2
     assert att.hints_used == 1
     assert att.breakdown == {"flags": 300, "time_bonus": 100, "hint_cost": 25,
-                           "takeover_penalty": 0, "par_s": 900}
+                           "takeover_penalty": 0, "par_s": 900,
+                           "time_bonus_max": 150}
 
 
 async def test_takeover_penalty_applied(db_with_packs):

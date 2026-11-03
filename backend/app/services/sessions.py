@@ -15,19 +15,24 @@ from urllib.parse import urlparse
 
 import structlog
 import yaml
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import session_factory
 from ..models.domain import (
+    AssistUse,
     Attempt,
     CoachAction,
     CoachMessage,
+    CoachSessionState,
     Flag,
+    FlagSubmission,
     HintUse,
     Quest,
+    QuestCheckpoint,
     Session,
     SessionState,
+    TelemetryEvent,
 )
 from ..ranges.base import RangeState
 from ..ranges.ludus import SNAP_POST_DEPLOY
@@ -78,7 +83,7 @@ async def _broadcast(session_id: int, type_: str, data: dict | None = None) -> N
 async def _broadcast_solved(session_id: int, attempt: Attempt) -> None:
     await _broadcast(session_id, "solved", {
         "score": attempt.score, "attempt_id": attempt.id,
-        "duration_s": attempt.duration_s,
+        "duration_s": attempt.duration_s, "runs": attempt.runs or 1,
         "breakdown": attempt.breakdown or {}})
 
 
@@ -89,8 +94,10 @@ async def _set_state(db: AsyncSession, session: Session, state: SessionState,
         setattr(session, k, v)
     await db.commit()
     await _broadcast(session.id, "state", {"state": state.value, **{k: str(v) for k, v in fields.items() if v is not None}})
-    if state in (SessionState.ABORTED, SessionState.FAILED, SessionState.SOLVED):
-        # terminal — no replayed drafts/activity should outlive the session
+    if state in (SessionState.ABORTED, SessionState.FAILED,
+                 SessionState.SOLVED, SessionState.RESETTING):
+        # terminal (or wiping for a fresh run) — no replayed drafts/activity
+        # should outlive the session
         ephemeral_clear(session.id)
 
 
@@ -814,6 +821,19 @@ async def _reset(session_id: int, hard: bool) -> None:
                 except Exception as e:
                     await log.awarning("testing-mode re-apply failed",
                                        error=str(e)[:150])
+            # per-attempt tables are cleared — a stale FlagSubmission would
+            # instantly re-solve the run, a stale ended_at would clamp the
+            # next duration to 0, and old hint/coach/telemetry rows would
+            # corrupt the next attempt's assistance+intervention scoring.
+            # The Attempt row and observer CoachLessons deliberately survive:
+            # one is the run's record, the other cross-run knowledge.
+            for model in (FlagSubmission, HintUse, AssistUse, CoachAction,
+                          CoachMessage, TelemetryEvent, CoachSessionState,
+                          QuestCheckpoint):
+                await db.execute(delete(model).where(
+                    model.session_id == session_id))
+            session.ended_at = None
+            session.started_at = None
             # re-randomize flags (old secrets are gone after rollback)
             session.flag_seed = new_seed()
             session.telemetry_token = new_telemetry_token()

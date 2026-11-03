@@ -118,13 +118,14 @@ export interface Assistance {
 /** Score decomposition persisted on the attempt — how time weighed in. */
 export interface ScoreBreakdown {
   flags?: number; time_bonus?: number; hint_cost?: number;
-  takeover_penalty?: number; par_s?: number;
+  takeover_penalty?: number; par_s?: number; time_bonus_max?: number;
 }
 
 export interface Attempt {
   id: number; quest_id: string; session_id: number; score: number;
   flags_found: number; flags_total: number; hints_used: number;
   coach_interventions: number; assistance?: Assistance;
+  runs?: number;
   breakdown?: ScoreBreakdown;
   duration_s: number; created_at: string | null;
 }

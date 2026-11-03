@@ -170,6 +170,8 @@ class Attempt(Base):
     # score decomposition: {flags, time_bonus, hint_cost, takeover_penalty, par_s}
     breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
     duration_s: Mapped[int] = mapped_column(Integer, default=0)
+    # a session can be soft-reset and re-solved — row tracks the LATEST run
+    runs: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

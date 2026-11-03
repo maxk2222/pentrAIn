@@ -17,6 +17,7 @@ import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
 import { NotesPanel } from "@/components/notes";
 import { LazyModal } from "@/components/lazymodal";
+import { SolvedModal } from "@/components/solvedmodal";
 import { LiveStatsOverlay } from "@/components/livestats";
 import { DeployLog } from "@/components/deploylog";
 import { cn, fmtDuration } from "@/lib/utils";
@@ -139,6 +140,17 @@ export function SessionPage() {
     enabled: session?.state === "solved" && Boolean(session?.quest_id),
   });
   const attempt = board?.history.find((a) => a.session_id === sessionId);
+  // solved modal: once per attempt — sessionStorage key carries the attempt id
+  // so a soft-reset re-solve pops again while a plain reload stays quiet
+  const [solvedDismissed, setSolvedDismissed] = useState(false);
+  const solvedKey = attempt ? `solvedModal:${sessionId}:${attempt.id}:${attempt.runs ?? 1}` : "";
+  const showSolved = Boolean(
+    session?.state === "solved" && attempt && !solvedDismissed
+    && !sessionStorage.getItem(solvedKey));
+  function dismissSolved() {
+    if (solvedKey) sessionStorage.setItem(solvedKey, "1");
+    setSolvedDismissed(true);
+  }
 
   // restored-open assistance panels carry over from older sessions — the aid
   // still counts toward THIS session's solve style, so record it once on mount
@@ -170,6 +182,10 @@ export function SessionPage() {
         try {
           const ev = JSON.parse(e.data) as WsEvent;
           setEvents((prev) => [...prev.slice(-299), ev]);
+          if (ev.type === "solved") {
+            qc.invalidateQueries({ queryKey: ["leaderboard", session?.quest_id] });
+            qc.invalidateQueries({ queryKey: ["session-flags", sessionId] });
+          }
           if (ev.type === "state" || ev.type === "autonomy"
               || ev.type === "subagents" || ev.type === "coach_enabled") {
             qc.invalidateQueries({ queryKey: ["session", sessionId] });
@@ -654,6 +670,15 @@ export function SessionPage() {
           what={lazyAsk === "sheet" ? "the reference sheet" : "the AI coach"}
           onConfirm={confirmLazy}
           onCancel={() => setLazyAsk(null)}
+        />
+      )}
+      {showSolved && attempt && sessionId && session?.quest_id && (
+        <SolvedModal
+          sessionId={sessionId}
+          questId={session.quest_id}
+          attempt={attempt}
+          onClose={dismissSolved}
+          onRestart={() => { dismissSolved(); void reset(false); }}
         />
       )}
     </div>

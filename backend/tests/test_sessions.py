@@ -1049,3 +1049,46 @@ async def test_set_coach_enabled_pauses_and_resumes(db_with_packs):
     with pytest.raises(sessions_svc.SessionError, match="locked"):
         await sessions_svc.set_coach_enabled(db, done.id, False)
     await _abort_done(db, s.id)
+
+
+async def test_soft_reset_clears_progress_and_rescores(db_with_packs):
+    """Soft reset = a fresh attempt. Old FlagSubmissions must not re-solve
+    the run, ended_at/started_at must clear (duration math), and re-solving
+    updates the existing Attempt row (latest-run stats + runs counter)."""
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    await sessions_svc.activate(db, s.id)
+
+    async def _secrets():
+        return {r.flag_key: r.secret for r in (await db.execute(
+            select(flags_svc.ExpectedFlag).where(
+                flags_svc.ExpectedFlag.session_id == s.id))).scalars().all()}
+
+    for v in (await _secrets()).values():
+        await sessions_svc.submit_flag(db, s.id, v)
+    s = await db.get(Session, s.id)
+    assert s.state == "solved" and s.ended_at is not None
+    a1 = (await db.execute(
+        select(Attempt).where(Attempt.session_id == s.id))).scalar_one()
+
+    await sessions_svc.reset(db, s.id, hard=False)
+    s = await _wait_state(s.id, "ready")
+    assert s.ended_at is None and s.started_at is None
+    from app.models.domain import FlagSubmission
+    left = (await db.execute(select(FlagSubmission).where(
+        FlagSubmission.session_id == s.id))).scalars().all()
+    assert left == []
+
+    await sessions_svc.activate(db, s.id)
+    s2 = await _secrets()
+    r = await sessions_svc.submit_flag(db, s.id, next(iter(s2.values())))
+    assert r["correct"] and not r["all_solved"]   # leak would fire here
+    for v in list(s2.values())[1:]:
+        await sessions_svc.submit_flag(db, s.id, v)
+    a2 = (await db.execute(
+        select(Attempt).where(Attempt.session_id == s.id))).scalar_one()
+    await db.refresh(a2)   # finalize ran in another session — reload
+    assert a2.id == a1.id and a2.runs == 2
+    assert a2.flags_found == len(s2)
+    await _abort_done(db, s.id)

@@ -82,9 +82,10 @@ class CoachService:
             if not coach:
                 continue
             await coach.feed(ev)
-            # cleanup when session ends
+            # cleanup when session ends or resets — a surviving coach would
+            # carry the old run's facts/plan/lessons into the fresh attempt
             if topic.startswith("session.") and data.get("state") in (
-                    "solved", "aborted", "failed"):
+                    "solved", "aborted", "failed", "resetting"):
                 await asyncio.sleep(2)
                 await self._drop(sid)
 
