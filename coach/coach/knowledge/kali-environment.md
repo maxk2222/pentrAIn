@@ -151,6 +151,11 @@ the live probe — anything absent there is NOT installed, don't retry it):
 - Group-writable script executed by root cron/timer → append a payload
   line (e.g. `cp /root/flag.txt /tmp/x; chmod 644 /tmp/x`), use the
   `wait` tool for the interval, then check the output file ONCE.
+- A proven shell is also a forensic tool: before rebuilding an artifact
+  offline (mirroring .git objects one by one), check whether proven
+  access already reaches the SAME data on the target — `ssh host
+  'git -C /var/www/app log -p'` or `git show <sha>:<file>` beats 40
+  object fetches when git exists there.
 - `caps:` in FACTS = primitives you already PROVED (root-exec via file,
   mysql FILE priv, valid creds). For every remaining objective check caps
   FIRST — reusing a proven primitive beats deriving a new vector. The
