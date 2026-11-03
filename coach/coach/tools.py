@@ -60,6 +60,14 @@ TOOLS: list[dict] = [
         "in this session: the module carries verbatim commands. Costs no "
         "action budget.",
         {"query": _str("module id or topic keyword")}, ["query"]),
+    _fn("record_lesson",
+        "Persist a session lesson into shared FACTS — one line of distilled "
+        "knowledge you learned the hard way (e.g. 'app01 needs the Bearer "
+        "token from /portal/config.js', 'web01 python3 exists but no pip'). "
+        "Rendered as lessons: to you, all workers, and restored after "
+        "restarts. For hard-won session facts — not quest spoilers or "
+        "raw output dumps. Costs no action budget.",
+        {"text": _str("one distilled lesson, <=140 chars")}, ["text"]),
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
@@ -109,7 +117,7 @@ TOOLS: list[dict] = [
 # tools a spawned worker may call — exec-only: no chat, flags, checkpoints
 # or nested spawns; completion stays with the parent coach.
 WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none",
-                     "update_plan", "lookup_guide"}
+                     "update_plan", "lookup_guide", "record_lesson"}
 SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
                        "kill_agent"}
 
@@ -120,14 +128,14 @@ TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 # suggest_command at all (its confirm-chip can never be clicked in auto mode)
 _LEVEL_TOOLS = {
     1: {"send_chat", "offer_hint", "capture_screen", "update_plan",
-        "lookup_guide", "none"},
+        "lookup_guide", "record_lesson", "none"},
     2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen",
-        "update_plan", "lookup_guide", "none"},
+        "update_plan", "lookup_guide", "record_lesson", "none"},
     3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
-        "capture_screen", "update_plan", "lookup_guide", "none"},
+        "capture_screen", "update_plan", "lookup_guide", "record_lesson", "none"},
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
-        "wait", "update_plan", "lookup_guide", "none"},
+        "wait", "update_plan", "lookup_guide", "record_lesson", "none"},
 }
 
 

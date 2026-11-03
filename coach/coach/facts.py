@@ -245,6 +245,9 @@ class FactsDB:
         self.findings: list[str] = []     # bounded misc evidence (enum users)
         self.denials: list[str] = []      # bounded dead ends (denied:svc@host)
         self.caps: list[str] = []         # proven primitives (root-exec via …)
+        self.lessons: list[str] = []      # agent-authored lessons (record_lesson)
+        # — bounded: the agent's own distilled knowledge, replayed into the
+        # store from coach_actions on restart so it survives context loss
         self._pending: tuple[str, str, float] | None = None  # (path, kind, ts)
         self._seen_cmds: set[str] = set()   # dedup: replay + live overlap
         self.mutation_seq = 0             # bumps on every confirmed write/run
@@ -490,6 +493,20 @@ class FactsDB:
         del self.denials[:-10]
         self._merge_caps(d.get("caps") or ())
 
+    def add_lesson(self, text: str, source: str = "main") -> int:
+        """record_lesson — agent-authored session knowledge. Distinct from
+        findings (output-derived evidence): these are the model's own
+        distilled rules-of-thumb for THIS session ('app01 needs Bearer
+        token from /portal/config.js'). Bounded and deduped."""
+        t = str(text or "").strip()[:160]
+        if not t:
+            return len(self.lessons)
+        entry = f"{t}" if source == "main" else f"[{source}] {t}"
+        if entry not in self.lessons:
+            self.lessons.append(entry)
+        del self.lessons[:-10]
+        return len(self.lessons)
+
     def _merge_caps(self, entries) -> None:
         for cp in entries:
             cp = str(cp)[:80]
@@ -557,7 +574,7 @@ class FactsDB:
         """FACTS: section for the context message. Cred secrets are kept —
         the agent needs them to type passwords; everything else truncates."""
         if not (self.hosts or self.creds or self.files or self.flags
-                or self.denials or self.caps):
+                or self.denials or self.caps or self.lessons):
             return ""
         lines = ["FACTS:"]
         if self.hosts:
@@ -618,6 +635,12 @@ class FactsDB:
             # context loss (s46: root-cron reuse lagged its proof by ~65min)
             lines.append("  caps: " + " | ".join(self.caps[-3:] if compact
                                                  else self.caps[-6:]))
+        if self.lessons:
+            # agent-authored session knowledge — the model's own distilled
+            # lessons outrank derived evidence; rendered near the top so a
+            # post-restart turn acts on them immediately
+            kept = self.lessons[-4:] if compact else self.lessons[-8:]
+            lines.append("  lessons: " + " | ".join(kept))
         if self.denials:
             # dead ends deserve permanent space — they are what stops the
             # model re-trying sudo/docker/mysql paths that already failed

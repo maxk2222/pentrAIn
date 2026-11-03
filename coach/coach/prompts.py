@@ -151,6 +151,7 @@ Answer format — JSON only:
             {"type":"update_plan","items":[{"t":"<step>","s":"doing"}]},
             {"type":"capture_screen"},
             {"type":"lookup_guide","query":"<module id from GUIDES>"},
+            {"type":"record_lesson","text":"<one distilled session lesson>"},
             {"type":"none","reason":"<short private note>"}]}
 Mark a checkpoint only when telemetry shows the trainee actually did the \
 corresponding step. "none" reasons are remembered as your private notes. \
@@ -408,9 +409,14 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
         ]
     lines += [
         "RULES:",
-        ("- You only have exec_in_kali, type_in_pane, wait, update_plan "
-         "and none — every exec lands on YOUR window automatically. `wait` "
-         "pauses cleanly for cron/startup delays instead of polling. "
+        ("- You only have exec_in_kali, type_in_pane, wait, update_plan, "
+         "lookup_guide, record_lesson and none — every exec lands on YOUR "
+         "window automatically. `wait` pauses cleanly for cron/startup "
+         "delays instead of polling. `lookup_guide` pulls a technique "
+         "recipe from the GUIDES list below — consult it before attempting "
+         "a technique you haven't done here. `record_lesson` pins one "
+         "line of session knowledge into shared FACTS — record host-"
+         "specific discoveries your report might compress away. "
          "Maintain your own plan via update_plan — it's yours alone; its "
          "echo stays in your history."),
         ("- exec_in_kali bounces while a foreground program holds the pane → "

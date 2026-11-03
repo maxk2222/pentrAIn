@@ -118,9 +118,13 @@ the live probe — anything absent there is NOT installed, don't retry it):
 
 ## Agent-side tool discipline
 
-- `check_flag` / `submit_flag` / `update_plan` / `lookup_guide` are
-  ACTIONS — typing them into the Kali pane returns `command not found`
-  and burns a turn.
+- `check_flag` / `submit_flag` / `update_plan` / `lookup_guide` /
+  `record_lesson` are ACTIONS — typing them into the Kali pane returns
+  `command not found` and burns a turn.
+- `record_lesson` persists one line of YOUR distilled session knowledge
+  into FACTS (`lessons:`) — survives restarts and reaches workers. Record
+  hard-won facts the moment you learn them: which cred unlocks which
+  host, which path a pivot needs, which tool a host lacks.
 - A denied action carries the reason in its text — change the thing it
   names (run the script alone, re-read the mutated file) instead of
   retrying the same shape with cosmetic edits.

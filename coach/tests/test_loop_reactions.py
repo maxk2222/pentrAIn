@@ -2307,3 +2307,48 @@ async def test_scan_saturation_denies_variant_rescans():
         {"type": "exec_in_kali",
          "command": "nmap -sV -p 22,80 10.1.10.21"}, proactive=True)
     assert did
+
+
+async def test_record_lesson_persists_agent_knowledge():
+    """record_lesson is the agent's own knowledge channel — lands in
+    FACTS.lessons (rendered to parent + workers) and logs for restart
+    replay. Answers 'can the agent create knowledge': yes, session-scoped."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _did, res = await coach._dispatch(
+        {"type": "record_lesson",
+         "text": "app01 needs Bearer token from /portal/config.js"},
+        proactive=True)
+    assert "lesson recorded" in res
+    assert any("Bearer token" in l for l in coach.facts.lessons)
+    assert "lessons:" in coach.facts.render()
+    # worker-tagged lessons carry their source
+    _did, _res = await coach._dispatch(
+        {"type": "record_lesson", "text": "db01 reachable only via app01"},
+        proactive=True, window="w1")
+    assert any(l.startswith("[w1]") for l in coach.facts.lessons)
+    # the action is audited for restart replay (log_action is fire-and-
+    # forget — let the scheduled task run first)
+    await asyncio.sleep(0)
+    assert any(l["tool"] == "record_lesson" for l in c.logged)
+    _did, res = await coach._dispatch(
+        {"type": "record_lesson", "text": ""}, proactive=True)
+    assert "error: empty lesson" in res
+
+
+async def test_lessons_replay_after_restart():
+    """ctx['lessons'] rows (logged record_lesson actions) restore into
+    FactsDB.lessons on attach — the model's distilled session knowledge
+    survives restarts like every other fact type."""
+    coach, _c = _coach()
+    coach.ctx["lessons"] = [
+        {"text": "web01 .git still mirrored at /tmp/nordwind-objects",
+         "agent": "main"},
+        {"text": "app01 api needs X-Token header", "agent": "w1"}]
+    for lt in coach.ctx["lessons"]:
+        coach.facts.add_lesson(str(lt.get("text") or ""),
+                               str(lt.get("agent") or "main"))
+    assert len(coach.facts.lessons) == 2
+    rendered = coach.facts.render()
+    assert "lessons:" in rendered and "[w1]" in rendered

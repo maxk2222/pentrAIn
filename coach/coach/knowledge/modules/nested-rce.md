@@ -1,7 +1,7 @@
 ---
 id: nested-rce
 title: Nested RCE channels — SSRF, ?cmd= endpoints, K8s pod escape
-triggers: [ssrf, ?cmd=, command=, serviceaccount, kubernetes, Bearer, pod]
+triggers: [ssrf, ?cmd=, command=, serviceaccount, kubernetes, Bearer, pods, /pods/]
 ---
 
 # Nested RCE channels (SSRF / ?cmd= endpoints)

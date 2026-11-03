@@ -388,6 +388,15 @@ class SessionCoach:
                 self._plan_push_card("reconciled")
         self.state.notes = [str(n)[:300]
                             for n in self.ctx.get("coach_notes") or []][-8:]
+        # agent-authored lessons — recorded mid-run via record_lesson,
+        # replayed here so a restart doesn't lose the model's own distilled
+        # session knowledge (it's what FACTS.lessons renders from)
+        for lt in self.ctx.get("lessons") or []:
+            if isinstance(lt, dict):
+                self.facts.add_lesson(str(lt.get("text") or ""),
+                                      str(lt.get("agent") or "main"))
+            else:
+                self.facts.add_lesson(str(lt))
         # orphaned workers: spawned pre-restart, killed with the process —
         # their command outputs reseeded via coach_outputs but the TASK died.
         # A note is all the parent needs to not re-do (or misplace) their work
@@ -1754,9 +1763,10 @@ class SessionCoach:
                         # for; one hint per module per session keeps it quiet
                         for mid in guides.triggers_for(
                                 f"{cmd}\n{out[:3000]}"):
-                            if mid in self._guides_hinted:
+                            hkey = f"{window or 'main'}:{mid}"
+                            if hkey in self._guides_hinted:
                                 continue
-                            self._guides_hinted.add(mid)
+                            self._guides_hinted.add(hkey)
                             result += (
                                 f"\nGUIDE: module '{mid}' covers this "
                                 f"situation — lookup_guide(\"{mid}\") pulls "
@@ -2151,6 +2161,21 @@ class SessionCoach:
                 self.sid, "lookup_guide",
                 {"query": str(q)[:120], "agent": window or "main"},
                 {"hit": not result.startswith(("error:", "multiple"))}))
+        elif t == "record_lesson":
+            # agent-authored session knowledge — lands in FACTS.lessons,
+            # rendered to parent AND future worker spawns, and replayed
+            # from coach_actions on restart (bridges the context-loss gap
+            # for hard-won facts like 'app01 needs Bearer from config.js')
+            txt = (a.get("text") or a.get("content") or "")[:160]
+            if not txt.strip():
+                return spoke, "error: empty lesson"
+            n = self.facts.add_lesson(txt, window or "main")
+            asyncio.create_task(self.client.log_action(
+                self.sid, "record_lesson",
+                {"text": txt, "agent": window or "main"},
+                {"count": n}))
+            result = (f"lesson recorded ({n} kept) — visible in FACTS "
+                      "lessons: to you and future workers")
         # "none" or unknown → silence (reason captured above as working memory)
         if t == "none":
             result = "noted"

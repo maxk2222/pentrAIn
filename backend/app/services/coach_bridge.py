@@ -133,6 +133,20 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             CoachAction.tool == "note")
         .order_by(CoachAction.id.desc()).limit(10))).all() if r[0]]
     coach_notes.reverse()
+    # agent-authored lessons (record_lesson tool) — the model's own
+    # distilled session knowledge; replayed into FactsDB.lessons on attach
+    # so hard-won facts survive a coach restart like any other fact type
+    lessons = [{"text": r[0], "agent": r[1]}
+               for r in (await db.execute(
+                   select(func.json_extract(CoachAction.args, "$.text"),
+                          func.coalesce(
+                              func.json_extract(CoachAction.args, "$.agent"),
+                              "main")).where(
+                       CoachAction.session_id == session_id,
+                       CoachAction.tool == "record_lesson")
+                   .order_by(CoachAction.id.desc()).limit(10))).all()
+               if r[0]]
+    lessons.reverse()
     telem = (await db.execute(
         select(TelemetryEvent).where(TelemetryEvent.session_id == session_id)
         .order_by(TelemetryEvent.id.desc()).limit(60))).scalars().all()
@@ -262,6 +276,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         "worker_orphans": worker_orphans,
         "plan": plan,
         "coach_notes": coach_notes,
+        "lessons": lessons,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},
     }

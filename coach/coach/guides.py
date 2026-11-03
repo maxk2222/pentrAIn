@@ -102,7 +102,7 @@ def index(cap: int = 2000) -> str:
     return "\n".join(lines)[:cap]
 
 
-def lookup(query: str, cap: int = 4000) -> str:
+def lookup(query: str, cap: int = 1900) -> str:
     """id exact match → title/trigger substring → body substring.
     Returns the module body (capped), a short candidate list on multiple
     matches, or an error naming the known ids."""
@@ -140,6 +140,18 @@ def lookup(query: str, cap: int = 4000) -> str:
             "call lookup_guide again with the exact id")
 
 
+def _trigger_re(trigger: str) -> re.Pattern:
+    """Trigger → regex. Word edges get \\b anchors so 'pod' can't fire on
+    'tripod'; triggers with non-word edges (like '.git/' or '?c=') are
+    already self-delimiting and match literally."""
+    pat = re.escape(trigger.lower())
+    if trigger[:1].isalnum():
+        pat = r"\b" + pat
+    if trigger[-1:].isalnum():
+        pat = pat + r"\b"
+    return re.compile(pat)
+
+
 def triggers_for(text: str) -> list[str]:
     """Module ids whose trigger keywords appear in command/output text —
     for deterministic 'module X covers this' hints on the guaranteed-read
@@ -149,6 +161,7 @@ def triggers_for(text: str) -> list[str]:
     low = text.lower()
     hits: list[str] = []
     for m in load_modules().values():
-        if any(t.lower() in low for t in m.triggers if len(t) >= 3):
+        if any(len(t) >= 3 and _trigger_re(t).search(low)
+               for t in m.triggers):
             hits.append(m.id)
     return hits
