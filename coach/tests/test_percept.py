@@ -221,3 +221,40 @@ def test_unreachable_marker_becomes_denial():
     d = parse_output("ssh u@h 'ping -c1 8.8.8.8'",
                      "connect: Network is unreachable")
     assert "unreachable:8.8.8.8@h" in d["denials"]
+
+
+_FILTERED_NMAP = """Nmap scan report for app01 (10.1.10.32)
+Host is up (0.00030s latency).
+PORT     STATE    SERVICE
+21/tcp   filtered ftp
+22/tcp   filtered ssh
+80/tcp   filtered http
+443/tcp  filtered https
+3306/tcp filtered mysql
+5432/tcp filtered postgresql
+Nmap done: 1 IP address (1 host up) scanned in 1.50 seconds"""
+
+
+def test_all_filtered_nmap_becomes_denial():
+    """A fully-filtered scan = tier isolation from that vantage — must land
+    as a denial fact so parent AND workers stop rescanning the dead host
+    (s84: w1 burned 4 nmap variants on a filtered app01)."""
+    from coach.percept import parse_output
+    d = parse_output("nmap -sV -p- -T4 10.1.10.32", _FILTERED_NMAP)
+    assert "filtered:10.1.10.32@kali" in d["denials"]
+    # through an ssh pivot the denial carries the PIVOT vantage
+    d = parse_output(
+        "ssh deploy@web01 'nmap -sV -p- 10.1.10.32'", _FILTERED_NMAP)
+    assert "filtered:10.1.10.32@web01" in d["denials"]
+    # one open port → the host is reachable, no denial
+    d = parse_output(
+        "nmap -sV -p- 10.1.10.32",
+        _FILTERED_NMAP.replace("22/tcp   filtered ssh",
+                               "22/tcp   open     ssh"))
+    assert not any(x.startswith("filtered:") for x in d["denials"])
+    # tiny targeted scan (1 port) is not isolation evidence
+    d = parse_output(
+        "nmap -p 80 10.0.0.1",
+        "Nmap scan report for h (10.0.0.1)\nHost is up.\n"
+        "80/tcp closed http\nNmap done")
+    assert d["denials"] == []

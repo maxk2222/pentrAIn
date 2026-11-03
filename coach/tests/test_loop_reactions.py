@@ -2180,3 +2180,40 @@ async def test_missing_plan_note_fires_early():
     coach._plan_stale_ping = 0.0
     _, result = await coach._dispatch({"type": "none", "reason": "x"})
     assert "no roadmap" not in result
+
+
+async def test_filtered_host_denial_rides_the_tool_result():
+    """A scan proving every port filtered must add a blocked: fact AND a
+    NOTE on the tool result itself — a worker's facts snapshot is frozen
+    at spawn, so only this guaranteed-read channel can stop rescan loops
+    (s84: w1 burned 4 nmap variants on an isolated app01)."""
+    class FilteredClient(FakeClient):
+        async def exec_in_kali(self, sid, command, window=None):
+            return {"out":
+                    "Nmap scan report for app01 (10.1.10.32)\n"
+                    "Host is up (0.00030s latency).\n"
+                    "PORT     STATE    SERVICE\n"
+                    "21/tcp   filtered ftp\n"
+                    "22/tcp   filtered ssh\n"
+                    "80/tcp   filtered http\n"
+                    "443/tcp  filtered https\n"
+                    "3306/tcp filtered mysql\n"
+                    "5432/tcp filtered postgresql\n"
+                    "Nmap done: 1 IP address (1 host up) scanned",
+                    "exitcode": 0, "visible": True}
+    coach, _ = _coach()
+    coach.client = FilteredClient()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "nmap -sV -p- 10.1.10.32"},
+        proactive=True)
+    assert did
+    assert "filtered:10.1.10.32@kali" in coach.facts.denials
+    assert "NOTE: 10.1.10.32 is unreachable/filtered from kali" in res
+    assert "pivot" in res
+    # the note fires ONCE per denial — a re-scan may not re-spam it
+    did, res2 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "echo probing"},
+        proactive=True)
+    assert "unreachable/filtered" not in res2

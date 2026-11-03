@@ -163,6 +163,9 @@ class SessionCoach:
         # per-worker in-turn reasoning — attached once to that worker's next
         # posted message (pop-once), mirroring the parent's _turn_reasoning
         self._worker_reasoning: dict[str, str] = {}
+        self._denial_seen: set[str] = set()   # denials already surfaced in
+        # a guaranteed-read NOTE (facts render alone reaches only the
+        # parent's next turn — a worker's prompt snapshot is frozen)
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -1682,6 +1685,26 @@ class SessionCoach:
                             timed_out=bool(res.get("timed_out"))).reply
                             or "still running")
                         self.facts.observe_output(cmd, out, code)
+                        # a fresh reachability denial must also ride the
+                        # guaranteed-read tool result — a worker's facts
+                        # snapshot is frozen at spawn, so only this note
+                        # tells it mid-flight to stop rescanning a host
+                        # that is filtered from its vantage (s84: w1 ran
+                        # 4 nmap variants at an isolated app01)
+                        for dn in self.facts.denials:
+                            if dn in self._denial_seen or not dn.startswith(
+                                    ("filtered:", "unreachable:")):
+                                continue
+                            self._denial_seen.add(dn)
+                            tgt, _, vant = dn.split(":", 1)[1].partition("@")
+                            result += (
+                                f"\nNOTE: {tgt} is unreachable/filtered from"
+                                f" {vant} — recorded as dead end "
+                                f"blocked:{dn}. Rescanning from this vantage"
+                                " won't change it: reach the host via a "
+                                "pivot (ssh creds from an adjacent host) or"
+                                " move on.")
+                            break
                     elif code is None:
                         err_hint = res.get("err") or ""
                         if err_hint and err_hint not in out:

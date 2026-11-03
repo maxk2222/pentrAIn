@@ -178,6 +178,25 @@ def _p_denials(cmd: str, out: str, d: dict) -> None:
         ips = [i for i in _IP_RE.findall(cmd or "") if i != h]
         target = ips[-1] if ips else h
         d["denials"].append(f"unreachable:{target}@{h}")
+    if re.search(r"\bnmap\b", cmd or ""):
+        # a scan that proves ports exist but every one is filtered/closed =
+        # ACL/tier isolation from THIS vantage — a fact workers and
+        # post-restart turns must inherit or they rescan the dead host
+        # forever (s84: w1 ran 4 nmap variants at a filtered app01)
+        vm = _SSH_TARGET.search(cmd or "")
+        vantage = vm.group(2) if vm else "kali"
+        for blk in re.split(r"(?=Nmap scan report for)", out):
+            m = _NMAP_REPORT.search(blk)
+            if not m:
+                continue
+            ip = m.group(2)
+            opens = len(re.findall(
+                r"^\d{1,5}/(?:tcp|udp)\s+open\b", blk, re.MULTILINE))
+            filtered = len(re.findall(
+                r"^\d{1,5}/(?:tcp|udp)\s+(?:filtered|closed)\b",
+                blk, re.MULTILINE))
+            if opens == 0 and filtered >= 5:
+                d["denials"].append(f"filtered:{ip}@{vantage}")
 
 
 def _p_nmap(out: str, d: dict) -> None:
