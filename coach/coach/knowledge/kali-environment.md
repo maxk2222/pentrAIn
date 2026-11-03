@@ -42,7 +42,11 @@ the live probe — anything absent there is NOT installed, don't retry it):
 
 - The pane runs zsh: `!` inside DOUBLE quotes triggers history expansion
   ("event not found"). Single-quote payloads or drop the shebang and run
-  `sh script.sh`.
+  `sh script.sh`. This also hits creds: `sshpass -p 'Nw!24' ssh ...` is
+  fine, but wrapping it as `-o ProxyCommand="sshpass -p 'Nw!24' ..."`
+  puts the `!` back inside double quotes — inner single quotes do NOT
+  protect it. For `!`-passwords inside a double-quoted wrapper use an
+  askpass script or `${PASS}` env var instead.
 - `ssh host 'cmd'` has NO TTY — remote pagers (journalctl, less, man) and
   vim dump-and-exit instead of opening. Use `ssh -tt` when a sudo-NOPASSWD
   privesc needs a pager escape (`!/bin/sh`) or an editor (`:!/bin/sh`).
