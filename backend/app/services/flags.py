@@ -132,9 +132,11 @@ async def submit_flag(db: AsyncSession, engine, session: Session, value: str) ->
             "solved": sorted(solved_keys), "total": len(flags)}
 
 
-async def check_command_flag(db: AsyncSession, engine, session: Session, flag: Flag) -> bool:
+async def check_command_flag(db: AsyncSession, engine, session: Session, flag: Flag) -> bool | None:
     """kind=command: run spec on the target VM (optionally inside a container),
-    compare output to `expect` (substring) or exitcode."""
+    compare output to `expect` (substring) or exitcode. Returns None when the
+    checker itself could not run (guest agent down/unreachable) — a None must
+    surface as 'unreachable', not as a wrong-answer False."""
     spec = flag.command_spec or {}
     vmid = _flag_vmid(session, spec.get("vm", ""))
     cmd = spec.get("cmd")
@@ -144,12 +146,12 @@ async def check_command_flag(db: AsyncSession, engine, session: Session, flag: F
         cmd = f"docker exec {spec['container']} /bin/sh -c {_shq(cmd)}"
     try:
         res = await engine.pve.agent_exec_sh(vmid, cmd)
-        expect = spec.get("expect")
-        if expect is None:
-            return res.get("exitcode") == 0
-        return str(expect).strip() in (res.get("out") or "")
     except Exception:
-        return False
+        return None
+    expect = spec.get("expect")
+    if expect is None:
+        return res.get("exitcode") == 0
+    return str(expect).strip() in (res.get("out") or "")
 
 
 async def check_and_record_flag(db: AsyncSession, engine, session: Session, flag_key: str) -> dict:
@@ -162,6 +164,11 @@ async def check_and_record_flag(db: AsyncSession, engine, session: Session, flag
                 "all_solved": False, "solved": [], "total": 0,
                 "error": "not a command flag"}
     ok = await check_command_flag(db, engine, session, flag)
+    if ok is None:
+        return {"correct": False, "flag_key": flag_key, "points": 0,
+                "all_solved": False, "solved": [], "total": 0,
+                "error": "checker unreachable (target guest agent down) — your state is "
+                         "probably fine; retry check_flag in ~60s"}
     detail = None
     if not ok:
         detail = await _command_flag_detail(engine, session, flag)
