@@ -106,7 +106,7 @@ class ObserverService:
                     await self._tick(obs)
             except Exception as e:
                 # the observer must never take the coach down with it
-                await log.aexception("observer tick failed", error=str(e))
+                await log.aexception("observer tick failed", error=repr(e))
             await asyncio.sleep(float(obs.get("observer_tick_s", 60)))
 
     async def _tick(self, obs: dict) -> None:
@@ -249,7 +249,10 @@ class ObserverService:
                 base_url=sig[0], api_key=str(llmc.get("api_key") or ""),
                 model=str(sig[1] or ""), timeout_s=240,
                 reasoning=bool(llmc.get("reasoning", True)),
-                reasoning_effort=llmc.get("reasoning_effort"))
+                # advisory/lesson distillation is lightweight analysis —
+                # "high" effort on a local 27B blows past the 240s cap
+                # (observed: observer lesson llm timed out mid-session)
+                reasoning_effort="low")
             self._llm_sig = sig
         return self._llm
 
@@ -303,7 +306,7 @@ class ObserverService:
             text = str(resp.get("content") or "").strip()
         except Exception as e:
             await log.awarning("observer advisory llm failed",
-                               session=w.sid, error=str(e))
+                               session=w.sid, error=repr(e))
             return
         text = self._sanitize(text, advisory=True)
         if len(text) < 20:
@@ -355,7 +358,7 @@ class ObserverService:
             proposals = self._parse_proposals(resp)
         except Exception as e:
             await log.awarning("observer lesson llm failed",
-                               session=w.sid, error=str(e))
+                               session=w.sid, error=repr(e))
             return
         track = str(quest.get("track") or "")
         for p in proposals[: int(obs.get("observer_max_proposals", 2))]:

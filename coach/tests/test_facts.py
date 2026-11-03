@@ -428,3 +428,34 @@ def test_normalize_plan_edges():
     # long text is cut, not dropped
     long = normalize_plan([{"t": "x" * 200}])
     assert len(long[0]["t"]) == 110
+
+
+def test_routing_tunnel_drops_stale_kali_reachability_denials():
+    """sshuttle/vpn changes kali's L3 vantage — pre-tunnel filtered:/
+    unreachable: @kali facts go stale and must be dropped or they keep
+    bricking connects that now work (s84: sshuttle up, direct ssh to
+    'filtered' app01 succeeded — only a lucky restart had cleared it)."""
+    f = FactsDB()
+    f.denials += ["filtered:10.1.10.32@kali", "unreachable:10.9.9.9@kali",
+                  "missing:sshpass@web01", "filtered:10.1.10.32@web01",
+                  "denied:sudo@web01"]
+    f.observe_output("sshuttle -r deploy@web01 10.1.10.0/24", "", 0)
+    # kali-scoped reachability dead-ends are gone — the tunnel rerouted
+    assert "filtered:10.1.10.32@kali" not in f.denials
+    assert "unreachable:10.9.9.9@kali" not in f.denials
+    # host-scoped + non-reachability facts are vantage-correct — untouched
+    assert "missing:sshpass@web01" in f.denials
+    assert "filtered:10.1.10.32@web01" in f.denials
+    assert "denied:sudo@web01" in f.denials
+
+
+def test_socks_forward_and_failed_setup_keep_denials():
+    """ssh -D only helps proxy-aware tools (direct connects stay local),
+    and a FAILED tunnel attempt proves nothing — denials must survive."""
+    f = FactsDB()
+    f.denials.append("filtered:10.1.10.32@kali")
+    f.observe_output("ssh -D 9050 -fN deploy@web01", "", 0)
+    assert "filtered:10.1.10.32@kali" in f.denials          # no L3 change
+    f.observe_output("sshuttle -r deploy@web01 10.1.10.0/24",
+                     "client: Connected.", 1)
+    assert "filtered:10.1.10.32@kali" in f.denials          # failed = stale

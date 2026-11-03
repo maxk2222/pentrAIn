@@ -49,6 +49,11 @@ _MYSQL_U = re.compile(r"\bmysql\b[^\n]*?-u\s*['\"]?([^\s'\"]{1,64})"
 _URL_CRED = re.compile(r"\b(\w[\w.-]{0,47}):([^\s:/@]{2,80})@")
 _HYDRA_LP = re.compile(r"\s-l\s+['\"]?([^\s'\"]{1,64})\s+-p\s+['\"]?([^\s'\"]{1,80})")
 _USER_AT_HOST = re.compile(r"([\w.\-]+)@([\w.\-]+)")
+# routing-capable tunnel setup — these change kali's L3 vantage, so
+# reachability facts learned pre-tunnel go stale (ssh -D does NOT: a
+# SOCKS proxy only helps proxy-aware tools, direct connects stay local)
+_ROUTING_SETUP = re.compile(
+    r"\b(sshuttle|openvpn|wg-quick|tailscale)\b|\bssh\b[^|&;'\"]*\s-w\d")
 _MYSQL_H = re.compile(r"\bmysql\b[^\n]*?-h\s*['\"]?(\S+)")
 _SMB_SHARE = re.compile(r"//([\w.\-]+)")
 _URL_CRED_HOST = re.compile(r"\w[\w.-]*:[^\s:/@]+@([\w.\-]+)")
@@ -408,6 +413,19 @@ class FactsDB:
                     self._count_read(cmd, rt)
             parsed = parse_output(cmd, strip_ansi(out or ""))
             self.apply_delta(parsed)
+            # a routing-capable tunnel changes kali's vantage — drop stale
+            # reachability dead-ends or they keep bricking now-valid
+            # connects (s84: sshuttle up, but filtered:app01@kali from the
+            # pre-tunnel scan still denied the direct ssh that worked).
+            # False-clear is self-healing: a real dead end re-earns the
+            # fact on the next failed probe.
+            if code == 0 and _ROUTING_SETUP.search(cmd):
+                kept = [d for d in self.denials
+                        if not (d.startswith(("filtered:", "unreachable:"))
+                                and d.endswith("@kali"))]
+                if len(kept) != len(self.denials):
+                    self.denials = kept
+                    self.mutation_seq += 1
             # loot digest: a file read that yielded secrets/leads leaves a
             # one-line token digest — the model sees the contents are already
             # consumed instead of re-cat'ing the file after context loss
