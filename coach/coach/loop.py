@@ -1318,9 +1318,15 @@ class SessionCoach:
                     return dn
                 if dn.startswith("unreachable:"):
                     return dn
-                if re.search(
+                # filtered = every scanned port dead — scans AND connect
+                # attempts to the ip are dead ends (s84: the agent kept
+                # burning 15-20s timeouts on ssh to a fully-filtered ip).
+                # A bare user@ip token counts as a connect too (-J hops).
+                if (re.search(
                         r"\b(nmap|masscan|rustscan|unicornscan|nc|"
-                        r"netcat|fping)\b", scope):
+                        r"netcat|fping|ping|ssh|sshpass|curl|wget|"
+                        r"telnet|sshuttle|proxychains4?|socat)\b", scope)
+                        or re.search(rf"\S+@{re.escape(key)}\b", scope)):
                     return dn
                 continue
             m = _DENIAL_FORM.match(dn)

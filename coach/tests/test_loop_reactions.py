@@ -2344,6 +2344,43 @@ async def test_denials_scope_local_vs_remote():
     assert did, res
 
 
+async def test_filtered_denies_connect_attempts_not_just_scans():
+    """filtered:ip@vantage = EVERY port dead from that vantage — connect
+    verbs (ssh/curl/ping) to the ip are the same dead end as rescans
+    (s84 burned repeated 15-20s timeouts on ssh to a fully-filtered ip)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials.append("filtered:10.1.10.32@kali")
+    for verb in ("ssh deploy@10.1.10.32 'whoami'",
+                 "curl -s http://10.1.10.32:8080/",
+                 "ping -c1 10.1.10.32",
+                 "nc -zv 10.1.10.32 22"):
+        did, res = await coach._dispatch(
+            {"type": "exec_in_kali", "command": verb}, proactive=True)
+        assert not did and "filtered:10.1.10.32@kali" in res, verb
+    # a -J hop THROUGH web01 to the filtered ip is the legitimate pivot —
+    # filtered:@kali only proves the DIRECT path dead, so it stays free…
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh -J deploy@web01 deploy@10.1.10.32 'id'"},
+        proactive=True)
+    assert did, res
+    # …but filtered:@web01 covers exactly that hop: the ip sits in
+    # web01's remote tail as a bare user@ip token (no connect verb needed)
+    coach.facts.denials.append("filtered:10.1.10.32@web01")
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh -J deploy@web01 deploy@10.1.10.32 'id'"},
+        proactive=True)
+    assert not did and "filtered:10.1.10.32@web01" in res
+    # but a command merely MENTIONING the ip stays free
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "grep 10.1.10.32 /tmp/notes.txt"}, proactive=True)
+    assert did, res
+
+
 async def test_scan_saturation_denies_variant_rescans():
     """Three+ recon scans on a host with zero open ports = settled — the
     next flag-variant scan is denied even without a filtered: denial
