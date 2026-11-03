@@ -393,7 +393,12 @@ class FactsDB:
                     self.mutation_seq += 1
                     if code is not None:
                         f.last_exit = code
-                if rt := read_target(cmd):
+                if (rt := read_target(cmd)) and code == 0:
+                    # only successful reads settle a file — a failed wrapper
+                    # (ssh -J auth hang, sudo denial, missing interpreter)
+                    # returns prompt/error text, not content; counting it
+                    # locks the path out at 'already read 3x' (s72: db.txt
+                    # denied though never actually read)
                     self._count_read(cmd, rt)
             parsed = parse_output(cmd, strip_ansi(out or ""))
             self.apply_delta(parsed)

@@ -232,6 +232,25 @@ def test_reads_reset_after_mutation():
     assert f.files["/root/report.txt"].reads == 1
 
 
+def test_failed_read_does_not_settle_file():
+    """s72: ssh -J hang returned a prompt fragment for 'cat /root/db.txt' —
+    three identical FAILURE outputs counted as settled content and the
+    4th read was denied though the file was never seen. Only code==0
+    counts as a read."""
+    from coach.facts import FactsDB, file_key
+    f = FactsDB()
+    rkey = file_key("ssh -J a@b c@d 'cat /root/db.txt'", "/root/db.txt")
+    for _ in range(4):
+        f.observe_output("ssh -J a@b c@d 'cat /root/db.txt'",
+                         "(root@kali)-[/]# sshpass", None)
+    assert f.files.get(rkey) is None or f.files[rkey].reads == 0
+    f.observe_output("cat /root/db.txt", "flag{abc}", 0)
+    assert f.files["/root/db.txt"].reads == 1
+    # nonzero exit (sudo denied, ssh refused) also yields no content
+    f.observe_output("sudo cat /root/db.txt", "Sorry, user x", 1)
+    assert f.files["/root/db.txt"].reads == 1
+
+
 def test_topn_count_becomes_finding():
     """s54: '     5 203.0.113.44' from uniq -c is top-talker evidence — it
     must persist as a finding, not vanish with the context window."""
