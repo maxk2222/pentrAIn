@@ -207,21 +207,149 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
     return cfg
 
 
-async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
-    """Adaptive unlock: resource budget + tier progression."""
-    req = quest.requirements or {}
-    for key, req_key, unit in (
-        ("resources.max_ram_gb", "min_ram_gb", "G RAM"),
-        ("resources.max_vcpus", "min_vcpus", " vCPU"),
-        ("resources.max_disk_gb", "min_disk_gb", "G disk"),
-    ):
+# ---------------- resource gate ----------------
+#
+# Quest requirements used to compare against three STATIC admin budgets
+# (resources.max_*). On a ballooning host that under-sells badly: the range
+# footprint that actually matters is the ram_min_gb floor (balloon target),
+# not the headline ram_gb sum — and vcpus oversubscribe freely since range
+# VMs idle most of the time.
+#
+# resources.gate_mode:
+#   "live"   — probe node_status + storage + template list (default)
+#   "static" — legacy: requirements vs resources.max_* budgets
+#   "off"    — no resource gate (progression still applies)
+#
+# Live knobs: resources.ram_headroom (fraction of FREE ram the floor must
+# fit under, default 0.85), resources.vcpu_overcommit (vcpus vs host cores,
+# default 4).
+
+_HOST_CAP_TTL_S = 25.0
+_host_cap: dict | None = None
+_host_cap_at = 0.0
+_templates_at = 0.0
+_templates: set[str] | None = None
+
+
+def _range_footprint(quest: Quest) -> dict:
+    """Effective range footprint — ballooning-aware.
+
+    ram_floor_gb = Σ ram_min_gb (the value the VM may shrink to — the real
+    need); ram_nominal_gb = Σ ram_gb (headline); vcpus = Σ cpus + router(1).
+    """
+    topo = quest.topology or {}
+    kali = topo.get("kali") or {}
+    floor = (kali.get("ram_min_gb") or 3) + 1  # router ram_min
+    nominal = kali.get("ram_gb", 6) + 2
+    vcpus = kali.get("cpus", 4) + 1
+    for v in topo.get("vms") or []:
+        ram_gb = v.get("ram_gb", 4)
+        floor += v.get("ram_min_gb") or max(1, ram_gb // 2)
+        nominal += ram_gb
+        vcpus += v.get("cpus", 2)
+    return {"ram_floor_gb": floor, "ram_nominal_gb": nominal, "vcpus": vcpus}
+
+
+async def _host_capacity(engine) -> dict | None:
+    """node_status → {ram_free_gb, cores, disk_free_gb}, cached ~25s."""
+    global _host_cap, _host_cap_at
+    now = asyncio.get_event_loop().time()
+    if _host_cap is not None and now - _host_cap_at < _HOST_CAP_TTL_S:
+        return _host_cap
+    cap = None
+    try:
+        node = await engine.pve.node_status()
+        mem = node.get("memory") or {}
+        total = (mem.get("total") or 0) / 2**30
+        used = (mem.get("used") or 0) / 2**30
+        disk = 0.0
         try:
-            budget = int(await settings_svc.get_setting(db, key, 0) or 0)
-            need = int(req.get(req_key, 0) or 0)
-        except (TypeError, ValueError):  # a bad setting shouldn't brick unlock checks
-            continue
-        if need > budget:
-            return False, f"requires {need}{unit} (budget {budget})"
+            for p in await engine.pve.storage_pools():
+                if p.get("active") and "images" in (p.get("content") or ""):
+                    disk = max(disk, (p.get("avail") or 0) / 2**30)
+        except Exception:
+            pass
+        cap = {"ram_free_gb": max(0.0, total - used),
+               "cores": int((node.get("cpuinfo") or {}).get("cpus") or 0),
+               "disk_free_gb": disk}
+    except Exception:
+        pass
+    _host_cap, _host_cap_at = cap, now
+    return cap
+
+
+async def _host_templates(engine) -> set[str] | None:
+    """Template names on the node, cached ~25s. None on PVE failure."""
+    global _templates, _templates_at
+    now = asyncio.get_event_loop().time()
+    if _templates is not None and now - _templates_at < _HOST_CAP_TTL_S:
+        return _templates
+    names = None
+    with contextlib.suppress(Exception):
+        names = {v["name"] for v in await engine.pve.cluster_vms()
+                 if v.get("template") and v.get("name")}
+    _templates, _templates_at = names, now
+    return names
+
+
+def _quest_templates(quest: Quest) -> set[str]:
+    topo = quest.topology or {}
+    names = {(topo.get("kali") or {}).get("template", "kali-x64-desktop-template"),
+             (topo.get("router") or {}).get("template", "debian-12-x64-server-template")}
+    names.update(v.get("template", "") for v in topo.get("vms") or [])
+    names.discard("")
+    return names
+
+
+async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
+    """Adaptive unlock: live-capacity resource gate + tier progression."""
+    mode = str(await settings_svc.get_setting(db, "resources.gate_mode", "live") or "live")
+    if mode == "static":
+        req = quest.requirements or {}
+        for key, req_key, unit in (
+            ("resources.max_ram_gb", "min_ram_gb", "G RAM"),
+            ("resources.max_vcpus", "min_vcpus", " vCPU"),
+            ("resources.max_disk_gb", "min_disk_gb", "G disk"),
+        ):
+            try:
+                budget = int(await settings_svc.get_setting(db, key, 0) or 0)
+                need = int(req.get(req_key, 0) or 0)
+            except (TypeError, ValueError):  # a bad setting shouldn't brick unlock checks
+                continue
+            if need > budget:
+                return False, f"requires {need}{unit} (budget {budget})"
+    elif mode == "live":
+        try:
+            engine = await get_engine(db)
+            if engine.mode != "mock" and getattr(engine, "pve", None):
+                tpls = await _host_templates(engine)
+                if tpls is not None:
+                    missing = sorted(_quest_templates(quest) - tpls)
+                    if missing:
+                        return False, (f"template {missing[0]} not on host — "
+                                       f"build it (packer) or pick another quest")
+                cap = await _host_capacity(engine)
+                if cap is not None:
+                    foot = _range_footprint(quest)
+                    headroom = float(await settings_svc.get_setting(
+                        db, "resources.ram_headroom", 0.85) or 0.85)
+                    overcommit = float(await settings_svc.get_setting(
+                        db, "resources.vcpu_overcommit", 4.0) or 4.0)
+                    req = quest.requirements or {}
+                    if foot["ram_floor_gb"] > cap["ram_free_gb"] * headroom:
+                        return False, (f"needs {foot['ram_floor_gb']:.0f}G free RAM "
+                                       f"(host free {cap['ram_free_gb']:.0f}G)")
+                    if cap["cores"] and foot["vcpus"] > cap["cores"] * overcommit:
+                        return False, (f"needs {foot['vcpus']} vCPU "
+                                       f"(host {cap['cores']} cores x{overcommit:g})")
+                    disk_need = int(req.get("min_disk_gb", 0) or 0)
+                    if cap["disk_free_gb"] and disk_need > cap["disk_free_gb"]:
+                        return False, (f"needs {disk_need}G disk "
+                                       f"(host free {cap['disk_free_gb']:.0f}G)")
+        except Exception:
+            # engine unavailable → don't brick quests on an infra hiccup
+            pass
+    # mode == "off" → no resource gate
     if quest.tier > 1 or quest.exam:
         solved_ids = await solved_quest_ids(db)
     if quest.tier > 1:

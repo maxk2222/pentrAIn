@@ -65,6 +65,8 @@ async def _solve_prereqs(db, quest: Quest) -> None:
 
 async def test_unlock_gates_on_resource_budget(db_with_packs):
     db = db_with_packs
+    # static mode = legacy budget-vs-requirements gating
+    await settings_svc.set_setting(db, "resources.gate_mode", "static")
     # clear the tier gate so only the resource gate can fire
     await _mark_solved(db, "linux-t1-first-foothold", "linux-t2-privesc-chain")
 
@@ -75,6 +77,80 @@ async def test_unlock_gates_on_resource_budget(db_with_packs):
     await settings_svc.set_setting(db, "resources.max_ram_gb", 8)
     ok, reason = await sessions_svc.check_unlock(db, quest)
     assert not ok and "RAM" in reason
+
+
+class _FakePve:
+    pass
+
+
+class _FakeEngine:
+    mode = "pve"
+    pve = _FakePve()
+
+
+async def _fake_engine(_db):
+    return _FakeEngine()
+
+
+async def test_unlock_live_capacity_gate(db_with_packs, monkeypatch):
+    """live mode: ballooning-floor vs free ram, cores × overcommit."""
+    db = db_with_packs
+    await _mark_solved(db, "linux-t1-first-foothold", "linux-t2-privesc-chain")
+    monkeypatch.setattr(sessions_svc, "get_engine", _fake_engine)
+    monkeypatch.setattr(sessions_svc, "_host_templates", _tpls({"debian-12-x64-server-template",
+                                                              "kali-x64-desktop-template"}))
+    # linux-t3-pivot footprint: kali 3 + router 1 + 2×(ram_gb//2)
+    quest = await db.get(Quest, "linux-t3-pivot")
+    foot = sessions_svc._range_footprint(quest)
+    assert foot["ram_floor_gb"] < foot["ram_nominal_gb"]
+
+    # plenty of room → unlocked
+    monkeypatch.setattr(sessions_svc, "_host_capacity", _cap_fn(_cap(64, 64, 500)))
+    ok, _ = await sessions_svc.check_unlock(db, quest)
+    assert ok
+
+    # free ram below the ballooning floor → locked
+    monkeypatch.setattr(sessions_svc, "_host_capacity", _cap_fn(_cap(2, 64, 500)))
+    ok, reason = await sessions_svc.check_unlock(db, quest)
+    assert not ok and "RAM" in reason
+
+    # floor fits but vcpus exceed cores × overcommit → locked on cpu
+    monkeypatch.setattr(sessions_svc, "_host_capacity", _cap_fn(_cap(64, 1, 500)))
+    ok, reason = await sessions_svc.check_unlock(db, quest)
+    assert not ok and "vCPU" in reason
+
+
+async def test_unlock_live_template_missing(db_with_packs, monkeypatch):
+    """needs_windows-style: a referenced template missing on the node locks."""
+    db = db_with_packs
+    await _mark_solved(db, "linux-t1-first-foothold", "linux-t2-privesc-chain")
+    monkeypatch.setattr(sessions_svc, "get_engine", _fake_engine)
+    monkeypatch.setattr(sessions_svc, "_host_capacity", _cap_fn(_cap(64, 64, 500)))
+
+    quest = await db.get(Quest, "linux-t3-pivot")
+    quest.topology["vms"][0]["template"] = "win2022-server-x64-template"
+    monkeypatch.setattr(sessions_svc, "_host_templates",
+                        _tpls({"debian-12-x64-server-template",
+                               "kali-x64-desktop-template"}))
+    ok, reason = await sessions_svc.check_unlock(db, quest)
+    assert not ok and "win2022" in reason
+
+
+def _cap(ram_free_gb: float, cores: int, disk_free_gb: float) -> dict:
+    return {"ram_free_gb": ram_free_gb, "cores": cores, "disk_free_gb": disk_free_gb}
+
+
+def _cap_fn(cap: dict):
+    async def _f(_e):
+        return cap
+    return _f
+
+
+def _tpls(names: set[str]):
+    """Async callable standing in for the cached template list."""
+    async def _f(_e):
+        return names
+    return _f
 
 
 async def test_unlock_gates_on_tier_progression(db_with_packs):

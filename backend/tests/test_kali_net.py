@@ -372,7 +372,7 @@ async def test_testing_mode_installs_router_allow_via_qga(monkeypatch):
 
     assert ("POST", "/testing/allow") in calls
     assert len(pve.sh_calls) == 2
-    for cidr, cmd in zip(["192.0.2.10/32", "10.9.9.9/32"], pve.sh_calls):
+    for cidr, cmd in zip(["192.0.2.10/32", "10.9.9.9/32"], pve.sh_calls, strict=False):
         assert f"iptables -C LUDUS_USER_RULES -d {cidr} -j ACCEPT" in cmd
         assert f"iptables -I LUDUS_USER_RULES 1 -d {cidr} -j ACCEPT" in cmd
 

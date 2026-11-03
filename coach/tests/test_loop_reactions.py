@@ -2041,7 +2041,7 @@ async def test_seeded_plan_auto_marks_on_flag_solve():
         return {"correct": True, "flag_key": "web-flag", "all_solved": False}
     c.submit_flag = sub
     coach.facts.flags["pentrAIn{x}"] = facts_mod.FlagFact(seen=1)
-    _, result = await coach._dispatch(
+    _, _result = await coach._dispatch(
         {"type": "submit_flag", "value": "pentrAIn{x}"}, proactive=True)
     assert any("web-flag" in i["t"] and i["s"] == "done"
                for i in coach.state.plan)
