@@ -370,6 +370,17 @@ class SessionCoach:
         # a restart doesn't make the plan stale — the staleness nudge only
         # fires when the MODEL hasn't refreshed in-session for a while
         self.state.plan_updated = time.time()
+        # reconcile the restored plan against flags already solved — solves
+        # under a dead coach never got their auto-marks (s84: card showed
+        # 'Solve flag-1' todo + recon 'doing' although flag-1 was submitted)
+        if self.state.plan:
+            # only retire flag-named steps: a solve from a previous attempt
+            # says nothing about THIS run's recon (range may have reset)
+            marked = sum(
+                self._plan_mark_solved(str(f.get("key") or ""))
+                for f in self.ctx.get("flags", []) if f.get("solved"))
+            if marked:
+                self._plan_push_card("reconciled")
         self.state.notes = [str(n)[:300]
                             for n in self.ctx.get("coach_notes") or []][-8:]
         # orphaned workers: spawned pre-restart, killed with the process —

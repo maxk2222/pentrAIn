@@ -2146,6 +2146,28 @@ async def test_seeded_plan_auto_marks_on_flag_solve():
     await coach.stop()
 
 
+async def test_restart_reconciles_plan_against_solved_flags():
+    """Solves under a dead coach never got auto-marks — on start() the
+    restored plan must retire matching steps (s84: card showed flag-1
+    'todo' after a coach restart). Recon stays open: a previous-attempt
+    solve says nothing about this run's enumeration."""
+    coach, c = _l4_coach()
+    c.ctx["plan"] = [{"t": "Recon: nmap all targets", "s": "doing"},
+                     {"t": "Solve flag-1", "s": "todo"},
+                     {"t": "Solve flag-2", "s": "todo"}]
+    c.ctx["flags"] = [{"key": "flag-1", "solved": True},
+                      {"key": "flag-2", "solved": False}]
+    await coach.start()
+    plan = coach.state.plan
+    assert plan[0]["s"] == "doing"   # recon NOT auto-retired on restart
+    assert plan[1]["s"] == "done"
+    assert plan[2]["s"] == "todo"
+    await asyncio.sleep(0)
+    assert any(m["meta"] and m["meta"].get("auto") == "reconciled"
+               for m in c.chats)
+    await coach.stop()
+
+
 async def test_missing_plan_note_fires_early():
     """exec gate dropped to >=3 — the no-roadmap note must not wait for 15
     execs while the run drifts planless."""
