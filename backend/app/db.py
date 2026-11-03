@@ -15,7 +15,24 @@ _schema_lock = asyncio.Lock()
 def init_engine(database_url: str | None = None) -> None:
     global _engine, _sessionmaker, _schema_ready
     url = database_url or get_config().database_url
-    _engine = create_async_engine(url, echo=False, future=True)
+    connect_args: dict = {}
+    if url.startswith("sqlite"):
+        # aiosqlite default timeout is low — a slow writer (telemetry ingest,
+        # pack sync) then hard-fails concurrent readers with "database is
+        # locked". WAL + a real busy timeout keep reads/writes concurrent.
+        connect_args["timeout"] = 30
+    _engine = create_async_engine(url, echo=False, future=True,
+                                  connect_args=connect_args)
+    if url.startswith("sqlite"):
+        from sqlalchemy import event
+
+        @event.listens_for(_engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_conn, _rec):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=30000")
+            cur.close()
+
     _sessionmaker = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
     _schema_ready = False
 
