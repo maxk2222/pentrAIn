@@ -359,3 +359,15 @@ Per-quest findings appended below the ladder table.
 - Note: abort on solved keeps attempts but frees RAM for next quest —
   the ladder teardown path is abort(), not solve-auto-destroy.
 2026-11-04 20:45
+
+## SOLVED: linux-t1-suid-hunt (s3, ~15min)
+- Chain: ssh → find -perm -4000 → GTFOBins → root. All 4 checkpoints.
+- Coach detached cleanly on solve; observer lessons stored.
+
+## Deploy cadence (ladder ops)
+- abort(solved) → wait aborted → create(4,subagents) → ~10-16min deploy
+  → ready → activate. Deploy-task survives backend restarts if session
+  already 'ready'; mid-'deploying' restart kills it (needs reset).
+- 88 quests synced post-redeploy; exploits/audit packs included.
+- NOTE: activate only when state=ready — "session not ready" else.
+2026-11-04 22:15
