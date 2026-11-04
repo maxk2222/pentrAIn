@@ -382,3 +382,10 @@ Per-quest findings appended below the ladder table.
 - ftp anon → web backup → mysql root/'mysql' secrets → dbadm ssh 'Summer2024!' → flag.
 - Deploy ~25min (kali ansible pkg install slow tail). Quest chain itself clean.
 2026-11-04 22:52
+
+## SOLVED: net-t1-open-shares (s6, ~20min, 3 flags + 3 cps)
+- smb anon public share → finance share via svc-backup/Backup2024! (interactive
+  smbclient channel used correctly) → ssh svc-backup → user.txt.
+- NOTE: create call must carry subagents_enabled:true — earlier winning create
+  had it false; fixed via POST /sessions/{id}/subagents live toggle.
+2026-11-04 23:22
