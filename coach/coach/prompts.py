@@ -260,6 +260,11 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         # hosts/creds/files/flags from scrollback (stops re-verify loops)
         *([facts_txt] if (facts_txt := (facts.render(1100) if facts else ""))
           else []),
+        # agent-declared coverage + shared notes — what was TESTED (with
+        # outcome) and cross-agent curated context; complements FACTS
+        # (extracted evidence) — check before spawning or re-testing
+        *([cov_txt] if (cov_txt := st.coverage.render(340)) else []),
+        *([pad_txt] if (pad_txt := st.pad.render(300)) else []),
         # deterministic next-step suggestion (mini-PTG) — one concrete
         # action from open work, so long-horizon runs don't lose the thread
         *([obj_txt] if (obj_txt := (objective_render(ctx, facts, st)
@@ -332,6 +337,16 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
                 "A spawn task must carry the ACCESS PATH — host, "
                 "credentials, pivot (`sshpass -p '…' ssh user@host '…'`) — "
                 "the worker sees only what you write into `task`.")
+            parts.append(
+                "ORCHESTRATOR: you lead, workers execute. Delegate "
+                "independent work with role + done_when (recon→web→creds→"
+                "privesc→pivot→verify as phases demand); keep your own "
+                "execs for synthesis, pivots and SHORT verifications — do "
+                "not re-run a scan a worker is doing or already covered "
+                "(check COVERAGE/SHARED_NOTES first). After a worker "
+                "reports, update_coverage its rows to their real outcome "
+                "and fold its findings into your plan before spawning the "
+                "next wave.")
             tgts = [str(t.get("name") or t.get("ip") or "?")
                     for t in (s.get("quest", {}).get("targets") or [])]
             if len(tgts) > 1:
@@ -373,8 +388,46 @@ def chat_prompt(question: str) -> str:
         "action first — talking about it doesn't count.")
 
 
+# specialist operating contracts — the role narrows WHAT the worker does
+# and what its report must carry; tools stay the same (except verify).
+_ROLE_FRAGMENTS = {
+    "recon": (
+        "ROLE: recon — map attack surface only: host discovery, port "
+        "scans, service/version detection, light banner checks. NO "
+        "credential tests, NO exploit attempts. Hand back hosts/ports + "
+        "coverage rows so the parent can assign deep work."),
+    "web": (
+        "ROLE: web — enumerate and probe HTTP surfaces: vhosts, dirs, "
+        "params, obvious injection points. Probes READ — never write or "
+        "destroy state on the target. Report endpoints + tested vectors."),
+    "creds": (
+        "ROLE: creds — test credentials that EXIST in FACTS/notes against "
+        "their matching services (ssh/smb/ftp/db/rdp). Never brute-force "
+        "invented passwords; report which pair worked WHERE."),
+    "svc": (
+        "ROLE: svc — deep-enumerate the ONE service/host assigned to you: "
+        "versions, configs, shares, anonymous access, known-CVE surface. "
+        "Stay on the named target — don't wander to other hosts."),
+    "privesc": (
+        "ROLE: privesc — you are given a PROVEN foothold; escalate to "
+        "root/SYSTEM on that host only: sudo -l, suid, cron, capabilities, "
+        "kernel vs local exploits. Report the cap you obtain."),
+    "pivot": (
+        "ROLE: pivot — establish reachability to an internal segment "
+        "through a compromised host (ssh -J, sshuttle, port-forward). "
+        "Prove the path with ONE probe; hand the working recipe back "
+        "verbatim in your report."),
+    "verify": (
+        "ROLE: verify — reproduce reported evidence READ-ONLY: re-run the "
+        "proof commands, then report each item confirmed|rejected. No "
+        "writes, no new attack paths, no flag submissions — your job is "
+        "proof, not discovery."),
+}
+
+
 def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
-                         plan_txt: str = "", *, turn_cap: int = 80,
+                         plan_txt: str = "", shared_txt: str = "",
+                         *, turn_cap: int = 80,
                          time_cap_s: int = 3600) -> str:
     """System prompt for a spawned worker agent — scoped to its task,
     exec-only toolset, last message is the report to the parent."""
@@ -391,6 +444,12 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
         (f"TARGETS: {targets} — use these exact IPs/hostnames; resolve "
          "names via getent; never invent addresses."),
     ]
+    if frag := _ROLE_FRAGMENTS.get(getattr(w, "role", "general") or ""):
+        lines.append(frag)
+    if getattr(w, "done_when", ""):
+        lines.append(
+            f"DONE WHEN: {w.done_when} — report as soon as this is met; "
+            "extra recon past it wastes your budget.")
     if scope:
         lines.append(
             f"SCOPE: {scope} — authorized LAN range; only touch in-scope "
@@ -410,6 +469,14 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
             plan_txt,
             ("^ the operator's plan at spawn time (read-only orientation — "
              "your task is one piece of it)."),
+        ]
+    if shared_txt:
+        lines += [
+            "",
+            shared_txt,
+            ("^ shared coverage ledger + notes at spawn time — surfaces "
+             "already covered are settled, don't re-test them; extend them "
+             "in your report's coverage/notes keys instead."),
         ]
     lines += [
         "RULES:",
@@ -442,12 +509,22 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
          "merges straight into shared facts:\n"
          "{\"summary\": \"one line for the trainee\", "
          "\"findings\": [\"key evidence, paths, versions\"], "
+         "\"vulns\": [{\"title\": \"name\", \"sev\": \"high|med|low\", "
+         "\"host\": \"ip\", \"status\": \"confirmed|hypothesis\", "
+         "\"evidence\": \"cmd+output proof\"}], "
+         "\"coverage\": [{\"surface\": \"ip:port\", \"outcome\": "
+         "\"tested_clean|open_gap|confirmed|needs_follow_up\", "
+         "\"evidence\": \"one line\"}], "
+         "\"notes\": [{\"key\": \"label\", \"text\": \"durable context "
+         "for other agents\"}], "
          "\"creds\": [{\"user\": \"u\", \"secret\": \"p\", \"host\": \"ip\"}], "
          "\"hosts\": [{\"ip\": \"10.x\", \"name\": \"h\", "
          "\"ports\": {\"22\": \"ssh\"}}], "
          "\"next\": \"recommended next step\"}\n"
          "Omit empty sections. If you can't produce JSON, plain prose is "
-         "accepted — but structured reports lose nothing."),
+         "accepted — but structured reports lose nothing. Coverage rows "
+         "are your verdict on what you TESTED (not what output showed) — "
+         "record every surface you touched, including the clean ones."),
     ]
     if kb := _knowledge():
         lines += ["", "# Kali environment field notes", kb]

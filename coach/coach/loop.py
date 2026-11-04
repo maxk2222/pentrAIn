@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import hashlib
 import ipaddress
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -80,7 +81,8 @@ from .prompts import (
     system_prompt,
 )
 from .state import CheckpointMatcher, SessionState, normalize_plan
-from .tools import WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
+from .tools import (WORKER_ROLES, WORKER_TOOL_NAMES, tools_for_level,
+                    trim_history, wire_history, worker_tools)
 from .websearch import WebSearch
 
 log = structlog.get_logger(__name__)
@@ -123,6 +125,10 @@ class _Worker:
     # never the parent's state.plan; audit-only persistence (workers die
     # on restart)
     plan: list[dict] = field(default_factory=list)
+    # specialist contract — narrows the worker's operating scope (recon/
+    # web/creds/svc/privesc/pivot/verify) and what its report must carry
+    role: str = "general"
+    done_when: str = ""         # acceptance criterion from spawn_agent
     wrap_nudged: bool = False   # budget-low wrap-up already injected
     last_out: str = ""          # newest tool result — on kill, its tail
     # becomes the report so partial findings merge instead of dying
@@ -482,6 +488,23 @@ class SessionCoach:
         # observer field notes — memory only: reachable via lookup_guide and
         # tag-matched push-hints, deliberately NOT rendered into the prompt
         self.facts.set_field_notes(self.ctx.get("field_notes"))
+        # coverage ledger + shared notes — agent-owned bookkeeping logged
+        # via coach_actions (like update_plan); replay the writer log so a
+        # restart keeps 'what was covered'. Worker-contributed rows ride
+        # the worker_reports merge above — no separate log for them.
+        for row in self.ctx.get("ledger_log") or []:
+            if not isinstance(row, dict):
+                continue
+            args = row.get("args")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (TypeError, ValueError):
+                    args = {}
+            if isinstance(args, dict):
+                tool = str(row.get("tool") or "")
+                self.state.coverage.apply(tool, args)
+                self.state.pad.apply(tool, args)
         # orphaned workers: spawned pre-restart, killed with the process —
         # their command outputs reseeded via coach_outputs but the TASK died.
         # A note is all the parent needs to not re-do (or misplace) their work
@@ -2198,6 +2221,39 @@ class SessionCoach:
                                     "instead of duplicating its scans; "
                                     "spend this window on another "
                                     "angle.")
+                        # ledger-driven orchestrator hint: recon on a
+                        # surface the ledger already tracks as untested/
+                        # testing while a worker slot is free — delegate
+                        # instead of scanning serially in the main window
+                        # (advisory once per ip, never a deny)
+                        if (window is None
+                                and self.state.subagents_enabled
+                                and facts_mod.RECON_RE.search(cmd)):
+                            max_w = int(self.cfg.get("coach", {}).get(
+                                "max_workers", 4))
+                            free = max_w - sum(
+                                1 for w in self._workers.values()
+                                if w.status == "running")
+                            if free > 0:
+                                for ip in self._IP_RE.findall(cmd):
+                                    row = next(
+                                        (r for k, r in
+                                         self.state.coverage.rows.items()
+                                         if k == ip
+                                         or k.startswith(f"{ip}:")), None)
+                                    key = f"orch:{ip}"
+                                    if (row and row["outcome"] in
+                                            ("untested", "testing")
+                                            and key not in self._dup_noted):
+                                        self._dup_noted.add(key)
+                                        result += (
+                                            f"\nNOTE: {ip} is a coverage "
+                                            f"row ({row['outcome']}) and a "
+                                            "worker slot is free — "
+                                            "spawn_agent it with a role "
+                                            "instead of scanning it "
+                                            "serially here.")
+                                        break
                     elif code is None:
                         err_hint = res.get("err") or ""
                         if err_hint and err_hint not in out:
@@ -2577,6 +2633,58 @@ class SessionCoach:
                                         meta=meta)
             self._record_reply(rep)
             spoke = True
+        elif t in ("record_coverage", "update_coverage", "create_note"):
+            # engagement bookkeeping — agent-declared coverage outcomes and
+            # shared notes. Writer actions log to coach_actions and replay
+            # on restart (like update_plan); workers contribute via their
+            # report merge, they never call these mid-run.
+            agent = window or "main"
+            if t == "create_note":
+                r = self.state.pad.create(
+                    a.get("key"), a.get("text") or a.get("content") or "",
+                    owner=agent)
+            elif t == "update_coverage":
+                r = self.state.coverage.update(
+                    a.get("surface"), a.get("outcome") or "testing",
+                    a.get("evidence") or "", owner=agent)
+            else:
+                r = self.state.coverage.record(
+                    a.get("surface"), a.get("area") or "",
+                    a.get("outcome") or "testing",
+                    a.get("evidence") or "", owner=agent)
+            if r.get("error"):
+                result = f"error: {r['error']}"
+            elif t == "create_note":
+                result = f"note {r['ok']}: {r['key']}"
+            else:
+                result = (f"coverage {r['ok']}: {r['surface']} → "
+                          f"{r['outcome']}")
+            asyncio.create_task(self.client.log_action(
+                self.sid, t, {**{k: v for k, v in a.items()
+                                 if not k.startswith("_")},
+                              "agent": agent}, r))
+        elif t == "list_coverage":
+            want = (a.get("outcome") or "").strip()
+            rows = [r for r in self.state.coverage.rows.values()
+                    if not want or r["outcome"] == want]
+            if not rows:
+                result = (f"no coverage rows"
+                          + (f" with outcome={want}" if want else " yet"))
+            else:
+                lines = []
+                for r in rows:
+                    line = f"{r['surface']} → {r['outcome']}"
+                    if r["area"]:
+                        line += f" [{r['area']}]"
+                    if r["owner"] != "main":
+                        line += f" @{r['owner']}"
+                    if r["evidence"]:
+                        line += f" — {r['evidence'][:70]}"
+                    lines.append(line)
+                result = "\n".join(lines)[:1200]
+        elif t == "list_notes":
+            result = (self.state.pad.render(1200) or
+                      "shared notes pad is empty")
         elif t == "lookup_guide":
             # pull a technique recipe — internal knowledge consult, costs no
             # exec budget, nothing shown to the trainee (the recipe lands in
@@ -2698,14 +2806,20 @@ class SessionCoach:
         ids = [f"w{i}" for i in range(1, max_w + 1)]
         wid = next((i for i in ids if i not in self._workers),
                    next(i for i in ids if i not in running_ids))
-        w = _Worker(id=wid, task=task[:500], started=time.monotonic())
+        role = str(a.get("role") or "general").strip().lower()
+        if role not in WORKER_ROLES:
+            role = "general"
+        done_when = str(a.get("done_when") or "").strip()[:140]
+        w = _Worker(id=wid, task=task[:500], started=time.monotonic(),
+                    role=role, done_when=done_when)
         self._workers[wid] = w
         self._push_agents()
         w.task_obj = asyncio.create_task(self._worker_loop(w))
         # audit: the roster lifecycle is coach-internal — without a row the
         # backend (and any post-restart resync) never knew workers existed
         asyncio.create_task(self.client.log_action(
-            self.sid, "spawn_agent", {"worker_id": wid, "task": task[:200]},
+            self.sid, "spawn_agent",
+            {"worker_id": wid, "task": task[:200], "role": role},
             {"spawned": wid}))
         return (f"spawned {wid} — \"{task[:120]}\". It works autonomously on "
                 f"its own pane ({wid}); continue your own work and read its "
@@ -2816,6 +2930,29 @@ class SessionCoach:
             n = self.facts.apply_worker_report(w.id, parsed)
             bits = [f"{n['creds']} creds", f"{n['ports']} ports",
                     f"{n['findings']} findings"]
+            if n.get("vulns"):
+                bits.append(f"{n['vulns']} vulns")
+            # worker-declared coverage + notes merge into the shared pads —
+            # the worker's verdict on what it TESTED, not just what output
+            # said. Same rows the parent's tools write (dedup by surface).
+            n_cov = n_notes = 0
+            for row in (parsed.get("coverage") or [])[:12]:
+                if isinstance(row, dict) and row.get("surface"):
+                    r = self.state.coverage.record(
+                        row.get("surface"), row.get("area") or "",
+                        row.get("outcome") or "testing",
+                        row.get("evidence") or row.get("why") or "",
+                        owner=w.id)
+                    n_cov += 1 if not r.get("error") else 0
+            for row in (parsed.get("notes") or [])[:8]:
+                if isinstance(row, dict) and row.get("key"):
+                    r = self.state.pad.create(
+                        row.get("key"), row.get("text") or "", owner=w.id)
+                    n_notes += 1 if not r.get("error") else 0
+            if n_cov:
+                bits.append(f"{n_cov} coverage")
+            if n_notes:
+                bits.append(f"{n_notes} notes")
             return ("[merged into FACTS: " + ", ".join(bits) + "]")
         self.facts.apply_delta(
             percept.parse_output("", w.report), source=w.id)
@@ -2855,11 +2992,15 @@ class SessionCoach:
         cc = self.cfg.get("coach", {})
         turn_cap = int(cc.get("worker_turn_cap", 80))
         time_cap = int(cc.get("worker_time_cap_s", 3600))
+        shared = "\n".join(t for t in
+                           (self.state.coverage.render(300),
+                            self.state.pad.render(300)) if t)
         msgs = [{"role": "system",
                  "content": render_worker_prompt(
                      self.ctx, w, self.facts.render(500, compact=True),
                      plan_render(self.state.plan, cap=350,
                                  title="OPERATOR_PLAN"),
+                     shared_txt=shared,
                      turn_cap=turn_cap, time_cap_s=time_cap)},
                 {"role": "user", "content": w.task}]
         t0 = time.monotonic()
@@ -2886,23 +3027,25 @@ class SessionCoach:
                                     "everything found so far.")})
                 try:
                     resp = await self.llm.chat(
-                        msgs, tools=worker_tools(),
+                        msgs, tools=worker_tools(w.role),
                         reasoning_effort=self.cfg.get("coach", {}).get(
                             "effort_worker") or "medium")
                 except Exception as e:
                     # transient endpoint hiccup (ReadTimeout str() is empty —
-                    # log the type) — one retry, then the worker legitimately
-                    # fails into the outer handler with full diagnostics
+                    # log the type). Backoff retries before the worker
+                    # legitimately fails into the outer handler — s1-eval:
+                    # a single ReadTimeout killed w2 after ~3 turns and the
+                    # crash-report lost its in-flight findings context
                     llm_fails += 1
                     await log.awarning("worker llm call failed",
                                        session=self.sid, worker=w.id,
                                        attempt=llm_fails,
                                        error_type=type(e).__name__,
                                        error=str(e) or repr(e))
-                    if llm_fails >= 2:
+                    if llm_fails >= 3:
                         raise
-                    await asyncio.sleep(0.05)   # yield; the failed call
-                    continue                    # usually already burned time
+                    await asyncio.sleep(0.5 * llm_fails)   # 0.5s, 1.0s
+                    continue                               # usually already burned time
                 llm_fails = 0
                 w.turns += 1
                 # stash this turn's reasoning — the next message the worker

@@ -176,6 +176,44 @@ async def test_wait_task_fails_on_bad_exitstatus():
         await _pve(handler).wait_task("UPID:pve:0001:task")
 
 
+async def test_agent_file_write_falls_back_to_b64_on_wide_char():
+    """Non-ASCII payloads kill PVE's perl layer ('Wide character in
+    subroutine entry') — transport ships an ASCII base64 blob to a
+    .ptnb64 file and decodes it in-guest (s1-eval: a unicode report
+    body blocked the deliverable write)."""
+    import urllib.parse
+    writes: list[tuple[str, str]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/agent/file-write"):
+            form = urllib.parse.parse_qs(req.content.decode())
+            writes.append((form["file"][0], form["content"][0]))
+            if not form["content"][0].isascii():
+                return httpx.Response(500, json={"data": None, "message":
+                    "Wide character in subroutine entry"})
+            return httpx.Response(200, json={"data": None})
+        if req.url.path.endswith("/agent/exec"):
+            return httpx.Response(200, json={"data": {"pid": 9}})
+        if req.url.path.endswith("/agent/exec-status"):
+            return httpx.Response(200, json={"data": {
+                "exited": True, "exitcode": 0,
+                "out-data": "", "err-data": ""}})
+        return httpx.Response(404)
+
+    await _pve(handler).agent_file_write(100, "/tmp/x.sh", "echo — dash")
+    assert [w[0] for w in writes] == ["/tmp/x.sh", "/tmp/x.sh.ptnb64"]
+    assert writes[1][1].isascii()  # fallback payload is pure base64
+
+
+async def test_agent_file_write_ascii_error_reraises():
+    """A 500 on ASCII content can't be the wide-char bug — the original
+    error must propagate, not be masked by the fallback."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"data": None, "message": "vm down"})
+    with pytest.raises(PveError):
+        await _pve(handler).agent_file_write(100, "/tmp/x.sh", "echo hi")
+
+
 def test_vnc_websocket_url_quotes_ticket():
     c = PveClient(PveCreds(base_url="https://pve:8006", token_id="u@p!t", token_secret="s"))
     url = c.vnc_websocket_url(100, "5900", "PVE:admin@pam!vnc=4F+tck==")

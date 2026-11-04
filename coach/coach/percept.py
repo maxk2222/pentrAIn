@@ -446,6 +446,7 @@ def parse_worker_report(text: str) -> dict | None:
             continue
         if isinstance(d, dict) and any(
                 k in d for k in ("findings", "creds", "hosts",
-                                 "summary", "next")):
+                                 "summary", "next", "coverage", "notes",
+                                 "vulns")):
             return d
     return None

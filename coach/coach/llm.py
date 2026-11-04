@@ -26,6 +26,8 @@ ALLOWED_ACTIONS = {
     "spawn_agent", "collect_agent", "agent_status", "kill_agent", "wait",
     "update_plan", "lookup_guide", "record_lesson",
     "web_search", "web_fetch",
+    "record_coverage", "update_coverage", "list_coverage",
+    "create_note", "list_notes",
 }
 
 

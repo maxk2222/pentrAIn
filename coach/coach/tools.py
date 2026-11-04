@@ -101,6 +101,52 @@ TOOLS: list[dict] = [
                                        "enum": ["todo", "doing", "done"]}},
                              "required": ["t"]}}},
         ["items"]),
+    _fn("record_coverage",
+        "Record the testing outcome of ONE attack surface (a host:port, an "
+        "endpoint, a credential-vector) in the coverage ledger — what did "
+        "you TEST and what came of it. Outcomes: untested (declared lead), "
+        "testing (in progress), tested_clean (tried, no issue found), "
+        "open_gap (plausible but unproven — name the missing proof), "
+        "confirmed (evidence-backed result), needs_follow_up (blocked — "
+        "say by what). Recording keeps the ledger honest; silently moving "
+        "on loses coverage state. Costs no action budget.",
+        {"surface": _str("canonical surface, e.g. 10.0.0.5:80 or "
+                          "web01|smb|user"),
+         "area": _str("risk area, e.g. web|smb|creds|privesc|pivot"),
+         "outcome": {"type": "string",
+                     "enum": ["untested", "testing", "tested_clean",
+                              "open_gap", "confirmed", "needs_follow_up"]},
+         "evidence": _str("one-line proof/reason, <=200 chars")},
+        ["surface", "outcome"]),
+    _fn("update_coverage",
+        "Move an EXISTING coverage row to its real outcome — same args as "
+        "record_coverage, fails when the surface was never recorded. Use "
+        "this instead of recording a second row for the same surface.",
+        {"surface": _str("surface key from the ledger"),
+         "outcome": {"type": "string",
+                     "enum": ["untested", "testing", "tested_clean",
+                              "open_gap", "confirmed", "needs_follow_up"]},
+         "evidence": _str("one-line proof/reason")},
+        ["surface", "outcome"]),
+    _fn("list_coverage",
+        "List coverage-ledger rows, optionally filtered by outcome — check "
+        "what is already covered before spending actions.",
+        {"outcome": {"type": "string",
+                     "enum": ["untested", "testing", "tested_clean",
+                              "open_gap", "confirmed", "needs_follow_up"]}},
+        []),
+    _fn("create_note",
+        "Pin one line of durable cross-agent context onto the shared notes "
+        "pad — a working credential set, an endpoint inventory, a "
+        "rate-limit quirk the next agent needs. Not a finding, not "
+        "coverage: the scratchpad every agent (you + workers) reads at "
+        "spawn. Same key updates in place. Costs no action budget.",
+        {"key": _str("short label, e.g. 'web01-creds', 'lan-endpoints'"),
+         "text": _str("one line of distilled context, <=240 chars")},
+        ["key", "text"]),
+    _fn("list_notes",
+        "List the shared notes pad — cross-agent curated context written "
+        "by you or merged from worker reports.", {}, []),
     _fn("wait",
         "Wait N seconds without acting — for time-dependent state changes "
         "(cron jobs, service startup, lockout/cooldown timers). Touches "
@@ -117,8 +163,17 @@ TOOLS: list[dict] = [
         "and reports findings back via collect_agent. Use for parallel work "
         "(e.g. enumerating different hosts/services at once); do NOT spawn "
         "for sequential steps that depend on each other's results.",
-        {"task": _str("self-contained worker task — what to do and what to "
-                      "report back")}, ["task"]),
+        {"task": _str("self-contained worker task — what to do, the ACCESS "
+                      "PATH (host, creds, pivot), and what to report back"),
+         "role": {"type": "string",
+                  "enum": ["general", "recon", "web", "creds", "svc",
+                           "privesc", "pivot", "verify"],
+                  "description": "specialist role — narrows the worker's "
+                                 "operating contract"},
+         "done_when": _str("acceptance criterion the report is measured "
+                            "against, e.g. 'ports+versions for all live "
+                            "hosts' — <=140 chars")},
+        ["task"]),
     _fn("collect_agent",
         "Read a worker's report — waits up to ~40s if it is still running, "
         "otherwise returns its live status line.",
@@ -155,7 +210,9 @@ _LEVEL_TOOLS = {
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
         "wait", "update_plan", "lookup_guide", "record_lesson",
-        "web_search", "web_fetch", "none"},
+        "web_search", "web_fetch", "none",
+        "record_coverage", "update_coverage", "list_coverage",
+        "create_note", "list_notes"},
 }
 
 
@@ -166,9 +223,17 @@ def tools_for_level(level: int, *, subagents: bool = False) -> list[dict]:
     return [t for t in TOOLS if t["function"]["name"] in allowed]
 
 
-def worker_tools() -> list[dict]:
+def worker_tools(role: str | None = None) -> list[dict]:
+    # role-gated subsets — verify workers reproduce evidence read-only, so
+    # they get no update_plan (no roadmap to maintain) and no record_lesson
+    # (they report into the merge instead of curating shared memory)
+    drop = {"verify": {"update_plan", "record_lesson"}}.get(role or "", set())
     return [t for t in TOOLS
-            if t["function"]["name"] in WORKER_TOOL_NAMES]
+            if t["function"]["name"] in WORKER_TOOL_NAMES - drop]
+
+
+WORKER_ROLES = {"general", "recon", "web", "creds", "svc", "privesc",
+                "pivot", "verify"}
 
 
 # ---------- normalization ----------

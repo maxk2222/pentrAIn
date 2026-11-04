@@ -248,6 +248,10 @@ class FactsDB:
         self.flags: dict[str, FlagFact] = {}
         self.ips_seen: set[str] = set()
         self.findings: list[str] = []     # bounded misc evidence (enum users)
+        # typed vulnerability records (worker reports: "vulns" key) —
+        # {title,sev,host,status,evidence,owner}; the string findings above
+        # stay the lightweight catch-all, these are report-grade rows
+        self.vulns: list[dict] = []
         self.denials: list[str] = []      # bounded dead ends (denied:svc@host)
         self.caps: list[str] = []         # proven primitives (root-exec via …)
         self.lessons: list[str] = []      # agent-authored lessons (record_lesson)
@@ -572,7 +576,27 @@ class FactsDB:
                 self.findings.append(fnd)
                 n_findings += 1
         del self.findings[:-12]
-        return {"creds": n_creds, "ports": n_ports, "findings": n_findings}
+        n_vulns = 0
+        for v in (parsed.get("vulns") or [])[:8]:
+            if not isinstance(v, dict) or not v.get("title"):
+                continue
+            rec = {"title": str(v["title"])[:100],
+                   "sev": str(v.get("sev") or "info")[:16],
+                   "host": str(v.get("host") or "")[:60],
+                   "status": str(v.get("status") or "hypothesis")[:16],
+                   "evidence": str(v.get("evidence") or "")[:200],
+                   "owner": worker_id}
+            # dedup on title+host — a re-report upgrades status/evidence
+            for old in self.vulns:
+                if old["title"] == rec["title"] and old["host"] == rec["host"]:
+                    old.update({k: v for k, v in rec.items() if v})
+                    break
+            else:
+                self.vulns.append(rec)
+                n_vulns += 1
+            del self.vulns[:-24]
+        return {"creds": n_creds, "ports": n_ports, "findings": n_findings,
+                "vulns": n_vulns}
 
     # ---------- flags (grounding evidence) ----------
 
@@ -683,6 +707,12 @@ class FactsDB:
         if self.findings:
             noted = self.findings[-4:] if compact else self.findings[-6:]
             lines.append("  noted: " + " | ".join(noted))
+        if self.vulns:
+            kept = self.vulns[-2:] if compact else self.vulns[-4:]
+            lines.append(
+                "  vulns: " + " | ".join(
+                    f"{v['title']}@{v['host'] or '?'}({v['sev']},{v['status']})"
+                    for v in kept))
         out = "\n".join(lines)
         if len(out) > max_chars and not compact:
             out = self.render(max_chars, compact=True)

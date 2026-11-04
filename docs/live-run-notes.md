@@ -270,3 +270,17 @@ Per-quest findings appended below the ladder table.
 - Takeaway: 'routine/deep/worker' are three separate knobs —
   patching llm.reasoning_effort alone leaves the hot path slow.
 2026-11-04 17:55
+
+## BUG: unicode commands kill QGA file-write (eval-blocker)
+- Agent wrote ~/lan-report.md via heredoc containing em-dashes/unicode
+  → PVE agent/file-write 500 'Wide character in subroutine entry'
+  (Agent.pm:643) → the DELIVERABLE write failed; agent then idled on
+  'infra error recovery'. Any non-ASCII byte in the exec script dies
+  the same way — model output loves — and ’ ’.
+- Fix in agent_file_write (pve.py): try raw write; on failure with
+  non-ascii payload, ship ASCII base64 to <path>.ptnb64 and decode
+  in-guest via agent_exec_sh (short args, no virtio wedge). ASCII
+  fast-path unchanged; errors on ASCII content still propagate.
+- Covers every caller: coach /tmp/ptn-*.sh scripts, kali_net up/down,
+  flags seeding, hosts.sh. Tests: b64 fallback path + ascii-reraise.
+2026-11-04 18:20

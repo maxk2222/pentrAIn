@@ -148,6 +148,17 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                    .order_by(CoachAction.id.desc()).limit(10))).all()
                if r[0]]
     lessons.reverse()
+    # coverage-ledger + shared-notes writer log (record_coverage,
+    # update_coverage, create_note) — chronological replay rebuilds the
+    # agent-owned bookkeeping after a coach restart, like update_plan does
+    # for the roadmap. Desc→reverse keeps the LATEST 96 writer actions.
+    ledger_log = [
+        {"tool": r[0], "args": r[1]} for r in reversed((await db.execute(
+            select(CoachAction.tool, CoachAction.args).where(
+                CoachAction.session_id == session_id,
+                CoachAction.tool.in_(
+                    ["record_coverage", "update_coverage", "create_note"]))
+            .order_by(CoachAction.id.desc()).limit(96))).all())]
     # observer field notes — session-scoped by applies (global + this
     # track + this quest); consumed via push-hints and lookup_guide only,
     # never rendered into the base prompt
@@ -292,6 +303,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         "plan": plan,
         "coach_notes": coach_notes,
         "lessons": lessons,
+        "ledger_log": ledger_log,
         "field_notes": field_notes,
         "profile": {"track_levels": profile.track_levels if profile else {},
                     "metrics": profile.metrics if profile else {}},

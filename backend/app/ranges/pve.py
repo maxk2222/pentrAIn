@@ -216,13 +216,35 @@ class PveClient:
         the guest. Passing the same script as a guest-exec arg makes the
         virtio channel wedge on this host (long args stall exec-status and
         the channel stays broken until a VM reset)."""
+        raw = content.encode("utf-8") if isinstance(content, str) else content
         payload = content if isinstance(content, str) else content.decode("utf-8", "replace")
-        await self.post(
-            f"/nodes/{self.creds.node}/qemu/{vmid}/agent/file-write",
-            # encode=1: PVE base64-encodes the raw payload for QGA itself —
-            # passing already-encoded content double-encodes it into the file
-            data={"file": path, "content": payload, "encode": "1"},
-        )
+        try:
+            await self.post(
+                f"/nodes/{self.creds.node}/qemu/{vmid}/agent/file-write",
+                # encode=1: PVE base64-encodes the raw payload for QGA itself —
+                # passing already-encoded content double-encodes it into the file
+                data={"file": path, "content": payload, "encode": "1"},
+            )
+        except PveError:
+            if raw.isascii():
+                raise
+            # PVE's perl layer dies on any non-latin-1 char in the form
+            # data ('Wide character in subroutine entry', Agent.pm) —
+            # and agent-authored commands LOVE em-dashes/curly quotes
+            # (s1-eval: a unicode report body killed the deliverable
+            # write mid-quest). Ship an ASCII base64 blob to a temp file
+            # and decode in-guest: short exec args, no virtio wedge, and
+            # the target file keeps its unicode byte-for-byte.
+            b64 = base64.b64encode(raw).decode()
+            tmp = f"{path}.ptnb64"
+            await self.post(
+                f"/nodes/{self.creds.node}/qemu/{vmid}/agent/file-write",
+                data={"file": tmp, "content": b64, "encode": "1"},
+            )
+            await self.agent_exec_sh(
+                vmid,
+                f"base64 -d {shlex.quote(tmp)} > {shlex.quote(path)} "
+                f"&& rm -f {shlex.quote(tmp)}")
 
     # ---------- snapshots / power ----------
     async def snapshot_create(self, vmid: int, name: str, description: str = "pentrain") -> str:

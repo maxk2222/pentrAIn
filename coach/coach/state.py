@@ -5,6 +5,8 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from .ledger import CoverageLedger, NotesPad
+
 PLAN_MAX_ITEMS = 10
 PLAN_TEXT_MAX = 110
 _STATUS = {"done": "done", "complete": "done", "completed": "done",
@@ -74,6 +76,11 @@ class SessionState:
     # log_action so it survives restarts; workers keep their own on _Worker
     plan: list[dict] = field(default_factory=list)
     plan_updated: float = 0.0          # ts of last update_plan — staleness nudge
+    # engagement bookkeeping — agent-declared coverage outcomes + shared
+    # notes (facts say what IS, the ledger says what was COVERED). Parent-
+    # owned: workers contribute via their report merge, never mid-run.
+    coverage: CoverageLedger = field(default_factory=CoverageLedger)
+    pad: NotesPad = field(default_factory=NotesPad)
     _grace_noted: bool = False         # one-shot: operator told budget hit grace
     # rolling summary — what trim_history dropped, distilled to one line per
     # item so long-horizon runs keep a trace of their early turns
