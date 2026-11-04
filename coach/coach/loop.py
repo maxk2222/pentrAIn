@@ -884,7 +884,7 @@ class SessionCoach:
         # in cancels (s84: 3/30min; s1: medium still cancelled). New
         # progress re-earns depth; a cancelled deep turn leaves it spent
         # (the marker was set pre-turn) — immediate routine backoff.
-        routine_eff = cc.get("effort_routine") or "medium"
+        routine_eff = cc.get("effort_routine") or "low"
         if (decision.stage >= 2
                 and self.state.last_progress_ts > self._deep_spent_ts):
             effort = (cc.get("effort_deep")

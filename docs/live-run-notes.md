@@ -257,3 +257,16 @@ Per-quest findings appended below the ladder table.
   unaffected.
 - Kali VM clock = UTC-7 (file ts 09:37 == 17:37 UTC) — cosmetic only.
 2026-11-04 17:35
+
+## effort_routine default was 'medium' — routine turns never got fast
+- llm.reasoning_effort=low only feeds the deep-fallback chain +
+  client ctor; the ROUTINE path reads coach.effort_routine which
+  was unset → 'medium' → enable_thinking stayed ON → routine turns
+  at effective xhigh → 600s cancels on ~90-action contexts (17:47).
+- With the mirror, only low/off map to enable_thinking=false —
+  routine turns are exactly where thinking-off belongs (exec-loop
+  grind). Code default changed medium→low; effort_worker same fix
+  on .200 settings. Deep stays medium (escalation quality).
+- Takeaway: 'routine/deep/worker' are three separate knobs —
+  patching llm.reasoning_effort alone leaves the hot path slow.
+2026-11-04 17:55
