@@ -389,3 +389,11 @@ Per-quest findings appended below the ladder table.
 - NOTE: create call must carry subagents_enabled:true — earlier winning create
   had it false; fixed via POST /sessions/{id}/subagents live toggle.
 2026-11-04 23:22
+
+## SOLVED: net-t1-exam (s7, ~35min, 3 flags + 3 cps)
+- ftp → smb fieldtech/Field2024! → su privesc → root. Blind exam clean.
+- FIX b597f5b: SessionStartIn now takes subagents_enabled (creation-time race,
+  same class as autonomy_level). Deployed; s7 verified subagents toggle works.
+
+## Track status: net-t1 3/3 SOLVED (services, open-shares, exam)
+2026-11-05 01:10
