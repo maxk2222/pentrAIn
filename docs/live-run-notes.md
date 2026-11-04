@@ -242,3 +242,18 @@ Per-quest findings appended below the ladder table.
   real toolset, ALLOWED_ACTIONS drift guard covers both tools.
 - Tools offered L3+; workers get both (research tasks parallelize).
 2026-11-05
+
+## s1-eval: evidence re-read loop (lab-t1-assessment)
+- Agent scanned LAN (12+ hosts) + 4 hosts deep via w2, then spent 5+
+  consecutive turns re-reading ~/evidence/*.nmap with cat/grep/ls —
+  each result duplicates what history already holds. Looks stalled in
+  the feed but is a consolidation loop, not a hang.
+- Same class as flag re-read guard: repeated reads of an identical
+  path should get an advisory after N — "content already in history,
+  synthesize or move on". Soft note, not a deny (different greps on
+  one file can be legit — but 3+ reads of one path rarely are).
+- w2 crashed on LLM ReadTimeout after 3 parse-corrective retries —
+  retry path + crash-report synthesis worked as designed; parent
+  unaffected.
+- Kali VM clock = UTC-7 (file ts 09:37 == 17:37 UTC) — cosmetic only.
+2026-11-04 17:35

@@ -225,6 +225,9 @@ class SessionCoach:
         # "denied:" text reads as fresh each turn, so a stubborn model
         # retries forever (s1: deploy@10.1.10.32 denied 3× identically)
         self._deny_counts: dict[str, int] = {}
+        # evidence re-read guard: read-verb command on the same path N times
+        # returns data already in history — soft advisory at n>=3 per window
+        self._read_counts: dict[str, int] = {}
         # key-free research — one shared client so the DDG debounce covers
         # parent + all workers (they'd otherwise stampede the endpoint)
         self._web = WebSearch()
@@ -1363,6 +1366,13 @@ class SessionCoach:
 
     _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
     _CIDR_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b")
+    _READ_VERB = re.compile(
+        r"\b(?:cat|grep|egrep|fgrep|tail|head|ls|strings|wc|file|stat)\b")
+    _WRITE_HINT = re.compile(
+        r">(?!\s*/dev/null|&\d)|\s-o[NAXSG]?\s|\btee\b|"
+        r"\b(?:nmap|nikto|curl|wget|ssh|scp|msfconsole|hydra|hashcat|john|"
+        r"sqlmap|gobuster|ffuf|dirsearch|nc|ncat|aircrack-ng|masscan)\b")
+    _PATHISH = re.compile(r"(?:~|/)[\w./*-]{3,}")
 
     def _foreign_ip(self, cmd: str) -> str | None:
         """Private/link-local literal that's neither inside a target /24 nor
@@ -2122,6 +2132,41 @@ class SessionCoach:
                         # for; one hint per module per session keeps it quiet
                         result += self._guide_hint(
                             f"{cmd}\n{out[:3000]}", window)
+                        # evidence re-read loop: the per-file deny (n>=3,
+                        # pre-exec) misses loops that re-read DIFFERENT
+                        # already-read files under one dir, and glob/var
+                        # reads read_target can't key at all (s1-eval: 6
+                        # turns of cat/grep/ls over ~/evidence/* looked like
+                        # a stall). Soft advisory only — never a deny.
+                        rt = facts_mod.read_target(cmd)
+                        bump, rkey = False, None
+                        if rt:
+                            rf2 = self.facts.files.get(
+                                facts_mod.file_key(cmd, rt))
+                            # observe_output already counted this exec —
+                            # reads>=2 means this file was seen before
+                            bump = rf2 is not None and rf2.reads >= 2
+                            rkey = rt.rsplit("/", 1)[0] or "/"
+                        elif (self._READ_VERB.search(cmd)
+                                and not self._WRITE_HINT.search(cmd)
+                                and (ps := self._PATHISH.findall(cmd))):
+                            # for-loop/glob shape — bucket by dir so it
+                            # shares the counter with verified re-reads
+                            p = ps[-1].lstrip("~")
+                            bump = True
+                            rkey = p.rsplit("/", 1)[0] or "/"
+                        if bump and rkey:
+                            k = f"{window or 'main'}|rr:{rkey}"
+                            n = self._read_counts[k] = \
+                                self._read_counts.get(k, 0) + 1
+                            if n >= 3:
+                                result += (
+                                    f"\nNOTE: {n} re-reads in/along "
+                                    f"'{rkey}' — contents already read are "
+                                    "settled in your history. Synthesize "
+                                    "findings or act on them (connect to a "
+                                    "service, use a cred); new information "
+                                    "needs NEW commands.")
                         # literal-var footgun: `sshpass -p '$pass'` passes
                         # the literal text "$pass" — single quotes stop
                         # expansion, so the auth failure that follows looks

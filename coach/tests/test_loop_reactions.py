@@ -3041,3 +3041,34 @@ def test_effort_maps_to_template_kwargs():
     seen.clear()
     aio.run(cli2.chat([{"role": "user", "content": "hi"}]))
     assert seen["chat_template_kwargs"]["enable_thinking"] is False
+
+
+async def test_cross_file_reread_advisory():
+    """The per-file read deny (n>=3 same path) misses a loop that re-reads
+    DIFFERENT already-read files under one dir — the 'consolidation'
+    pattern (s1-eval: 6 turns over ~/evidence/*). Re-reads of already-seen
+    files aggregate per dir; n>=3 gets a soft advisory, never a deny."""
+    class SameClient(FakeClient):
+        async def exec_in_kali(self, sid, command, window=None):
+            return {"out": "21/tcp open", "exitcode": 0, "visible": True}
+
+    coach, _c = _coach()
+    coach.client = SameClient()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+
+    async def rd(cmd):
+        return await coach._dispatch(
+            {"type": "exec_in_kali", "command": cmd}, proactive=True)
+
+    # three different NEW files in one dir — no advisory (not revisits)
+    for f in ("a", "b", "c"):
+        _, r = await rd(f"cat /ev/{f}.nmap")
+        assert "re-reads" not in r
+    # now re-read each — first two revisits quiet, third advises
+    _, r = await rd("cat /ev/a.nmap")
+    assert "re-reads" not in r
+    _, r = await rd("cat /ev/b.nmap")
+    assert "re-reads" not in r
+    _, r = await rd("grep open /ev/c.nmap")
+    assert "re-reads" in r and "settled in your history" in r
