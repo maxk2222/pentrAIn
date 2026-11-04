@@ -145,3 +145,34 @@ All generalized fixes from the s1 findings above, landed + tested:
 web-t3, net-t3, wifi-t3, for-t3, scr-t3, linux-t3, lab-t1, T3-exams,
 cap-t4-cloudburst; AD track blocked on windows templates (packer).
 Restarted: cap-t3-nordwind as session 1 on the rebuilt stack.
+
+## Worker lifecycle hardening (s1 audit → e1f1aeb)
+Findings from watching w1..w3 die silently in cap-t3:
+- Parse-death: three workers each died on their FIRST turn to
+  'no valid actions parsed' (~10min LLM time each, never retried,
+  never collected). Now: up to 2 corrective retries with proper
+  assistant/tool_calls pairing; third failure ends gracefully.
+- No completion signal: parent had to poll agent_status to learn a
+  worker finished — it never did. Now _finish_worker queues a bounded
+  note injected on the parent's guaranteed-read result channel.
+- Context trim dropped the task brief (msgs[:1]+msgs[-29:]); after
+  ~15 turns the worker drifted off-task. Now keeps msgs[:2]+msgs[-28:].
+- _denial_seen was global — first window to exec ate the note for all.
+  Now per-window, since each context has its own facts snapshot.
+- pending_observer_hints popped unscoped — a worker could consume an
+  advisory meant for the stuck parent. Now parent-only (window=None).
+- Killed workers lost partial findings (w.report never set on kill).
+  Kill path now synthesizes a report from last_out so _finish_worker
+  still merges; _worker_reasoning + activity indicator cleaned up.
+- Denial repeats now escalate (REPEATED xN) and attach a one-shot
+  guide hint (filtered→pivoting etc.) — before, the same denied cmd
+  could be re-issued silently.
+- Caps raised for hard quests: max_workers 4 (parallel only — the
+  agent may spawn sequentially without limit), turn_cap 160,
+  time_cap 7200s.
+- Observer LLM calls get one bounded ~20s retry — 240s ReadTimeouts
+  on the busy 27B endpoint silently killed advisories/lessons.
+- Frontend: chips show outcome glyphs, finished worker feeds get a
+  status-colored result card w/ collapsible report, action_report
+  messages carry their wN author label.
+2026-11-04
