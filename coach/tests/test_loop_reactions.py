@@ -3006,3 +3006,38 @@ async def test_killed_worker_merges_last_output():
     assert w.status == "killed"
     assert "killed after" in w.report and "last output" in w.report
     assert coach._worker_done and "w2 killed" in coach._worker_done[0]
+
+
+def test_effort_maps_to_template_kwargs():
+    """LM Studio ignores top-level reasoning_effort (issue #2413) — the
+    value must also be mirrored into chat_template_kwargs with the
+    qwen3.8 value set (xhigh|medium|low), and 'low'/'off' must reach
+    enable_thinking since that's the only lever that works there."""
+    from coach.llm import LlmClient
+    seen = {}
+    class Probe:
+        async def post(self, url, json=None, **kw):
+            seen.update(json)
+            class R:
+                status_code = 200
+                text = ""
+                def raise_for_status(self): pass
+                def json(self):
+                    return {"choices": [{"message": {"content": "x"},
+                                         "finish_reason": "stop"}],
+                            "usage": {}}
+            return R()
+        async def aclose(self): pass
+    import asyncio as aio
+    cli = LlmClient("http://x", "", "m", reasoning=True,
+                    reasoning_effort="high")
+    cli._client = Probe()
+    aio.run(cli.chat([{"role": "user", "content": "hi"}]))
+    kw = seen["chat_template_kwargs"]
+    assert kw["reasoning_effort"] == "xhigh"   # 'high' would raise in jinja
+    cli2 = LlmClient("http://x", "", "m", reasoning=True,
+                     reasoning_effort="low")
+    cli2._client = Probe()
+    seen.clear()
+    aio.run(cli2.chat([{"role": "user", "content": "hi"}]))
+    assert seen["chat_template_kwargs"]["enable_thinking"] is False

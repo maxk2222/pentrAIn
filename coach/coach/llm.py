@@ -75,6 +75,23 @@ class LlmClient:
             body["chat_template_kwargs"] = {"enable_thinking": False}
         elif effort := (reasoning_effort or self.reasoning_effort):
             body["reasoning_effort"] = effort
+            kwargs = body.setdefault("chat_template_kwargs", {})
+            if effort == "off":
+                kwargs["enable_thinking"] = False
+            elif effort == "low":
+                # LM Studio's /v1 layer never threads reasoning_effort into
+                # the Jinja context (issue lmstudio#2413 — 'xhigh' default
+                # always wins), so a plain 'low' changes NOTHING there.
+                # enable_thinking=false is the only lever that reaches
+                # llama.cpp templates — verified live: ~60% fewer reasoning
+                # tokens, ~50% wall time on the qwen3.8-27b endpoint.
+                kwargs["enable_thinking"] = False
+                kwargs["reasoning_effort"] = "low"
+            else:
+                # qwen3.8 template accepts xhigh|medium|low — OpenAI's 'high'
+                # would raise if it ever reached the template; map it.
+                kwargs["reasoning_effort"] = (
+                    {"high": "xhigh"}.get(effort, effort))
         if tools and "no_tools" not in self._compat:
             body["tools"] = tools
             body["tool_choice"] = "auto"

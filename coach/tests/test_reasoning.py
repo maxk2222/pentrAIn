@@ -43,7 +43,10 @@ async def test_reasoning_on_sends_effort():
     c = LlmClient("http://x/v1", "", "m", reasoning=True, reasoning_effort="high")
     body = await _captured_body(c)
     assert body["reasoning_effort"] == "high"
-    assert "chat_template_kwargs" not in body
+    # mirrored into template kwargs for llama.cpp endpoints — OpenAI's 'high'
+    # maps to qwen3.8's 'xhigh' so it never raises in the jinja var check
+    assert (body["chat_template_kwargs"]["reasoning_effort"] == "xhigh"
+            and "enable_thinking" not in body["chat_template_kwargs"])
 
 
 async def test_reasoning_default_no_fields():

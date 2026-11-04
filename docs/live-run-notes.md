@@ -192,3 +192,15 @@ Findings from watching w1..w3 die silently in cap-t3:
   panes linger on the trainee desktop after finish/kill. Cosmetic;
   a respawned wN reuses its pane. Worth a kill-window on finish later.
 2026-11-04
+
+## FULL EVAL RUN (2026-11-04) — fresh DB, tier-ordered ladder
+All progress wiped (attempts/submissions/coach trail/sessions);
+quests+settings kept. Rules: tier 1 fully first, then 2, 3, 4.
+AD track skipped (no Windows templates). Hard standalones
+(ai-llm-injection, cloud-k8s-escape) last in the tier-1 block.
+Autonomy 4 + subagents on for every session.
+Per-quest findings appended below the ladder table.
+
+| quest | result | actions | time | notes |
+|-------|--------|---------|------|-------|
+| lab-t1-assessment | ? | | | deploying |
