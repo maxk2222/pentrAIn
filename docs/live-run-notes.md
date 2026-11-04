@@ -204,3 +204,19 @@ Per-quest findings appended below the ladder table.
 | quest | result | actions | time | notes |
 |-------|--------|---------|------|-------|
 | lab-t1-assessment | ? | | | deploying |
+
+## reasoning-effort root cause (qwen3.8 + LM Studio)
+- 'reasoning_effort' never reaches the Jinja ctx on LM Studio /v1
+  (issue #2413) — template default 'xhigh' applied to EVERY turn.
+  Explains the 600s cancel storms on long contexts.
+- qwen3.8 template accepts xhigh|medium|low — our 'high' would raise.
+  Now mapped + mirrored into chat_template_kwargs.
+- enable_thinking=false DOES reach llama.cpp: ~60% fewer reasoning
+  tokens, ~2x faster (live probe 127*43: 214→84 tok, 30s→14s).
+  Still not a full off (Heretic merge emits residual think tokens).
+- /no_think prompt directive: no effect (template lacks the hook).
+- 'low' effort now maps to enable_thinking=false + mirrored low —
+  the only way to actually go below xhigh on this deployment.
+- Server-side alternative: edit the model's chat_template.jinja
+  default('xhigh')->('low') in LM Studio (operator action).
+2026-11-04
