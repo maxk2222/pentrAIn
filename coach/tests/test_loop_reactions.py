@@ -2314,6 +2314,20 @@ async def test_denials_scope_local_vs_remote():
          "command": "ssh deploy@web01 'sshpass -p x ssh app@app01'"},
         proactive=True)
     assert not did and "missing:sshpass@web01" in res
+    # but sshpass as PAYLOAD is the fix, not a use — scp the binary onto
+    # the host to install it must pass (s84 live: the agent's workaround
+    # for missing:sshpass@web01 got bricked by the guard itself)
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "scp /usr/bin/sshpass deploy@web01:/tmp/sshpass"},
+        proactive=True)
+    assert did, res
+    # and a local path argument that merely names the tool stays free too
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'cat /tmp/sshpass.md5'"},
+        proactive=True)
+    assert did, res
     # sudo on KALI before the ssh → free; sudo in the remote tail → denied
     did, res = await coach._dispatch(
         {"type": "exec_in_kali",

@@ -1368,8 +1368,16 @@ class SessionCoach:
                     continue
                 if dn.startswith("missing:"):
                     # the tool can never appear — no internet means nothing
-                    # to install it with; deny the binary on that host
-                    return dn
+                    # to install it with; deny the binary on that host.
+                    # Only when it's actually INVOKED though: preceded by a
+                    # command boundary, not by '/' — `scp /usr/bin/sshpass
+                    # u@h:/tmp/` ships the tool as PAYLOAD to fix exactly
+                    # this denial and must pass (live on s84: the agent's
+                    # workaround got bricked by its own dead-end guard)
+                    if re.search(rf"(?:^|[\s;|&'\"`(]){re.escape(key)}\b",
+                                 scope):
+                        return dn
+                    continue
                 if dn.startswith("unreachable:"):
                     return dn
                 # filtered = every scanned port dead — scans AND connect
