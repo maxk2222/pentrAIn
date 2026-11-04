@@ -48,6 +48,47 @@ async def test_settings_patch_rejects_bad_types(db):
         await settings_svc.patch_settings(db, {"engine.testing_mode": {"weird": 1}})
 
 
+async def test_settings_export_import_roundtrip():
+    """The stack-down incident: runtime config lives ONLY in the settings
+    table — /settings/export must ship secrets so /settings/import can
+    restore a fresh stack. Import reuses PATCH coercion; both stay
+    admin-gated (a secrets dump is not for trainees)."""
+    from fastapi.testclient import TestClient
+
+    from app.db import session_factory
+    from app.main import app
+
+    with TestClient(app) as client:  # lifespan inits engine + tables first
+        try:
+            async with session_factory()() as s:
+                await settings_svc.set_setting(
+                    s, "security.admin_token_hash", hash_password("pw"))
+                await settings_svc.set_setting(
+                    s, "engine.ludus_api_key", "sekret")
+            # unauthenticated stays locked out of the secrets dump
+            assert client.get("/api/settings/export").status_code == 401
+            tok = client.post("/api/auth/login",
+                              json={"password": "pw"}).json()["token"]
+            h = {"Authorization": f"Bearer {tok}"}
+            r = client.get("/api/settings/export", headers=h)
+            assert r.status_code == 200
+            dump = r.json()
+            assert dump["engine.ludus_api_key"] == "sekret"  # unredacted
+            # wipe the secret, then restore the whole dump via import
+            async with session_factory()() as s:
+                await settings_svc.set_setting(s, "engine.ludus_api_key", "")
+            r = client.post("/api/settings/import",
+                            json={"updates": dump}, headers=h)
+            assert r.status_code == 200
+            async with session_factory()() as s:
+                assert (await settings_svc.get_secret(
+                    s, "engine.ludus_api_key") == "sekret")
+        finally:
+            async with session_factory()() as s:
+                await settings_svc.set_setting(s, "security.admin_token_hash", "")
+                await settings_svc.set_setting(s, "engine.ludus_api_key", "")
+
+
 # ---------- expected flag rotation ----------
 
 async def test_expected_flags_replace_on_reset(db, db_with_packs):

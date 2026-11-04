@@ -2661,3 +2661,164 @@ async def test_llm_client_per_call_effort_override():
     # no override → client default wins
     await llm.chat([{"role": "user", "content": "x"}], json_mode=False)
     assert seen[-1].get("reasoning_effort") == "high"
+
+
+async def test_lookup_guide_repeat_fetch_short_circuits():
+    """Same module pulled twice by one window → 'already loaded' note
+    instead of re-paying the body (s1: the .git module was fetched 5x
+    in 18min by the same window). Dedup keys on the RESOLVED id, is
+    per-window, and never blocks a different module."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _, res1 = await coach._dispatch(
+        {"type": "lookup_guide", "query": "git-leak"}, proactive=True)
+    assert "zlib.decompress" in res1
+    # different query, same resolved module → short-circuit
+    _, res2 = await coach._dispatch(
+        {"type": "lookup_guide", "query": "refs/heads"}, proactive=True)
+    assert "already loaded" in res2 and "zlib.decompress" not in res2
+    # a worker window gets its own first fetch — separate context
+    _, res3 = await coach._dispatch(
+        {"type": "lookup_guide", "query": "git-leak"},
+        proactive=True, window="w1")
+    assert "zlib.decompress" in res3
+    # a different module still fetches on the main window
+    _, res4 = await coach._dispatch(
+        {"type": "lookup_guide", "query": "pivoting"}, proactive=True)
+    assert "already loaded" not in res4 and "pivot" in res4.lower()
+
+
+async def test_probe_commands_pass_missing_denials():
+    """`which expect python3 perl` is a PROBE, not an invocation — a
+    known missing:expect fact must not nuke the whole compound probe
+    and lose the python3/perl availability info (s84 live)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials += ["missing:expect@kali", "missing:curl@web01"]
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "which expect python3 perl"}, proactive=True)
+    assert did, res
+    # probes in a remote tail stay free too
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'which curl wget'"},
+        proactive=True)
+    assert did, res
+    # actual invocation still denied — local AND remote
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "expect -c 'spawn ssh app01'"}, proactive=True)
+    assert not did and "missing:expect@kali" in res
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh deploy@web01 'curl -s http://app01/'"},
+        proactive=True)
+    assert not did and "missing:curl@web01" in res
+    # probe-then-invoke compound: the invocation still bites
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "which expect && expect -c 'send x'"}, proactive=True)
+    assert not did and "missing:expect@kali" in res
+
+
+async def test_literal_sshpass_var_gets_note():
+    """`sshpass -p '$pass'` passes the literal text, not the variable —
+    the following auth failure looks like a wrong cred although none
+    was tried. The result must name the footgun (s1: cost a turn)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p '$pass' ssh deploy@web01 'id'"},
+        proactive=True)
+    assert did and "LITERAL" in res
+    # a real password (no $) gets no note
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'Hun7er' ssh deploy@web01 'id'"},
+        proactive=True)
+    assert did and "LITERAL" not in res
+
+
+async def test_worker_target_dup_advisory_once():
+    """Main window execing against a target a RUNNING worker already
+    covers → advisory note once (s1: main re-ran nmap -p- on app01
+    while w2 owned that task). Advisory only — the exec still runs."""
+    from coach.loop import _Worker
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach._workers["w2"] = _Worker(
+        id="w2", task="nmap -p- app01 (10.1.10.33) for open ports",
+        started=time.monotonic())
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -p- 10.1.10.33"}, proactive=True)
+    assert did and "w2 is already working on 10.1.10.33" in res
+    # second dup → silent (pop-once)
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -sV 10.1.10.33"}, proactive=True)
+    assert did and "already working" not in res
+    # a target no worker covers → no note
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -p- 10.1.10.32"}, proactive=True)
+    assert did and "already working" not in res
+    # worker execs on its own target are its JOB — no self-advisory
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "nmap -p- 10.1.10.33"}, proactive=True, window="w2")
+    assert did and "already working" not in res
+
+
+async def test_resync_seeds_progress_clock():
+    """resync() must treat started_at/ready_at as liveness: a session
+    parked in 'ready' then activated must not look stuck-since-attach
+    (s1 entered takeover at stage=2 instantly)."""
+    from datetime import UTC, datetime
+    started = datetime.now(UTC).isoformat()
+    ctx = {**FakeClient().ctx,
+           "session": {"id": 1, "state": "active", "autonomy_level": 4,
+                       "coach_enabled": True, "started_at": started}}
+    coach, c = _coach()
+    c.ctx = ctx
+    coach.state.last_progress_ts = 10.0   # stale attach-time clock
+    await coach.resync()
+    assert coach.state.last_progress_ts > 1000
+    # and an OLDER started_at must never rewind real progress
+    coach.state.last_progress_ts = time.time()
+    await coach.resync()
+    assert coach.state.last_progress_ts > 1000000
+
+
+async def test_deep_effort_spent_once_per_stall_window():
+    """stage>=2 spends deep effort ONCE per no-progress window — every-
+    turn-deep burned the 600s budget in cancels (s84: 3/30min). New
+    progress re-earns the depth; routine turns never spend it."""
+    coach, _ = _coach({"coach": {"nudge_after_s": 10, "hint_after_s": 30,
+                                 "effort_routine": "medium",
+                                 "effort_deep": "high"},
+                       "llm": {"reasoning_effort": "high"}})
+    coach.llm = FakeLlm(actions=[{"type": "none"}])
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.state.last_progress_ts = time.time() - 5000   # deeply stuck
+    coach.state.last_nudge_ts = 0
+    await coach._reflect_tick(10)
+    assert coach.llm.kwargs[-1].get("reasoning_effort") == "high"
+    coach.state.last_nudge_ts = 0                       # cooldown hack
+    await coach._reflect_tick(10)
+    # spent — same stall window falls back to routine effort
+    assert coach.llm.kwargs[-1].get("reasoning_effort") == "medium"
+    coach.state.last_nudge_ts = 0
+    coach.state.progress()                              # new evidence
+    # the NEXT stall window (post-spend progress now long ago → stage
+    # climbs back to >=2) re-earns the one deep turn
+    coach.state.last_progress_ts = time.time() - 5000
+    await coach._reflect_tick(10)
+    assert coach.llm.kwargs[-1].get("reasoning_effort") == "high"

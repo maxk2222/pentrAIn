@@ -205,6 +205,19 @@ class SessionCoach:
         # parent's next turn — a worker's prompt snapshot is frozen)
         self._guides_hinted: set[str] = set()  # modules already hinted on
         # the guaranteed-read channel — one push per module per session
+        # guide pull dedup: window → module ids already fetched — a repeat
+        # pull of the same recipe must not re-pay its body tokens (s1: the
+        # .git module was fetched 5x inside 18min by the same window)
+        self._guide_fetched: dict[str, set[str]] = {}
+        # worker-dup advisory dedup: (worker_id, cmd-target) already noted
+        # — the hint is pop-once per pair, not a per-scan nag
+        self._dup_noted: set[tuple[str, str]] = set()
+        # deep-effort spend marker: last_progress_ts at which the one deep
+        # turn of this no-progress window already ran — at L4, stuck>hint_s
+        # makes stage-2 the default state, so every-turn-deep burned the
+        # 600s budget in cancels (s84: 3/30min, s1 too). Progress re-earns
+        # depth; a spent or cancelled deep falls back to routine effort.
+        self._deep_spent_ts: float = 0.0
         # observer field-note tracking: window → note ids already pushed;
         # note id → (progress_ts, exec_count) at push for hit feedback
         self._notes_hinted: dict[str, set[int]] = {}
@@ -556,6 +569,16 @@ class SessionCoach:
             return
         self.ctx = ctx
         self.state.state = s.get("state", self.state.state)
+        # a session parked in 'ready' then activated must not look
+        # stuck-since-attach — started_at/ready_at are liveness signals
+        # too, but only ever move the clock FORWARD so real progress
+        # (a newer last_progress_ts) is never rewound by an older seed
+        seed = max((x for x in (_iso_to_epoch(s.get("started_at")),
+                                _iso_to_epoch(s.get("ready_at"))) if x),
+                   default=0.0)
+        self.state.last_progress_ts = max(self.state.last_progress_ts, seed)
+        if self.state.last_activity_ts <= 0:
+            self.state.last_activity_ts = self.state.last_progress_ts
         self.state.autonomy_level = int(s.get("autonomy_level", self.state.autonomy_level))
         self.state.subagents_enabled = bool(
             s.get("subagents_enabled", self.state.subagents_enabled))
@@ -836,13 +859,21 @@ class SessionCoach:
             return
         budget = int(self.cfg.get("coach", {}).get("action_budget", 400))
         cc = self.cfg.get("coach", {})
-        # adaptive effort: stage-2 escalations keep deep reasoning; routine
-        # takeover turns run medium — at uniform 'high' a local 27B kept
-        # exceeding the 600s turn budget (s84: 3 cancels/h ≈ 30min burned)
-        effort = (cc.get("effort_deep")
-                  or self.cfg.get("llm", {}).get("reasoning_effort")
-                  or "high") if decision.stage >= 2 else (
-            cc.get("effort_routine") or "medium")
+        # adaptive effort with decay: deep reasoning is spent ONCE per
+        # no-progress window — at L4, stuck>hint_s makes stage-2 the
+        # default state, so every-turn-deep burned the 600s turn budget
+        # in cancels (s84: 3/30min; s1: medium still cancelled). New
+        # progress re-earns depth; a cancelled deep turn leaves it spent
+        # (the marker was set pre-turn) — immediate routine backoff.
+        routine_eff = cc.get("effort_routine") or "medium"
+        if (decision.stage >= 2
+                and self.state.last_progress_ts > self._deep_spent_ts):
+            effort = (cc.get("effort_deep")
+                      or self.cfg.get("llm", {}).get("reasoning_effort")
+                      or "high")
+            self._deep_spent_ts = self.state.last_progress_ts
+        else:
+            effort = routine_eff
         try:
             # a single wedged turn (stuck HTTP call, lock holder that never
             # returns) must not take the whole session loop down with it
@@ -1396,6 +1427,13 @@ class SessionCoach:
         _CONNECT = re.compile(
             r"\b(nmap|masscan|rustscan|unicornscan|nc|netcat|fping|ping|"
             r"ssh|sshpass|curl|wget|telnet|sshuttle|proxychains4?|socat)\b")
+        # availability probes are not invocations — `which expect python3
+        # perl` must pass a known-missing:expect fact or the whole probe
+        # (and the info about the OTHER tools) dies with it (s84 live)
+        _PROBE = re.compile(
+            r"(?:^|[\s;|&'\"`(])(?:which|whereis|locate|type|hash)"
+            r"(?:\s+[\w./+-]+)+"
+            r"|(?:^|[\s;|&'\"`(])command\s+-[vV](?:\s+[\w./+-]+)+")
 
         def _deny(key: str, dn: str, scope: str) -> bool:
             """key mentioned in scope + the denial's activation evidence."""
@@ -1408,8 +1446,10 @@ class SessionCoach:
                 # install it with. Only when actually INVOKED though:
                 # preceded by a command boundary, not '/' — `scp
                 # /usr/bin/sshpass u@h:/tmp/` ships the tool as PAYLOAD to
-                # fix exactly this denial and must pass (s84 live)
-                return bool(_MISSING_CALL(key, scope))
+                # fix exactly this denial and must pass (s84 live). And
+                # `which <tool>` is a PROBE, not a call — strip probe
+                # invocations before the invocation check.
+                return bool(_MISSING_CALL(key, _PROBE.sub(" ", scope)))
             # filtered = every scanned port dead — scans AND connect
             # attempts to the ip are dead ends. A bare user@ip token
             # counts as a connect too (-J hops).
@@ -1459,6 +1499,28 @@ class SessionCoach:
                     and (user is None
                          or re.search(rf"\b{re.escape(user)}\b", tail))):
                 return dn
+        return None
+
+    _HOST_LIKE = re.compile(
+        r"\b(?:web|app|db|dc|ws|srv|mail|file|proxy|vpn|dev|test|stage)\d+\b")
+
+    def _worker_target_dup(self, cmd: str) -> str | None:
+        """A running worker was briefed on a target this main-window cmd
+        also hits — duplicating a delegated scan burns budget twice
+        (s1: main re-ran nmap -p- on app01 while w2 owned that very
+        task). IPs and hostnames both count; advisory only, never a
+        denial — the parent may legitimately verify worker findings."""
+        ips = set(self._IP_RE.findall(cmd or ""))
+        hosts = {h.lower() for h in self._HOST_LIKE.findall(cmd or "")}
+        if not ips and not hosts:
+            return None
+        for w in self._workers.values():
+            if w.status != "running":
+                continue
+            if (ips & set(self._IP_RE.findall(w.task))
+                    or hosts & {h.lower()
+                                for h in self._HOST_LIKE.findall(w.task)}):
+                return w.id
         return None
 
     def _drain_observer_hints(self, result: str, a: dict,
@@ -2015,6 +2077,37 @@ class SessionCoach:
                                 f"situation — lookup_guide(\"{mid}\") pulls "
                                 "the recipe (verbatim commands).")
                             break
+                        # literal-var footgun: `sshpass -p '$pass'` passes
+                        # the literal text "$pass" — single quotes stop
+                        # expansion, so the auth failure that follows looks
+                        # like a wrong cred although it was never tried
+                        # (s1: cost a full turn + a retry loop)
+                        if re.search(r"sshpass\s+-p\s+['\"]\$", cmd):
+                            result += (
+                                "\nNOTE: `-p '$…'` — single quotes make "
+                                "sshpass receive the LITERAL text, not "
+                                "the variable's value. Put the real "
+                                "password after -p (or double-quote an "
+                                "exported var) and retry.")
+                        # main window redoing a running worker's target —
+                        # the exec already ran (advisory only); once per
+                        # (worker, target) pair so it's a hint, not a nag
+                        if window is None and (
+                                dup := self._worker_target_dup(cmd)):
+                            tgt = next(
+                                (ip for ip in self._IP_RE.findall(cmd)
+                                 if ip in self._IP_RE.findall(
+                                     self._workers[dup].task)),
+                                cmd[:40])
+                            if (dup, tgt) not in self._dup_noted:
+                                self._dup_noted.add((dup, tgt))
+                                result += (
+                                    f"\nNOTE: {dup} is already working "
+                                    f"on {tgt} — collect its report "
+                                    f"with collect_agent(\"{dup}\") "
+                                    "instead of duplicating its scans; "
+                                    "spend this window on another "
+                                    "angle.")
                     elif code is None:
                         err_hint = res.get("err") or ""
                         if err_hint and err_hint not in out:
@@ -2399,7 +2492,19 @@ class SessionCoach:
             # exec budget, nothing shown to the trainee (the recipe lands in
             # the model's tool reply where the next turn can act on it)
             q = str(a.get("query") or a.get("content") or "")[:120]
-            result = guides.lookup(q)
+            win = window or "main"
+            mid = guides.resolve_id(q)
+            fetched = self._guide_fetched.setdefault(win, set())
+            if mid and mid in fetched:
+                # repeat pull of a static recipe — the content is already
+                # in this window's history; re-paying ~2k tokens teaches
+                # the model to re-fetch instead of re-using
+                result = (f"module '{mid}' already loaded — reuse the recipe "
+                          "you have; spend actions on the target instead")
+            else:
+                if mid:
+                    fetched.add(mid)
+                result = guides.lookup(q)
             # union search: observer field notes ride the same pull channel
             # — one tool answers with curated modules AND unverified session
             # lessons (always labeled). A module hit still appends a matching
@@ -2482,7 +2587,9 @@ class SessionCoach:
             {"spawned": wid}))
         return (f"spawned {wid} — \"{task[:120]}\". It works autonomously on "
                 f"its own pane ({wid}); continue your own work and read its "
-                f"report with collect_agent(\"{wid}\") when you need it.")
+                f"report with collect_agent(\"{wid}\") when you need it. "
+                "Keep delegated tasks bounded — a -p- scan ties a worker "
+                "down for an hour; prefer top-ports or targeted probes.")
 
     async def _collect_agent(self, a: dict) -> str:
         """collect_agent tool — waits (bounded) for a worker's report."""

@@ -25,8 +25,13 @@ sshpass -p PW2 ssh \
 - Name resolution on the forwarded hop happens on the JUMP host, not on
   Kali — `ssh … u2@db01` fails `Name or service not known` even when
   Kali's getent resolves db01. Use the destination IP instead.
+- A host rarely resolves its OWN alias either — remote tails must name
+  targets by IP (`ssh u@web01 'curl http://app01/'` fails inside web01's
+  command line when app01 is not in its /etc/hosts).
 - Middle boxes rarely have sshpass/expect — never assume the pivot host
   can script the second hop; drive both hops from Kali.
+- Wrap interactive ssh/sshpass in `timeout 15` — a waiting password
+  prompt wedges the pane until it is killed.
 - Docker-internal IPs (172.16.0.0/12) are NOT reachable from Kali —
   reach them through the container host:
   `sshpass … ssh deploy@host 'curl -s http://172.x.y.z:port/'`.

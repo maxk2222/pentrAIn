@@ -272,10 +272,12 @@ class ObserverService:
             self._llm = LlmClient(
                 base_url=sig[0], api_key=str(llmc.get("api_key") or ""),
                 model=str(sig[1] or ""), timeout_s=240,
-                reasoning=bool(llmc.get("reasoning", True)),
-                # advisory/lesson distillation is lightweight analysis —
-                # "high" effort on a local 27B blows past the 240s cap
-                # (observed: observer lesson llm timed out mid-session)
+                # distillation must NOT inherit llm.reasoning — on the
+                # local 27B even effort=low lets the thinking channel
+                # burn the whole 240s cap (observed: advisory AND lesson
+                # calls ReadTimeout'd mid-session). Structured one-shot
+                # distillation needs no chain-of-thought at all.
+                reasoning=False,
                 reasoning_effort="low")
             self._llm_sig = sig
         return self._llm
@@ -320,7 +322,9 @@ class ObserverService:
             "next step it has not tried: a technique, an alternate tool, or "
             "a different vantage. Rules: ≤2 sentences, technique-level "
             "(never the flag answer), no invented paths or creds, plain "
-            "text only (no markdown).")}, {"role": "user", "content": (
+            "text only (no markdown). The FACTS snapshot lists settled dead "
+            "ends (missing:, denied:, filtered:, blocked:) — a tip that "
+            "repeats one is worse than no tip.")}, {"role": "user", "content": (
             f"quest: {quest.get('title','?')} track={quest.get('track','?')} "
             f"tier={quest.get('tier','?')}\n\n"
             f"recent actions (newest last):\n{self._window_text(list(w.window))}"

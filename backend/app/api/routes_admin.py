@@ -108,6 +108,31 @@ async def patch_settings(body: SettingsPatch, db: AsyncSession = Depends(get_db)
     return await settings_svc.all_settings(db)
 
 
+@router.get("/settings/export")
+async def export_settings(db: AsyncSession = Depends(get_db),
+                          _=Depends(get_current_user)):
+    """Full backup INCLUDING secrets — the runtime config (engine creds,
+    llm endpoint, coach tuning) lives only in the settings table, so a
+    lost data volume means hand-restoring from logs. Treat the response
+    like a credentials dump: it is the restore source for a fresh stack."""
+    return await settings_svc.all_settings(db, redact=False)
+
+
+@router.post("/settings/import")
+async def import_settings(body: SettingsPatch,
+                          db: AsyncSession = Depends(get_db),
+                          _=Depends(get_current_user)):
+    """Restore a settings/export dump — same coercion + engine rebuild
+    semantics as PATCH /settings."""
+    try:
+        await settings_svc.patch_settings(db, body.updates)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if any(k in CLIENT_KEYS for k in body.updates):
+        await rebuild(db)
+    return await settings_svc.all_settings(db)
+
+
 # ---------- engine ----------
 
 @router.get("/engine/status")

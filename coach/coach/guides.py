@@ -102,18 +102,16 @@ def index(cap: int = 2000) -> str:
     return "\n".join(lines)[:cap]
 
 
-def lookup(query: str, cap: int = 1900) -> str:
-    """id exact match → title/trigger substring → body substring.
-    Returns the module body (capped), a short candidate list on multiple
-    matches, or an error naming the known ids."""
+def _resolve(query: str) -> tuple[Module | None, list[Module]]:
+    """Shared resolution: (winning module | None, scored candidates).
+    None also on ambiguity — callers that need a definite id must not
+    guess among equals."""
     q = (query or "").strip().lower()
     mods = load_modules()
-    if not mods:
-        return "error: knowledge base empty"
-    if not q:
-        return ("error: empty query — known guides:\n" + index(1500))
+    if not q or not mods:
+        return None, []
     if q in mods:
-        return f"# {mods[q].title}\n\n{mods[q].body}"[:cap]
+        return mods[q], []
     scored: list[tuple[int, Module]] = []
     for m in mods.values():
         score = 0
@@ -128,15 +126,39 @@ def lookup(query: str, cap: int = 1900) -> str:
         if score:
             scored.append((score, m))
     if not scored:
-        return (f"error: unknown guide {query!r} — known guides:\n"
-                + index(1500))
+        return None, []
     scored.sort(key=lambda sm: -sm[0])
     if len(scored) == 1 or scored[0][0] > scored[1][0]:
-        m = scored[0][1]
+        return scored[0][1], [m for _s, m in scored]
+    return None, [m for _s, m in scored]
+
+
+def resolve_id(query: str) -> str | None:
+    """The module id lookup() would return — None on miss/ambiguity.
+    Lets callers dedupe fetches by module id rather than raw query
+    (`git objects` and `.git extraction` resolve to the same module)."""
+    m, _ = _resolve(query)
+    return m.id if m else None
+
+
+def lookup(query: str, cap: int = 1900) -> str:
+    """id exact match → title/trigger substring → body substring.
+    Returns the module body (capped), a short candidate list on multiple
+    matches, or an error naming the known ids."""
+    q = (query or "").strip().lower()
+    if not load_modules():
+        return "error: knowledge base empty"
+    if not q:
+        return ("error: empty query — known guides:\n" + index(1500))
+    m, cands = _resolve(q)
+    if m:
         return f"# {m.title}\n\n{m.body}"[:cap]
+    if not cands:
+        return (f"error: unknown guide {query!r} — known guides:\n"
+                + index(1500))
     # ambiguous — name the candidates rather than guessing
-    cands = " | ".join(f"{m.id} — {m.title}" for _s, m in scored[:4])
-    return (f"multiple guides match {query!r}: {cands} — "
+    named = " | ".join(f"{m.id} — {m.title}" for m in cands[:4])
+    return (f"multiple guides match {query!r}: {named} — "
             "call lookup_guide again with the exact id")
 
 
