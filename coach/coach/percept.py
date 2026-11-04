@@ -173,7 +173,17 @@ def _p_denials(cmd: str, out: str, d: dict) -> None:
     for m in _ACCESS_DENIED_USER.finditer(out):
         d["denials"].append(f"denied:{svc}-{m.group(1)}@{h}")
     if _AUTH_FAIL.search(out):
-        d["denials"].append(f"denied:{svc}-auth@{h}")
+        ah = h
+        if svc == "ssh":
+            # nested pivots: the failing login is the INNERMOST ssh target,
+            # not the outer hop — `ssh u@web01 'ssh u@app01'` failing auth
+            # must record denied:ssh-auth@app01, else the observer sees
+            # app01 as untested and recommends the dead retry (s84: and
+            # worse, denied:ssh-auth@web01 poisons the WORKING pivot)
+            tgs = _SSH_TARGET.findall(cmd or "")
+            if tgs:
+                ah = tgs[-1][-1]
+        d["denials"].append(f"denied:{svc}-auth@{ah}")
     if _TTY_REQ.search(out) and "sudo" in (cmd or ""):
         d["findings"].append(
             "hint:sudo needs a pipe — echo $PASS | sudo -S -l")
