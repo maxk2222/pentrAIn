@@ -72,6 +72,33 @@ def for_session(session_id: int) -> TrajLog | NullTrajLog:
         return NullTrajLog()
 
 
+def last_deep_ts(session_id: int) -> float:
+    """Wall-clock ts of the session's last deep-effort spend — restores the
+    one-deep-per-window marker across coach restarts (the file survives;
+    in-memory state does not). Rotation already gives each attempt a clean
+    file, so a stale marker can't leak into a fresh run."""
+    d = os.environ.get("PENTRAIN_TRAJ_DIR", "./traj")
+    if not d:
+        return 0.0
+    p = Path(d) / f"session-{session_id}.jsonl"
+    try:
+        with p.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 200_000))
+            tail = fh.read()
+    except OSError:
+        return 0.0
+    for line in reversed(tail.splitlines()):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("kind") == "effort" and rec.get("deep"):
+            return float(rec.get("ts") or 0.0)
+    return 0.0
+
+
 def rotate(session_id: int) -> None:
     """Soft-reset boundary: rename session-{sid}.jsonl aside so the new
     attempt starts a clean file. The old run's record survives for post-hoc

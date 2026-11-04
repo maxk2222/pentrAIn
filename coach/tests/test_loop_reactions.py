@@ -2817,11 +2817,30 @@ async def test_deep_effort_spent_once_per_stall_window():
     assert coach.llm.kwargs[-1].get("reasoning_effort") == "medium"
     coach.state.last_nudge_ts = 0
     coach.state.progress()                              # new evidence
-    # the NEXT stall window (post-spend progress now long ago → stage
-    # climbs back to >=2) re-earns the one deep turn
+    # the NEXT stall window re-earns the one deep turn — the marker is a
+    # wall-clock ts, so a new window means progress that POSTDATES the
+    # spend (rewinding last_progress_ts alone can't fake that anymore)
+    coach._deep_spent_ts = time.time() - 10000
     coach.state.last_progress_ts = time.time() - 5000
     await coach._reflect_tick(10)
     assert coach.llm.kwargs[-1].get("reasoning_effort") == "high"
+
+
+async def test_deep_spent_marker_survives_restart(tmp_path, monkeypatch):
+    """A redeploy must not buy a fresh 600s deep cancel: the spend marker is
+    persisted to the session's traj file and restored on attach (s1 live:
+    every coach rebuild re-burned one deep turn at stage>=2)."""
+    from coach import traj as trajmod
+    monkeypatch.setenv("PENTRAIN_TRAJ_DIR", str(tmp_path))
+    t = trajmod.for_session(7)
+    t.record(kind="turn", actions=[])
+    t.record(kind="effort", deep=True)
+    t.record(kind="turn", actions=[])     # later events don't shadow it
+    t.close()
+    ts = trajmod.last_deep_ts(7)
+    assert ts > 0
+    # a different session's file is not consulted
+    assert trajmod.last_deep_ts(8) == 0.0
 
 
 class QueueLlm(FakeLlm):

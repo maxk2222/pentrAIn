@@ -75,6 +75,7 @@ class SessionOut(BaseModel):
     kali_internet: bool = False
     kali_wan_ip: str | None = None
     subagents_enabled: bool = False
+    scope: dict | None = None          # engagement ROE snapshot if locked
     created_at: str | None
     ready_at: str | None
     error: str | None = None
@@ -82,6 +83,17 @@ class SessionOut(BaseModel):
 
 class InternetIn(BaseModel):
     enabled: bool
+
+
+class ScopeIn(BaseModel):
+    """Engagement scope declaration — POSTed to lock the session onto an
+    explicit whitelist. `authorization` is the written ROE line and is
+    required: the coach treats its absence as 'no scope object'."""
+    authorization: str = Field(min_length=8, max_length=300)
+    nets: list[str] = Field(default_factory=list)
+    hosts: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    ports: list[int] = Field(default_factory=list)
 
 
 class AutonomyIn(BaseModel):

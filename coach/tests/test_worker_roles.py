@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from coach.loop import _Worker, SessionCoach
+from coach.loop import SessionCoach, _Worker
 from coach.prompts import render_worker_prompt
-from coach.tools import WORKER_ROLES, WORKER_TOOL_NAMES, worker_tools
+from coach.tools import WORKER_TOOL_NAMES, worker_tools
 
 
 def test_verify_role_drops_bookkeeping_tools():
@@ -98,7 +97,7 @@ async def test_spawn_agent_carries_role_and_done_when():
 
 
 async def test_spawn_agent_unknown_role_falls_back():
-    coach, c = _coach()
+    coach, _c = _coach()
     await coach.start()
     coach.llm = type("L", (), {"chat": staticmethod(
         lambda *a, **k: asyncio.sleep(60)), "model": "fake"})()
@@ -134,7 +133,7 @@ def test_worker_prompt_without_role_stays_generic():
 async def test_ledger_delegate_hint_fires_once():
     """Parent scans an ip already tracked as untested while a worker slot
     is free → one advisory nudging spawn_agent, never a deny."""
-    coach, c = _coach()
+    coach, _c = _coach()
     await coach.start()
     coach.state.subagents_enabled = True
     coach.state.coverage.record("192.168.3.55:80", "web", "untested")
@@ -150,7 +149,7 @@ async def test_ledger_delegate_hint_fires_once():
 
 
 async def test_no_hint_when_surface_settled():
-    coach, c = _coach()
+    coach, _c = _coach()
     await coach.start()
     coach.state.subagents_enabled = True
     coach.state.coverage.record("192.168.3.55:80", "web", "confirmed")

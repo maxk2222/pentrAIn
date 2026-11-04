@@ -90,15 +90,26 @@ TOOLS: list[dict] = [
         {"reason": _str("short private note")}, ["reason"]),
     _fn("update_plan",
         "Replace your working plan (max 10 steps) — your roadmap across "
-        "restarts and context trims. Update on every phase change: mark "
-        "steps done once proven, keep exactly one 'doing'. Persisted; "
-        "bookkeeping only — costs no action budget.",
+        "restarts and context trims, and the task graph workers bind to. "
+        "Update on every phase change: mark steps done once proven, keep "
+        "exactly one 'doing'. Optional structure per step: id (bind "
+        "spawn_agent via task_id), ph (phase: recon|enum|web|creds|"
+        "foothold|privesc|pivot|loot|verify|report), deps (ids that must "
+        "finish first), dw (done_when). Persisted; bookkeeping only — "
+        "costs no action budget.",
         {"items": {"type": "array",
                    "items": {"type": "object",
                              "properties": {
                                  "t": _str("step, <=110 chars"),
                                  "s": {"type": "string",
-                                       "enum": ["todo", "doing", "done"]}},
+                                       "enum": ["todo", "doing", "done",
+                                                "blocked", "abandoned"]},
+                                 "id": _str("short task id, e.g. p2"),
+                                 "ph": _str("phase tag"),
+                                 "deps": {"type": "array",
+                                          "items": {"type": "string"}},
+                                 "ow": _str("owner: main|w1..wN"),
+                                 "dw": _str("done_when criterion")},
                              "required": ["t"]}}},
         ["items"]),
     _fn("record_coverage",
@@ -147,6 +158,34 @@ TOOLS: list[dict] = [
     _fn("list_notes",
         "List the shared notes pad — cross-agent curated context written "
         "by you or merged from worker reports.", {}, []),
+    _fn("record_finding",
+        "Record or update ONE typed finding — a vulnerability, exposure or "
+        "weakness you identified. status=candidate is a suspicion that "
+        "still needs proof; status=confirmed requires concrete evidence "
+        "(a claim without it auto-demotes); status=rejected marks a ruled-"
+        "out lead. Pass 'id' to update an existing row (the validation "
+        "flow); without it title+host dedup applies. Findings are what "
+        "build_report renders — unrecorded evidence never reaches the "
+        "report. Costs no action budget.",
+        {"id": _str("existing finding id (v1, v2…) to update"),
+         "title": _str("short finding name, e.g. 'SMB guest share readable'"),
+         "sev": {"type": "string",
+                 "enum": ["info", "low", "medium", "high", "critical"]},
+         "status": {"type": "string",
+                    "enum": ["candidate", "confirmed", "rejected"]},
+         "host": _str("affected host/surface, e.g. 10.0.0.5 or app01:443"),
+         "evidence": _str("concrete proof — command/response detail, "
+                          "<=200 chars"),
+         "next": _str("recommended next step or remediation, <=120 chars")},
+        ["title"]),
+    _fn("build_report",
+        "Assemble the engagement report draft from recorded findings, "
+        "coverage ledger and host data — the result is markdown you then "
+        "write to the report path (write_file) for report-checking flags. "
+        "Confirmed findings lead; candidates and ruled-out items are listed "
+        "separately so unproven claims never read as results.",
+        {"title": _str("report title, e.g. 'LAN Assessment Report'")},
+        []),
     _fn("wait",
         "Wait N seconds without acting — for time-dependent state changes "
         "(cron jobs, service startup, lockout/cooldown timers). Touches "
@@ -172,7 +211,10 @@ TOOLS: list[dict] = [
                                  "operating contract"},
          "done_when": _str("acceptance criterion the report is measured "
                             "against, e.g. 'ports+versions for all live "
-                            "hosts' — <=140 chars")},
+                            "hosts' — <=140 chars"),
+         "task_id": _str("plan task id to bind (from update_plan items "
+                          "with id) — the worker's finish marks it "
+                          "done/blocked; max 3 attempts per task")},
         ["task"]),
     _fn("collect_agent",
         "Read a worker's report — waits up to ~40s if it is still running, "
@@ -212,7 +254,7 @@ _LEVEL_TOOLS = {
         "wait", "update_plan", "lookup_guide", "record_lesson",
         "web_search", "web_fetch", "none",
         "record_coverage", "update_coverage", "list_coverage",
-        "create_note", "list_notes"},
+        "create_note", "list_notes", "record_finding", "build_report"},
 }
 
 

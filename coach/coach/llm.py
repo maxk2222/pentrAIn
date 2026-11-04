@@ -27,7 +27,7 @@ ALLOWED_ACTIONS = {
     "update_plan", "lookup_guide", "record_lesson",
     "web_search", "web_fetch",
     "record_coverage", "update_coverage", "list_coverage",
-    "create_note", "list_notes",
+    "create_note", "list_notes", "record_finding", "build_report",
 }
 
 

@@ -6,36 +6,19 @@ import time
 from dataclasses import dataclass, field
 
 from .ledger import CoverageLedger, NotesPad
+from .ptg import normalize_tasks
 
 PLAN_MAX_ITEMS = 10
-PLAN_TEXT_MAX = 110
-_STATUS = {"done": "done", "complete": "done", "completed": "done",
-           "x": "done", "finished": "done",
-           "doing": "doing", "current": "doing", "wip": "doing",
-           "active": "doing", "in_progress": "doing"}
 
 
 def normalize_plan(items) -> list[dict]:
-    """LLM-supplied plan → bounded [{"t","s"}]. Bare strings count as todo;
-    unknown statuses fall back to todo. Atomic full-replace input — the
-    caller replaces the whole plan each call so a truncated rewrite can't
-    leave zombie steps behind."""
-    out: list[dict] = []
-    for it in items or []:
-        if len(out) >= PLAN_MAX_ITEMS:
-            break
-        if isinstance(it, str):
-            t, s = it, "todo"
-        elif isinstance(it, dict):
-            t, s = str(it.get("t") or it.get("text") or it.get("step") or ""), \
-                _STATUS.get(str(it.get("s") or it.get("status") or "")
-                            .strip().lower(), "todo")
-        else:
-            continue
-        t = t.strip()[:PLAN_TEXT_MAX]
-        if t:
-            out.append({"t": t, "s": s})
-    return out
+    """LLM-supplied plan → bounded [{"t","s", +optional PTG keys}]. Bare
+    strings count as todo; unknown statuses fall back to todo. Atomic
+    full-replace input — the caller replaces the whole plan each call so a
+    truncated rewrite can't leave zombie steps behind. Structured items
+    (id/ph/deps/ow/dw/at) are validated by ptg.normalize_tasks — the plan
+    IS the task graph, capped at PLAN_MAX_ITEMS for context budget."""
+    return normalize_tasks(items)[:PLAN_MAX_ITEMS]
 
 
 @dataclass

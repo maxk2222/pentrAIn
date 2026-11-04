@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import structlog
 
@@ -248,10 +249,11 @@ class FactsDB:
         self.flags: dict[str, FlagFact] = {}
         self.ips_seen: set[str] = set()
         self.findings: list[str] = []     # bounded misc evidence (enum users)
-        # typed vulnerability records (worker reports: "vulns" key) —
-        # {title,sev,host,status,evidence,owner}; the string findings above
-        # stay the lightweight catch-all, these are report-grade rows
+        # typed vulnerability records (worker "vulns" key + record_finding
+        # tool): {id,title,sev,host,status,evidence,next,owner} — the string
+        # findings stay the lightweight catch-all, these are report-grade
         self.vulns: list[dict] = []
+        self._vuln_seq = 0
         self.denials: list[str] = []      # bounded dead ends (denied:svc@host)
         self.caps: list[str] = []         # proven primitives (root-exec via …)
         self.lessons: list[str] = []      # agent-authored lessons (record_lesson)
@@ -578,25 +580,165 @@ class FactsDB:
         del self.findings[:-12]
         n_vulns = 0
         for v in (parsed.get("vulns") or [])[:8]:
-            if not isinstance(v, dict) or not v.get("title"):
-                continue
-            rec = {"title": str(v["title"])[:100],
-                   "sev": str(v.get("sev") or "info")[:16],
-                   "host": str(v.get("host") or "")[:60],
-                   "status": str(v.get("status") or "hypothesis")[:16],
-                   "evidence": str(v.get("evidence") or "")[:200],
-                   "owner": worker_id}
-            # dedup on title+host — a re-report upgrades status/evidence
-            for old in self.vulns:
-                if old["title"] == rec["title"] and old["host"] == rec["host"]:
-                    old.update({k: v for k, v in rec.items() if v})
-                    break
-            else:
-                self.vulns.append(rec)
+            if self._merge_vuln(v, worker_id):
                 n_vulns += 1
-            del self.vulns[:-24]
         return {"creds": n_creds, "ports": n_ports, "findings": n_findings,
                 "vulns": n_vulns}
+
+    # ---------- typed findings (vulns) ----------
+
+    _VULN_SEV: ClassVar = {"info", "low", "medium", "high", "critical"}
+    _VULN_STATUS: ClassVar = {
+        # candidate: a suspicion/signature — needs proof before it counts
+        "hypothesis": "candidate", "candidate": "candidate",
+        "suspected": "candidate", "possible": "candidate",
+        # confirmed: reproduced/validated — the only report-grade state
+        "confirmed": "confirmed", "validated": "confirmed",
+        "proven": "confirmed", "verified": "confirmed",
+        # rejected: disproven — kept so the dead end isn't re-chased
+        "rejected": "rejected", "false-positive": "rejected",
+        "false_positive": "rejected", "dead": "rejected",
+    }
+
+    def _norm_vuln_status(self, raw: str) -> str:
+        return self._VULN_STATUS.get(str(raw or "").strip().lower(),
+                                     "candidate")
+
+    def _merge_vuln(self, v: dict, owner: str) -> bool:
+        """Create or update one typed finding. Dedup key is title+host —
+        a re-report upgrades status/evidence (validation flow); a 'confirmed'
+        row without concrete evidence is auto-demoted to candidate (the
+        XBOW rule: proof is what separates a finding from a guess)."""
+        if not isinstance(v, dict) or not v.get("title"):
+            return False
+        rec = {"title": str(v["title"])[:100],
+               "sev": str(v.get("sev") or "info").lower()[:16],
+               "host": str(v.get("host") or "")[:60],
+               "status": self._norm_vuln_status(v.get("status") or ""),
+               "evidence": str(v.get("evidence") or "")[:200],
+               "next": str(v.get("next") or "")[:120],
+               "owner": str(v.get("owner") or owner)[:12]}
+        if rec["sev"] not in self._VULN_SEV:
+            rec["sev"] = "info"
+        if rec["status"] == "confirmed" and len(rec["evidence"]) < 12:
+            rec["status"] = "candidate"      # claim without proof demotes
+        old = next((o for o in self.vulns
+                    if o["title"] == rec["title"]
+                    and o["host"] == rec["host"]), None)
+        if old is not None:
+            _sev_ord = {s: i for i, s in enumerate(
+                ["info", "low", "medium", "high", "critical"])}
+            new_sev = rec.pop("sev")
+            old.update({k: v for k, v in rec.items() if v != ""})
+            # dedup-merge keeps the STRONGER severity — a re-report naming
+            # no sev must not silently downgrade (intentional downgrades
+            # go through the id-update path)
+            if _sev_ord.get(new_sev, 0) > _sev_ord.get(old["sev"], 0):
+                old["sev"] = new_sev
+            return False                     # merged into an existing row
+        self._vuln_seq += 1
+        rec["id"] = f"v{self._vuln_seq}"
+        self.vulns.append(rec)
+        del self.vulns[:-24]
+        return True
+
+    def apply_finding(self, args: dict, owner: str = "main") -> dict | None:
+        """record_finding tool — id → update that row; no id → dedup on
+        title+host then create. Returns the row so the tool result can
+        name the stable id back to the model."""
+        args = args or {}
+        vid = str(args.get("id") or "").strip()
+        if vid:
+            row = next((v for v in self.vulns if v["id"] == vid), None)
+            if row is None:
+                return None
+            st = self._norm_vuln_status(args.get("status") or row["status"])
+            ev = str(args.get("evidence") or row["evidence"])[:200]
+            if st == "confirmed" and len(ev) < 12:
+                st = "candidate"
+            row.update({
+                "status": st, "evidence": ev,
+                "sev": (str(args.get("sev") or row["sev"]).lower()[:16]
+                        if str(args.get("sev") or "").lower()[:16]
+                        in self._VULN_SEV else row["sev"]),
+                "next": str(args.get("next") or row["next"])[:120],
+                "title": str(args.get("title") or row["title"])[:100],
+                "host": str(args.get("host") or row["host"])[:60]})
+            return row
+        args = dict(args)
+        args.pop("id", None)
+        args.setdefault("owner", owner)
+        before = len(self.vulns)
+        self._merge_vuln(args, owner)
+        if len(self.vulns) > before:
+            return self.vulns[-1]
+        return next((o for o in self.vulns
+                     if o["title"] == str(args.get("title") or "")[:100]
+                     and o["host"] == str(args.get("host") or "")[:60]), None)
+
+    def report(self, scope: dict | None = None,
+               coverage_rows: dict | None = None,
+               title: str = "Penetration Test Report") -> str:
+        """Deterministic engagement-report draft — findings grouped by
+        validation state so the deliverable can't silently ship candidates
+        as confirmed. Bounded rows (24 vulns / 16 hosts / 16 creds)."""
+        L = [f"# {title}", ""]
+        if scope and scope.get("locked"):
+            L += [f"**Authorized scope** ({scope.get('authorized_by', '?')}): "
+                  f"{', '.join(scope.get('nets') or [])}"
+                  + (f" | hosts: {', '.join(scope.get('hosts') or [])}"
+                     if scope.get("hosts") else ""),
+                  ""]
+        conf = [v for v in self.vulns if v["status"] == "confirmed"]
+        cand = [v for v in self.vulns if v["status"] == "candidate"]
+        L += ["## Findings", ""]
+        if conf:
+            for v in conf:
+                L.append(f"### [{v['id']}] {v['title']} — {v['sev'].upper()}"
+                         + (f" on {v['host']}" if v["host"] else ""))
+                if v["evidence"]:
+                    L.append(f"- Evidence: {v['evidence']}")
+                if v["next"]:
+                    L.append(f"- Next/remediation: {v['next']}")
+                L.append("")
+        else:
+            L += ["No confirmed findings.", ""]
+        if cand:
+            L += ["## Candidates (unvalidated)", ""]
+            L += [f"- [{v['id']}] {v['title']}"
+                  + (f" on {v['host']}" if v["host"] else "")
+                  + (f" — {v['evidence'][:80]}" if v["evidence"] else "")
+                  for v in cand]
+            L.append("")
+        rej = [v for v in self.vulns if v["status"] == "rejected"]
+        if rej:
+            L += ["## Tested & ruled out", ""]
+            L += [f"- {v['title']}" + (f" on {v['host']}" if v["host"] else "")
+                  for v in rej]
+            L.append("")
+        if coverage_rows:
+            open_rows = [r for r in coverage_rows.values()
+                         if r.get("outcome") in ("untested", "testing")]
+            L += [(f"## Coverage — {len(coverage_rows)} surfaces, "
+                   f"{len(open_rows)} still open"), ""]
+        if self.hosts:
+            L += ["## Hosts & services", ""]
+            for ip, h in list(self.hosts.items())[:16]:
+                name = min(h.names) if h.names else ""
+                ports = ", ".join(f"{p}/{s}" for p, s in
+                                  sorted(h.ports.items())[:12])
+                L.append(f"- {ip}"
+                         + (f" ({name})" if name else "")
+                         + (f": {ports}" if ports else ""))
+            L.append("")
+        if self.creds:
+            L += ["## Access obtained", ""]
+            L += [f"- {c.user}:{c.secret} "
+                  + (f"→ {', '.join(sorted(c.valid_on))}"
+                     if c.valid_on else "")
+                  for c in self.creds[:16]]
+            L.append("")
+        return "\n".join(L)
 
     # ---------- flags (grounding evidence) ----------
 
@@ -711,7 +853,8 @@ class FactsDB:
             kept = self.vulns[-2:] if compact else self.vulns[-4:]
             lines.append(
                 "  vulns: " + " | ".join(
-                    f"{v['title']}@{v['host'] or '?'}({v['sev']},{v['status']})"
+                    f"{v['id']}:{v['title']}@{v['host'] or '?'}"
+                    f"({v['sev']},{v['status']})"
                     for v in kept))
         out = "\n".join(lines)
         if len(out) > max_chars and not compact:

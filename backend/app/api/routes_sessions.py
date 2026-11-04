@@ -1,4 +1,6 @@
 """Session lifecycle + gameplay (flags, hints) + leaderboards."""
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +20,7 @@ from ..schemas import (
     InternetIn,
     LeaderboardOut,
     ResetIn,
+    ScopeIn,
     SessionFlagsOut,
     SessionOut,
     SessionStartIn,
@@ -27,6 +30,8 @@ from ..services import coach_bridge as coach_bridge_svc
 from ..services import console as console_svc
 from ..services import hoststats as hoststats_svc
 from ..services import kali_net as kali_net_svc
+from ..services import report as report_svc
+from ..services import scope as scope_svc
 from ..services import scoring as scoring_svc
 from ..services import sessions as sessions_svc
 from ..services import settings as settings_svc
@@ -37,11 +42,15 @@ router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(get_c
 
 
 def _out(s: Session) -> SessionOut:
+    try:
+        scope = json.loads(s.scope_json) if s.scope_json else None
+    except (TypeError, ValueError):
+        scope = None
     return SessionOut(
         id=s.id, quest_id=s.quest_id, state=s.state, kali_vmid=s.kali_vmid,
         autonomy_level=s.autonomy_level, coach_enabled=s.coach_enabled,
         kali_internet=bool(s.kali_internet), kali_wan_ip=s.kali_wan_ip,
-        subagents_enabled=bool(s.subagents_enabled),
+        subagents_enabled=bool(s.subagents_enabled), scope=scope,
         created_at=s.created_at.isoformat() if s.created_at else None,
         ready_at=s.ready_at.isoformat() if s.ready_at else None,
         error=s.error)
@@ -368,6 +377,68 @@ async def toggle_internet(session_id: int, body: InternetIn,
         return {"enabled": False}
     except Exception as e:
         raise HTTPException(422, str(e)[:300]) from e
+
+
+@router.post("/sessions/{session_id}/scope")
+async def set_scope(session_id: int, body: ScopeIn,
+                    db: AsyncSession = Depends(get_db)):
+    """Lock the session onto an authorized engagement whitelist (ROE).
+    Replaces any existing scope — the normalized snapshot (resolved DNS
+    pinned to /32 nets) is what the coach enforces as a HARD deny; the
+    written authorization line is the audit trail. A running coach picks
+    the new scope on its next attach/restart — restart it to apply."""
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    try:
+        scope = await scope_svc.normalize(body)
+    except scope_svc.ScopeError as e:
+        raise HTTPException(422, str(e)) from e
+    s.scope_json = json.dumps(scope)
+    await db.commit()
+    return {"scope": scope}
+
+
+@router.get("/sessions/{session_id}/scope")
+async def get_scope(session_id: int, db: AsyncSession = Depends(get_db)):
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    return {"scope": json.loads(s.scope_json) if s.scope_json else None}
+
+
+@router.delete("/sessions/{session_id}/scope")
+async def clear_scope(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Unlock — remove the engagement whitelist entirely (operator action;
+    the coach falls back to the historical LAN/range guard semantics)."""
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    s.scope_json = None
+    await db.commit()
+    return {"scope": None}
+
+
+@router.get("/sessions/{session_id}/findings")
+async def get_findings(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Typed findings the agent recorded (record_finding) — replayed from
+    the action log, so the panel works even while the coach is down."""
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    return {"findings": await report_svc.findings(db, session_id)}
+
+
+@router.get("/sessions/{session_id}/report")
+async def get_report(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Assembled engagement report (markdown) — scope, confirmed/candidate/
+    rejected findings and the coverage ledger, replayed deterministically."""
+    s = await db.get(Session, session_id)
+    if not s:
+        raise HTTPException(404, "session not found")
+    finds = await report_svc.findings(db, session_id)
+    cov = await report_svc.coverage(db, session_id)
+    return {"markdown": report_svc.report_md(s, finds, cov)}
 
 
 @router.post("/sessions/{session_id}/actions/{action_id}/confirm")

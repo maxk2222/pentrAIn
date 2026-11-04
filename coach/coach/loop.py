@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import httpx
 import structlog
 
-from . import guides, percept
+from . import guides, percept, ptg
 from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
@@ -81,8 +81,7 @@ from .prompts import (
     system_prompt,
 )
 from .state import CheckpointMatcher, SessionState, normalize_plan
-from .tools import (WORKER_ROLES, WORKER_TOOL_NAMES, tools_for_level,
-                    trim_history, wire_history, worker_tools)
+from .tools import WORKER_ROLES, WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
 from .websearch import WebSearch
 
 log = structlog.get_logger(__name__)
@@ -129,6 +128,7 @@ class _Worker:
     # web/creds/svc/privesc/pivot/verify) and what its report must carry
     role: str = "general"
     done_when: str = ""         # acceptance criterion from spawn_agent
+    task_id: str = ""           # PTG binding — finish marks the task
     wrap_nudged: bool = False   # budget-low wrap-up already injected
     last_out: str = ""          # newest tool result — on kill, its tail
     # becomes the report so partial findings merge instead of dying
@@ -205,6 +205,11 @@ class SessionCoach:
         # the channel the model always reads
         self._plan_stale_ping = 0.0
         self._allowed_nets: list[ipaddress.IPv4Network] = []  # target /24s
+        # engagement scope (ctx["scope"]) — populated in start(); locked
+        # means every IP/host literal must sit inside the whitelist
+        self._scope_locked = False
+        self._scope_hosts: set[str] = set()
+        self._scope_ports: set[int] = set()
         self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
         # per-worker in-turn reasoning — attached once to that worker's next
         # posted message (pop-once), mirroring the parent's _turn_reasoning
@@ -282,10 +287,25 @@ class SessionCoach:
         self.state.flags_solved = {f["key"] for f in self.ctx.get("flags", []) if f.get("solved")}
         self.state.exec_count = int(self.ctx.get("exec_count", 0))
         self.matcher = CheckpointMatcher(self.ctx.get("quest", {}).get("checkpoints", []))
+        # engagement scope object (sessions.scope_json via coach_bridge —
+        # ctx["scope"]): locked=True means a HARD whitelist — every IP
+        # literal in a command (public ones included) must sit inside the
+        # authorized nets, and nothing learned from tool output widens it.
+        # Unlocked (default): the historical range behavior — target /24s +
+        # pivot-safe ips_seen relaxation.
+        scope_obj = self.ctx.get("scope") or {}
+        self._scope_locked = bool(scope_obj.get("locked"))
+        self._scope_hosts = {str(h).lower().strip(".")
+                             for h in (scope_obj.get("hosts") or [])}
+        self._scope_ports = {int(p) for p in (scope_obj.get("ports") or [])
+                             if str(p).isdigit()}
         # known-good target space for the hallucinated-IP guard: each target's
         # /24 (or explicit CIDR — home-lab carries "lan-scope=192.168.3.131/24"),
         # plus every IP ever seen in tool output (pivot-safe — a host the model
-        # discovers in output becomes reachable, one it invents does not)
+        # discovers in output becomes reachable, one it invents does not).
+        # In scope-locked mode targets are NOT auto-seeded — the operator's
+        # whitelist is the only authority (a pack listing an out-of-scope
+        # target must fail, not widen authorization).
         for t in (self.ctx.get("quest", {}).get("targets") or []):
             ip = (t.get("ip") or "").strip()
             if not ip:
@@ -293,7 +313,7 @@ class SessionCoach:
             try:
                 net = (ipaddress.ip_network(ip, strict=False) if "/" in ip
                        else ipaddress.ip_network(f"{ip}/24", strict=False))
-                if net not in self._allowed_nets:
+                if not self._scope_locked and net not in self._allowed_nets:
                     self._allowed_nets.append(net)
                 self.facts.ips_seen.add(ip.split("/")[0])
                 self.facts.add_host(ip.split("/")[0], t.get("name") or "")
@@ -304,7 +324,7 @@ class SessionCoach:
         # a prompt line. Without this seed the guard silently disables itself
         # on quests with no lab targets.
         scope = (self.ctx.get("quest", {}).get("scope") or "").strip()
-        if scope:
+        if scope and not self._scope_locked:
             try:
                 net = ipaddress.ip_network(scope, strict=False)
                 if net not in self._allowed_nets:
@@ -312,6 +332,14 @@ class SessionCoach:
                 self.facts.ips_seen.add(scope.split("/")[0])
             except ValueError:
                 pass
+        if self._scope_locked:
+            for c in (scope_obj.get("nets") or []):
+                try:
+                    net = ipaddress.ip_network(str(c), strict=False)
+                except ValueError:
+                    continue
+                if net not in self._allowed_nets:
+                    self._allowed_nets.append(net)
         esc = self.ctx.get("quest", {}).get("escalation", {})
         coach_cfg = self.cfg.get("coach", {})
         self.policy = Policy(
@@ -505,6 +533,9 @@ class SessionCoach:
                 tool = str(row.get("tool") or "")
                 self.state.coverage.apply(tool, args)
                 self.state.pad.apply(tool, args)
+                if tool == "record_finding":
+                    self.facts.apply_finding(
+                        args, owner=str(args.get("agent") or "main"))
         # orphaned workers: spawned pre-restart, killed with the process —
         # their command outputs reseeded via coach_outputs but the TASK died.
         # A note is all the parent needs to not re-do (or misplace) their work
@@ -525,6 +556,9 @@ class SessionCoach:
         if self.state.last_activity_ts <= 0:
             self.state.last_activity_ts = self.state.last_progress_ts
         self._traj = _traj.for_session(self.sid)
+        # deep-effort spend marker survives the restart via the traj file —
+        # without this every redeploy burns one fresh 600s deep cancel
+        self._deep_spent_ts = _traj.last_deep_ts(self.sid)
         self._ready.set()
         # clear any stale roster a previous coach process left sticky — its
         # worker tasks died with it, the UI must not ghost them as running
@@ -913,7 +947,11 @@ class SessionCoach:
             effort = (cc.get("effort_deep")
                       or self.cfg.get("llm", {}).get("reasoning_effort")
                       or "high")
-            self._deep_spent_ts = self.state.last_progress_ts
+            # wall-clock, not last_progress_ts: the traj file survives
+            # restarts, so a post-restart attach can restore the marker —
+            # otherwise every redeploy buys one wasted 600s deep cancel
+            self._deep_spent_ts = time.time()
+            self._traj.record(kind="effort", deep=True)
         else:
             effort = routine_eff
         try:
@@ -1330,8 +1368,11 @@ class SessionCoach:
         self.facts.ips_seen.update(
             ip for ip in self._IP_RE.findall(out or "") if ip not in cmd_ips)
         # discovered subnets (routing table, ifconfig on a compromised host)
-        # authorize the whole net — the multi-segment pivot case
-        for cidr in self._CIDR_RE.findall(out or ""):
+        # authorize the whole net — the multi-segment pivot case.
+        # scope_locked: NOTHING learned from output widens authorization —
+        # a discovered CIDR is evidence, not permission.
+        for cidr in (self._CIDR_RE.findall(out or "")
+                     if not self._scope_locked else ()):
             try:
                 net = ipaddress.ip_network(cidr, strict=False)
             except ValueError:
@@ -1402,7 +1443,13 @@ class SessionCoach:
         seen in earlier output. Public IPs pass (internet uplink); observed
         IPs pass (pivot/discovered hosts); invented ones are denied — they
         hang every connect (session 31: model merged kali's 10.1.10.5 into
-        10.42.0.5 and burned ~10 turns on it)."""
+        10.42.0.5 and burned ~10 turns on it).
+
+        scope_locked flips this to a HARD whitelist: every IP literal —
+        public included — must sit inside the authorized nets. ips_seen no
+        longer relaxes anything: output is evidence, not permission.
+        Loopback/link-local/multicast/reserved literals stay free (127.x
+        localhosts, 169.254.x noise, netmask-looking 255.x tokens)."""
         if not self._allowed_nets:
             return None                     # no baseline — can't judge foreign
         for lit in self._IP_RE.findall(cmd):
@@ -1410,13 +1457,82 @@ class SessionCoach:
                 ip = ipaddress.ip_address(lit)
             except ValueError:
                 continue
-            if ip.is_loopback or not (ip.is_private or ip.is_link_local):
+            if (ip.is_loopback or ip.is_link_local or ip.is_multicast
+                    or ip.is_reserved or ip.is_unspecified):
+                continue
+            if self._scope_locked:
+                if any(ip in n for n in self._allowed_nets):
+                    continue
+                return lit
+            if not ip.is_private:
                 continue
             if lit in self.facts.ips_seen:
                 continue
             if any(ip in n for n in self._allowed_nets):
                 continue
             return lit
+        return None
+
+    _URL_RE = re.compile(r"(?:https?|ftp)://[^\s'\"<>]+", re.IGNORECASE)
+    _USER_AT = re.compile(r"\b[\w.-]+@((?:[a-z0-9-]+\.)+[a-z]{2,})\b",
+                          re.IGNORECASE)
+    # bare-domain check restricted to classic gTLDs — script extensions
+    # (.py/.sh/.pl/.md/.io/.dev/...) must never read as hosts
+    _BARE_DOM = re.compile(
+        r"\b((?:[a-z0-9-]+\.)+(?:com|net|org|edu|gov|int|mil|biz|info))\b",
+        re.IGNORECASE)
+
+    def _host_allowed(self, host: str) -> bool:
+        """Hostname vs scope whitelist — exact or subdomain of a scope host."""
+        h = host.lower().strip(".")
+        return any(h == s or h.endswith("." + s) for s in self._scope_hosts)
+
+    def _foreign_host(self, cmd: str) -> str | None:
+        """scope_locked only: URL authorities, user@domain targets and bare
+        classic-gTLD tokens must be authorized — hostnames are checked
+        against scope.hosts (subdomains included), IP authorities against
+        the nets, and a URL's explicit port against scope.ports when set."""
+        def _check(host: str, port: int | None) -> str | None:
+            host = host.strip()
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                ip = None
+            if ip is not None:
+                if (ip.is_loopback or ip.is_link_local or ip.is_multicast
+                        or ip.is_reserved):
+                    return None
+                if not any(ip in n for n in self._allowed_nets):
+                    return host
+            elif not self._host_allowed(host):
+                return host
+            # authorized target — an explicit URL port still honors the
+            # ROE port whitelist when the operator declared one
+            if (port is not None and self._scope_ports
+                    and port not in self._scope_ports):
+                return f"{host}:{port}"
+            return None
+
+        for m in self._URL_RE.finditer(cmd):
+            auth = m.group(0).split("://", 1)[1].split("/", 1)[0]
+            auth = auth.rsplit("@", 1)[-1]           # strip userinfo
+            if auth.startswith("["):                  # [v6]:port
+                host, _, ps = auth[1:].partition("]")
+                ps = ps.lstrip(":")
+            else:
+                host, _, ps = auth.partition(":")
+            try:
+                port = int(ps) if ps else None
+            except ValueError:
+                port = None
+            bad = _check(host, port)
+            if bad:
+                return bad
+        for rex in (self._USER_AT, self._BARE_DOM):
+            for host in rex.findall(cmd):
+                bad = _check(host, None)
+                if bad:
+                    return bad
         return None
 
     def _denial_match(self, cmd: str) -> str | None:
@@ -2036,14 +2152,31 @@ class SessionCoach:
                                 f"connect to a discovered service, use "
                                 f"credentials you found, or submit a flag.")
                     bad_ip = self._foreign_ip(cmd)
-                    if bad_ip:
+                    bad_host = (self._foreign_host(cmd)
+                                if self._scope_locked else None)
+                    if bad_ip or bad_host:
                         known = [f"{t.get('name')}={t.get('ip')}"
                                  for t in (self.ctx.get("quest", {}).get(
                                      "targets") or []) if t.get("ip")]
-                        await log.ainfo("foreign ip denied", session=self.sid,
-                                        ip=bad_ip, cmd=cmd[:120])
+                        bad = bad_ip or bad_host
+                        await log.ainfo("scope denied", session=self.sid,
+                                        target=bad, cmd=cmd[:120],
+                                        locked=self._scope_locked)
+                        if self._scope_locked:
+                            nets = ", ".join(str(n) for n in
+                                             self._allowed_nets[:8])
+                            return spoke, (
+                                f"denied: {bad} is outside the AUTHORIZED "
+                                f"engagement scope — hard ROE boundary, do "
+                                f"NOT retry with variations. In scope: "
+                                f"nets=[{nets}] "
+                                f"hosts=[{', '.join(sorted(self._scope_hosts)[:8]) or '-'}]"
+                                f"{f' ports={sorted(self._scope_ports)}' if self._scope_ports else ''}. "
+                                "Only the operator can widen scope "
+                                "(engagement settings) — pick an in-scope "
+                                "target instead.")
                         return spoke, (
-                            f"denied: {bad_ip} is no known target — connects "
+                            f"denied: {bad} is no known target — connects "
                             f"to it hang and eat the pane. KNOWN TARGETS: "
                             f"{'; '.join(known) or '(resolve names via getent)'}. "
                             f"A host is only allowed once its IP appears in "
@@ -2254,6 +2387,30 @@ class SessionCoach:
                                             "instead of scanning it "
                                             "serially here.")
                                         break
+                        # settled-surface advisory: an exec against a
+                        # coverage row that already closed (confirmed /
+                        # tested_clean) re-tests settled work — the ledger
+                        # is the closure discipline, not the pane
+                        for ip in self._IP_RE.findall(cmd):
+                            settled = next(
+                                (r for k, r in
+                                 self.state.coverage.rows.items()
+                                 if (k == ip or k.startswith(f"{ip}:"))
+                                 and r["outcome"] in ("confirmed",
+                                                      "tested_clean")),
+                                None)
+                            skey = f"settled:{ip}:{window or 'main'}"
+                            if (settled and skey not in self._dup_noted
+                                    and facts_mod.RECON_RE.search(cmd)):
+                                self._dup_noted.add(skey)
+                                result += (
+                                    f"\nNOTE: coverage for {ip} closed as "
+                                    f"{settled['outcome']}"
+                                    f"{' — ' + settled['evidence'][:60] if settled['evidence'] else ''}"
+                                    " — re-testing re-proves settled "
+                                    "work; spend the action on an open "
+                                    "surface (list_coverage).")
+                                break
                     elif code is None:
                         err_hint = res.get("err") or ""
                         if err_hint and err_hint not in out:
@@ -2269,8 +2426,9 @@ class SessionCoach:
                             result += (
                                 "\n[INFRA: exec channel error — the command "
                                 "never ran. Likely qga/VM/backend restart. "
-                                "Wait ~30-45s and probe with `echo ok`; "
-                                "don't retype payloads into a dead channel.]")
+                                "Wait ~30-45s and probe with `echo ok`, then "
+                                "RETRY the same command — transport failure "
+                                "is not a denial; the payload is still owed.]")
                         # bounced/denied — the command never ran, but the pane
                         # snapshot can still show a foreground program's
                         # findings; parse facts without run/write bookkeeping
@@ -2668,7 +2826,7 @@ class SessionCoach:
             rows = [r for r in self.state.coverage.rows.values()
                     if not want or r["outcome"] == want]
             if not rows:
-                result = (f"no coverage rows"
+                result = ("no coverage rows"
                           + (f" with outcome={want}" if want else " yet"))
             else:
                 lines = []
@@ -2685,6 +2843,41 @@ class SessionCoach:
         elif t == "list_notes":
             result = (self.state.pad.render(1200) or
                       "shared notes pad is empty")
+        elif t == "record_finding":
+            # typed finding — create or validation-update; rides
+            # coach_actions so a restart replays the finding set like it
+            # replays the ledger (see ledger_log → apply_finding)
+            row = self.facts.apply_finding(a, owner=window or "main")
+            if row is None:
+                result = (f"error: no finding "
+                          f"{a.get('id')!r} — ids come from earlier "
+                          "record_finding results")
+            else:
+                result = (f"finding {row['id']} ({row['status']}): "
+                          f"{row['title']}"
+                          + (f" @{row['host']}" if row['host'] else "")
+                          + (" — DEMOTED to candidate: confirmed needs "
+                             "≥12 chars of concrete evidence"
+                             if (a.get("status") == "confirmed"
+                                 and row["status"] == "candidate") else ""))
+            asyncio.create_task(self.client.log_action(
+                self.sid, "record_finding",
+                {**{k: v for k, v in a.items() if not k.startswith("_")},
+                 "agent": window or "main"},
+                {"id": row["id"] if row else None,
+                 "status": row["status"] if row else None}))
+        elif t == "build_report":
+            md = self.facts.report(
+                scope=self.ctx.get("scope"),
+                coverage_rows=self.state.coverage.rows,
+                title=str(a.get("title") or "Penetration Test Report")[:80])
+            if len(md) > 3200:
+                md = md[:3180] + "\n…[truncated — backend GET " \
+                    "/sessions/{id}/report carries the full version]"
+            result = (md +
+                      "\n\n---\nWrite this to the report path via "
+                      "write_file (or heredoc) — report-checking flags "
+                      "grep the file on disk.")
         elif t == "lookup_guide":
             # pull a technique recipe — internal knowledge consult, costs no
             # exec budget, nothing shown to the trainee (the recipe lands in
@@ -2810,8 +3003,31 @@ class SessionCoach:
         if role not in WORKER_ROLES:
             role = "general"
         done_when = str(a.get("done_when") or "").strip()[:140]
+        # PTG binding — a spawn against a plan task claims it (ow=wid,
+        # s=doing); after MAX_ATTEMPTS bound workers the task must be
+        # re-planned, not re-briefed (3 failed identical attacks is a
+        # dead vector, not bad luck)
+        task_id = str(a.get("task_id") or "").strip()[:16]
+        bound = None
+        if task_id:
+            bound = ptg.by_id(self.state.plan, task_id)
+            if bound is None:
+                return (f"error: no plan task {task_id!r} — ids come from "
+                        "update_plan items (they need an 'id' field)")
+            if bound.get("ow") and bound.get("s") == "doing":
+                return (f"denied: task {task_id} is already owned by "
+                        f"{bound['ow']} — collect that worker or reassign "
+                        "the task via update_plan")
+            if int(bound.get("at") or 0) >= ptg.MAX_ATTEMPTS:
+                return (f"denied: task {task_id} already consumed "
+                        f"{bound['at']} worker attempts — update_plan it "
+                        "blocked/abandoned or re-approach it before "
+                        "spawning again")
+            bound["at"] = int(bound.get("at") or 0) + 1
+            bound["s"] = "doing"
+            bound["ow"] = wid
         w = _Worker(id=wid, task=task[:500], started=time.monotonic(),
-                    role=role, done_when=done_when)
+                    role=role, done_when=done_when, task_id=task_id)
         self._workers[wid] = w
         self._push_agents()
         w.task_obj = asyncio.create_task(self._worker_loop(w))
@@ -2964,6 +3180,13 @@ class SessionCoach:
         (meta.agent routes it there; leftover turn reasoning rides as
         meta.reasoning like the parent's), then refresh the roster chips."""
         self._merge_worker_report(w)
+        # PTG binding close-out — a bound task settles with the worker:
+        # done when it reported, blocked when it died/timeout/killed.
+        # The task stays visible (ow kept) so the parent's next plan
+        # update sees the attempt's outcome, not a vanished claim.
+        if w.task_id:
+            ptg.mark(self.state.plan, w.task_id,
+                     "done" if w.status == "done" else "blocked")
         await self.client.send_activity(self.sid, active=False, agent=w.id)
         if w.report:
             meta = self._msg_meta(w.id)
@@ -3004,7 +3227,6 @@ class SessionCoach:
                      turn_cap=turn_cap, time_cap_s=time_cap)},
                 {"role": "user", "content": w.task}]
         t0 = time.monotonic()
-        t0 = time.monotonic()
         last_out = ""
         try:
             llm_fails = 0
@@ -3044,7 +3266,11 @@ class SessionCoach:
                                        error=str(e) or repr(e))
                     if llm_fails >= 3:
                         raise
-                    await asyncio.sleep(0.5 * llm_fails)   # 0.5s, 1.0s
+                    # short exponential gap (0.05s/0.1s): the timeout itself
+                    # already burned real wall time, so the retry only needs
+                    # a small spacing — and the worker must settle fast
+                    # enough for its time cap to still mean something
+                    await asyncio.sleep(0.05 * (2 ** (llm_fails - 1)))
                     continue                               # usually already burned time
                 llm_fails = 0
                 w.turns += 1
@@ -3066,7 +3292,13 @@ class SessionCoach:
                              and a.get("type") != "none"]
                 for a in resp["actions"]:
                     if a.get("type") == "none" and a.get("reason"):
-                        note_txt = f"[{w.id}] {a['reason']}"[:300]
+                        # include a sample of the unparseable output — bare
+                        # "no valid actions parsed" notes leave post-hoc
+                        # debugging blind to what the model actually emitted
+                        sample = (resp.get("content") or "")[:140].strip()
+                        note_txt = (f"[{w.id}] {a['reason']}"
+                                    + (f" — raw: {sample!r}" if sample else "")
+                                    )[:300]
                         self.state.notes.append(note_txt)
                         self.state.notes = self.state.notes[-8:]
                         asyncio.create_task(self.client.log_action(

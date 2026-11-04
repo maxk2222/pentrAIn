@@ -8,8 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from coach import facts as facts_mod
-from coach.ledger import (MAX_SURFACES, CoverageLedger, NotesPad,
-                          surface_key)
+from coach.ledger import MAX_SURFACES, CoverageLedger, NotesPad, surface_key
 from coach.percept import parse_worker_report
 
 

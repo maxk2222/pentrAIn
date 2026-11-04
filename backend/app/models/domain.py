@@ -122,6 +122,9 @@ class Session(Base):
     kali_tools: Mapped[str] = mapped_column(Text, default="")  # live `command -v` probe results
     # L4 parallel worker agents (spawn_agent → tmux windows w1..w3)
     subagents_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # engagement ROE snapshot — normalized whitelist the coach enforces as
+    # a HARD boundary (see services/scope.py); NULL = unlocked LAN/range mode
+    scope_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

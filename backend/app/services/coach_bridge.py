@@ -148,16 +148,17 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                    .order_by(CoachAction.id.desc()).limit(10))).all()
                if r[0]]
     lessons.reverse()
-    # coverage-ledger + shared-notes writer log (record_coverage,
-    # update_coverage, create_note) — chronological replay rebuilds the
-    # agent-owned bookkeeping after a coach restart, like update_plan does
-    # for the roadmap. Desc→reverse keeps the LATEST 96 writer actions.
+    # coverage-ledger + shared-notes + findings writer log (record_coverage,
+    # update_coverage, create_note, record_finding) — chronological replay
+    # rebuilds the agent-owned bookkeeping after a coach restart, like
+    # update_plan does for the roadmap. Desc→reverse keeps the LATEST 96.
     ledger_log = [
         {"tool": r[0], "args": r[1]} for r in reversed((await db.execute(
             select(CoachAction.tool, CoachAction.args).where(
                 CoachAction.session_id == session_id,
                 CoachAction.tool.in_(
-                    ["record_coverage", "update_coverage", "create_note"]))
+                    ["record_coverage", "update_coverage", "create_note",
+                     "record_finding"]))
             .order_by(CoachAction.id.desc()).limit(96))).all())]
     # observer field notes — session-scoped by applies (global + this
     # track + this quest); consumed via push-hints and lookup_guide only,
@@ -285,6 +286,10 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             "track_cheatsheet": (track.cheatsheet_md if track else ""),
         },
         "session_tools": session.kali_tools or "",
+        # engagement ROE snapshot — normalized operator whitelist; when
+        # locked, the coach denies every IP/host outside it (scope.py)
+        "scope": (json.loads(session.scope_json)
+                  if session.scope_json else None),
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
                    "kind": f.kind,
                    "solved": f.key in solved} for f in flags],
