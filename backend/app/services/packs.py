@@ -64,6 +64,10 @@ class Topology(BaseModel):
     kali: KaliSpec = Field(default_factory=KaliSpec)
     vms: list[VmSpec] = Field(default_factory=list)
     networks: list[dict] = Field(default_factory=list)
+    # engagement packs: targets come from the session scope snapshot
+    # (POST /sessions/{id}/scope), never from the pack itself — the coach
+    # must deny everything until an operator locks a whitelist
+    engagement: bool = False
 
 
 class FlagSpec(BaseModel):
@@ -137,6 +141,7 @@ TRACK_TITLES = {
     "scripting": ("Scripting & Automation", "Bash and Python glue code, automation and tooling for pentesters.", "terminal", 60),
     "wifi": ("Wireless", "WiFi recon, handshake capture and cracking on a simulated radio lab.", "wifi", 70),
     "home-lab": ("Home Lab", "Authorized assessment of your own LAN — discovery, enumeration, vuln scan, reporting.", "home", 80),
+    "engagement": ("External Engagement", "Authorized real-target engagements — operator-scoped recon, validation and reporting.", "shield", 81),
     "cloud-native": ("Cloud Native", "Kubernetes and container attack paths — RBAC, service accounts, cluster escape.", "cloud", 82),
     "ai-security": ("AI Security", "Prompt injection, data exfiltration and tool misuse against LLM-backed apps.", "bot", 84),
     "capstone": ("Capstone", "Full engagement simulations — multi-tier networks, chained objectives, zero walkthroughs.", "crown", 90),

@@ -42,6 +42,7 @@ export const api = {
   get: <T>(path: string) => req<T>("GET", path),
   post: <T>(path: string, body?: unknown) => req<T>("POST", path, body ?? {}),
   patch: <T>(path: string, body: unknown) => req<T>("PATCH", path, body),
+  del: <T>(path: string) => req<T>("DELETE", path),
 };
 
 /** WebSocket URL for a same-origin backend path, with auth token as query param. */
@@ -97,7 +98,23 @@ export interface Session {
   id: number; quest_id: string; state: SessionState; kali_vmid: number | null;
   autonomy_level: number; coach_enabled: boolean; kali_internet?: boolean;
   kali_wan_ip?: string | null; subagents_enabled?: boolean;
+  scope?: EngagementScope | null;
   created_at: string | null; ready_at: string | null; error: string | null;
+}
+
+/** Engagement ROE snapshot — the locked whitelist the coach enforces.
+ * Present only while a session is scope-locked (POST /sessions/{id}/scope). */
+export interface EngagementScope {
+  version: number; locked: boolean; mode: string;
+  authorized_by: string; authorized_at: string;
+  nets: string[]; hosts: string[]; ports: number[];
+  resolved?: Record<string, string[]>; unresolved?: string[];
+}
+
+export interface Finding {
+  id: string; title: string; host: string; sev: string;
+  status: "candidate" | "confirmed" | "rejected" | string;
+  evidence: string; next: string; owner: string;
 }
 
 export interface FlagSubmitOut {

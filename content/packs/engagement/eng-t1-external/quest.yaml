@@ -1,0 +1,79 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: eng-t1-external
+  track: engagement
+  tier: 1
+  title: "Scoped: First External Engagement"
+  version: 1
+display:
+  tagline: "A real authorized target set — the agent runs the full loop: scope → recon → validate → report."
+requirements:
+  min_ram_gb: 10
+  min_vcpus: 6
+  min_disk_gb: 40
+  est_deploy_min: 5
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+    wan: true                          # egress nic — the engagement targets live out there
+    roles: [pentrain_home_lab]
+  vms: []                              # targets come from the session scope snapshot
+  engagement: true                     # coach denies everything until scope is POSTed
+flags:
+  - id: report
+    name: "Engagement report — engagement-report.md with scoped hosts, services, validated findings and remediation"
+    kind: command
+    points: 500
+    command:
+      vm: kali
+      cmd: "for f in /root/engagement-report.md /home/kali/engagement-report.md; do [ -s \"$f\" ] && R=\"$f\" && break; done; [ -n \"$R\" ] && grep -qiE 'scope|authorized|target' \"$R\" && grep -qiE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+|host' \"$R\" && grep -qiE 'port|service' \"$R\" && grep -qiE 'finding|severity|confirmed|candidate' \"$R\" && grep -qiE 'recommend|remediat|next|mitigat' \"$R\""
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Set the engagement scope FIRST (Shield button → authorized nets/hosts + your authorization line) — until then the coach denies every target. Then discovery: masscan/rustscan for breadth, nmap -sV for depth."
+  - id: h2
+    cost: 40
+    stage: enum
+    text: "Every confirmed finding needs proof, not a scanner signature: reproduce the banner/access/response yourself, then record_finding with status=confirmed + the concrete evidence line."
+  - id: h3
+    cost: 60
+    stage: analysis
+    text: "build_report assembles findings+coverage+hosts into markdown — review it, write it to ~/engagement-report.md (or /root/), then check_flag 'report'. Candidates belong in their own section, not in findings."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-scope
+      name: "Engagement scope locked"
+      detect: { command_match: "(nmap|masscan|rustscan|arp-scan)" }
+      hint_after_s: 300
+    - id: cp-recon
+      name: "Ran discovery against in-scope targets"
+      detect: { command_match: "(nmap|masscan|rustscan|arp-scan|fping|nbtscan)" }
+      hint_after_s: 480
+    - id: cp-enum
+      name: "Deep service enumeration"
+      detect: { command_match: "nmap\\s+.*-(sV|sC|sS|sU|p\\b|A|O)|nuclei|nikto|enum4linux|whatweb" }
+      hint_after_s: 600
+    - id: cp-validate
+      name: "Validated a finding with direct evidence"
+      detect: { command_match: "(curl|smbclient|ssh\\s+\\S+@|ftp\\s|nc\\s|nuclei|sqlmap|hydra|medusa|openssl s_client|sslscan|testssl)" }
+      hint_after_s: 720
+    - id: cp-findings
+      name: "Recorded a typed finding"
+      detect: { command_match: "(evidence|report)" }
+      hint_after_s: 720
+    - id: cp-report
+      name: "Wrote the engagement report"
+      detect: { command_match: "engagement-report\\.md" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 500
+  time_bonus_max: 200
+  par_s: 5400
+  hint_cost: 0
+  takeover_cost: 0                     # this pack IS the full-auto flow — takeover is the point

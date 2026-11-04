@@ -287,9 +287,18 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
         },
         "session_tools": session.kali_tools or "",
         # engagement ROE snapshot — normalized operator whitelist; when
-        # locked, the coach denies every IP/host outside it (scope.py)
+        # locked, the coach denies every IP/host outside it (scope.py).
+        # Engagement packs (topology.engagement) with NO scope set yield a
+        # synthetic 'required' scope: locked with an EMPTY whitelist, so the
+        # guard denies everything until the operator declares authorization —
+        # an unset whitelist must never degrade into "no baseline, allow all"
         "scope": (json.loads(session.scope_json)
-                  if session.scope_json else None),
+                  if session.scope_json else
+                  ({"version": 1, "locked": True, "required": True,
+                    "mode": "external-engagement",
+                    "authorized_by": "(not set — operator must POST scope)",
+                    "nets": [], "hosts": [], "ports": []}
+                   if (quest.topology or {}).get("engagement") else None)),
         "flags": [{"key": f.key, "name": f.name, "points": f.points,
                    "kind": f.kind,
                    "solved": f.key in solved} for f in flags],

@@ -208,6 +208,7 @@ class SessionCoach:
         # engagement scope (ctx["scope"]) — populated in start(); locked
         # means every IP/host literal must sit inside the whitelist
         self._scope_locked = False
+        self._scope_required = False   # locked but EMPTY — deny everything
         self._scope_hosts: set[str] = set()
         self._scope_ports: set[int] = set()
         self._workers: dict[str, _Worker] = {}   # spawned subagents w1..wN
@@ -295,6 +296,9 @@ class SessionCoach:
         # pivot-safe ips_seen relaxation.
         scope_obj = self.ctx.get("scope") or {}
         self._scope_locked = bool(scope_obj.get("locked"))
+        # 'required' = engagement pack with no whitelist declared yet —
+        # EVERY target denies until the operator POSTs the scope
+        self._scope_required = bool(scope_obj.get("required"))
         self._scope_hosts = {str(h).lower().strip(".")
                              for h in (scope_obj.get("hosts") or [])}
         self._scope_ports = {int(p) for p in (scope_obj.get("ports") or [])
@@ -557,8 +561,13 @@ class SessionCoach:
             self.state.last_activity_ts = self.state.last_progress_ts
         self._traj = _traj.for_session(self.sid)
         # deep-effort spend marker survives the restart via the traj file —
-        # without this every redeploy burns one fresh 600s deep cancel
-        self._deep_spent_ts = _traj.last_deep_ts(self.sid)
+        # without this every redeploy burns one fresh 600s deep cancel.
+        # last_progress_ts re-seeds to attach-time when no real progress
+        # events exist, so the marker must clamp forward: the pre-restart
+        # no-progress window CONTINUES, only new observed progress re-earns
+        _restored_deep = _traj.last_deep_ts(self.sid)
+        self._deep_spent_ts = (max(_restored_deep, time.time())
+                               if _restored_deep else 0.0)
         self._ready.set()
         # clear any stale roster a previous coach process left sticky — its
         # worker tasks died with it, the UI must not ghost them as running
@@ -1450,8 +1459,11 @@ class SessionCoach:
         longer relaxes anything: output is evidence, not permission.
         Loopback/link-local/multicast/reserved literals stay free (127.x
         localhosts, 169.254.x noise, netmask-looking 255.x tokens)."""
-        if not self._allowed_nets:
-            return None                     # no baseline — can't judge foreign
+        # unlocked: no baseline — can't judge foreign. LOCKED with an empty
+        # whitelist denies everything (a 'required' scope object means the
+        # operator hasn't declared targets yet)
+        if not self._allowed_nets and not self._scope_locked:
+            return None
         for lit in self._IP_RE.findall(cmd):
             try:
                 ip = ipaddress.ip_address(lit)
@@ -2163,6 +2175,15 @@ class SessionCoach:
                                         target=bad, cmd=cmd[:120],
                                         locked=self._scope_locked)
                         if self._scope_locked:
+                            if self._scope_required:
+                                return spoke, (
+                                    f"denied: {bad} — the engagement scope "
+                                    "is NOT SET yet. The operator must "
+                                    "declare the authorized whitelist "
+                                    "(engagement scope dialog / POST "
+                                    "/sessions/{id}/scope) before any "
+                                    "target is reachable — ask for it "
+                                    "instead of probing.")
                             nets = ", ".join(str(n) for n in
                                              self._allowed_nets[:8])
                             return spoke, (

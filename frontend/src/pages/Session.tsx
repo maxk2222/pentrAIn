@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookOpen, Bot, CheckSquare, FileText, Monitor, NotebookPen, PanelBottom,
-  PanelTop, Play, Plus, RotateCcw, RotateCw, Square, TerminalSquare,
+  BookOpen, Bot, Bug, CheckSquare, FileText, Monitor, NotebookPen, PanelBottom,
+  PanelTop, Play, Plus, RotateCcw, RotateCw, Shield, Square, TerminalSquare,
   Wifi, X,
 } from "lucide-react";
 import { api, wsUrl, type QuestLeaderboard, type Session, type WsEvent } from "@/lib/api";
@@ -16,6 +16,8 @@ import { ChatPanel, AutonomyToggle, SubagentsToggle } from "@/components/chat";
 import { ObjectivesPanel } from "@/components/objectives";
 import { SheetPanel } from "@/components/sheet";
 import { NotesPanel } from "@/components/notes";
+import { ScopePanel } from "@/components/scopepanel";
+import { FindingsPanel } from "@/components/findings";
 import { LazyModal } from "@/components/lazymodal";
 import { SolvedModal } from "@/components/solvedmodal";
 import { LiveStatsOverlay } from "@/components/livestats";
@@ -108,6 +110,7 @@ export function SessionPage() {
   const qc = useQueryClient();
   const { setActiveSession } = useAppStore();
   const [progressTab, setProgressTab] = useState("objectives");
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [events, setEvents] = useState<WsEvent[]>([]);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [panels, setPanels] = useState<Panels>(loadPanels);
@@ -440,6 +443,12 @@ export function SessionPage() {
               active={panels.notes} onClick={() => togglePanel("notes")} />
             <IconButton icon={Bot} label="Elliot panel"
               active={panels.chat} badgeDot={unread > 0} onClick={() => togglePanel("chat")} />
+            <IconButton icon={Shield}
+              label={session?.scope?.locked
+                ? `Engagement scope LOCKED — ${(session.scope.nets || []).length} nets / ${(session.scope.hosts || []).length} hosts (click to view/edit)`
+                : "Engagement scope — not locked (LAN/range mode); click to set an authorized whitelist"}
+              active={!!session?.scope?.locked}
+              onClick={() => setScopeOpen(true)} />
             {consoleReady && (
               <IconButton icon={Wifi} label={netBusy ? "Kali internet: switching…"
                 : `Kali internet: ${session?.kali_internet ? "ON" : "OFF"} — click to ${session?.kali_internet ? "disconnect" : "connect"} (net1 → LAN)`}
@@ -457,10 +466,12 @@ export function SessionPage() {
               style={{ width: widths.progress }}>
               <Tabs className="m-2" tabs={[
                 { id: "objectives", label: <span className="flex items-center gap-1"><CheckSquare className="h-3.5 w-3.5" /> Objectives</span> },
+                { id: "findings", label: <span className="flex items-center gap-1"><Bug className="h-3.5 w-3.5" /> Findings</span> },
                 { id: "log", label: <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> Log</span> },
               ]} active={progressTab} onChange={setProgressTab} />
               <div className="min-h-0 flex-1">
                 {progressTab === "objectives" && <ObjectivesPanel sessionId={sessionId} events={events} />}
+                {progressTab === "findings" && <FindingsPanel sessionId={sessionId} />}
                 {progressTab === "log" && <DeployLog lines={logLines} state={state} fill />}
               </div>
             </div>
@@ -679,6 +690,14 @@ export function SessionPage() {
           attempt={attempt}
           onClose={dismissSolved}
           onRestart={() => { dismissSolved(); void reset(false); }}
+        />
+      )}
+      {scopeOpen && sessionId && (
+        <ScopePanel
+          sessionId={sessionId}
+          scope={session?.scope}
+          onClose={() => setScopeOpen(false)}
+          onChanged={() => qc.invalidateQueries({ queryKey: ["session", sessionId] })}
         />
       )}
     </div>
