@@ -31,6 +31,43 @@ from .facts import _USER_AT_HOST, FLAG_RE, WRITE_RE, FactsDB
 # settled-denial forms rendered by percept: denied:{svc}-{user}@{host},
 # denied:{svc}-auth@{host}, denied:sudo|docker@{host}, unreachable:{ip}@{v}
 _DENIAL_FORM = re.compile(r"denied:(\w+)(?:-([\w.\-]+))?@(\S+)")
+
+
+def _shell_segments(cmd: str) -> list[str]:
+    """Split at shell separators only at quote-depth 0. A `;` inside the
+    remote tail (`ssh u@h 'python3 -c "a;b"'`) is code ON the pivot —
+    splitting there fabricates local segments out of remote strings and
+    pinned a web01-vantage urllib call to `filtered:.32@kali` (s84)."""
+    segs, cur = [], []
+    sq = dq = esc = False
+    i, n = 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if esc:
+            cur.append(ch); esc = False; i += 1; continue
+        if ch == "\\":
+            cur.append(ch); esc = True; i += 1; continue
+        if sq:
+            cur.append(ch)
+            if ch == "'":
+                sq = False
+            i += 1; continue
+        if dq:
+            cur.append(ch)
+            if ch == '"':
+                dq = False
+            i += 1; continue
+        if ch == "'":
+            sq = True; cur.append(ch); i += 1; continue
+        if ch == '"':
+            dq = True; cur.append(ch); i += 1; continue
+        if cmd.startswith(("&&", "||"), i):
+            segs.append("".join(cur)); cur = []; i += 2; continue
+        if ch in "|;\n":
+            segs.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(ch); i += 1
+    segs.append("".join(cur))
+    return segs
 from . import facts as facts_mod
 from .llm import LlmClient, LlmError
 from .policy import Policy
@@ -1330,16 +1367,17 @@ class SessionCoach:
         # missing:sshpass@web01 though that sshpass ran on kali — and the
         # actually-dead direct connect to app01 went unseen by
         # filtered:app01@kali).
-        segs = re.split(r"\|{1,2}|&&|;", cmd)
+        segs = _shell_segments(cmd)
 
         def _head(seg: str) -> str:
             """Segment text up to the first user@host token = local part."""
             m = _USER_AT_HOST.search(seg)
             return seg[:m.end()] if m else seg
 
-        # kali facts see every segment's local head; a pivot-host fact
-        # sees the tail of the segment(s) that actually invoke that host
-        local_head = " ".join(_head(s) for s in segs)
+        # kali facts are judged PER SEGMENT — joining heads let an IP from
+        # a remote python-string pair with a sibling segment's ssh
+        # (s84: `ssh u@web01 'python3 urllib http://.32/'` was denied by
+        # filtered:.32@kali though the connect ran on web01)
 
         def _tail(host: str) -> str:
             """The remote portion — what executes ON `host` ('' when the
@@ -1353,43 +1391,46 @@ class SessionCoach:
                     out.append(s[m.end():])
             return " ".join(out)
 
+        _MISSING_CALL = lambda k, s: re.search(
+            rf"(?:^|[\s;|&'\"`(]){re.escape(k)}\b", s)
+        _CONNECT = re.compile(
+            r"\b(nmap|masscan|rustscan|unicornscan|nc|netcat|fping|ping|"
+            r"ssh|sshpass|curl|wget|telnet|sshuttle|proxychains4?|socat)\b")
+
+        def _deny(key: str, dn: str, scope: str) -> bool:
+            """key mentioned in scope + the denial's activation evidence."""
+            if not re.search(rf"\b{re.escape(key)}\b", scope):
+                return False
+            if dn.startswith("unreachable:"):
+                return True
+            if dn.startswith("missing:"):
+                # the tool can never appear — no internet means nothing to
+                # install it with. Only when actually INVOKED though:
+                # preceded by a command boundary, not '/' — `scp
+                # /usr/bin/sshpass u@h:/tmp/` ships the tool as PAYLOAD to
+                # fix exactly this denial and must pass (s84 live)
+                return bool(_MISSING_CALL(key, scope))
+            # filtered = every scanned port dead — scans AND connect
+            # attempts to the ip are dead ends. A bare user@ip token
+            # counts as a connect too (-J hops).
+            return bool(_CONNECT.search(scope)
+                        or re.search(rf"\S+@{re.escape(key)}\b", scope))
+
         for dn in self.facts.denials:
             if dn.startswith(("unreachable:", "filtered:", "missing:")):
                 rest = dn.split(":", 1)[1]
                 key, _, vantage = rest.rpartition("@")
                 if not key:
                     continue
-                # vantage-scoped: search only the part of cmd that runs on
-                # that box — kali facts see the local head, pivot facts
-                # see the remote tail after the user@vantage token
-                scope = local_head if vantage == "kali" else _tail(vantage)
-                if not scope or not re.search(rf"\b{re.escape(key)}\b",
-                                              scope):
-                    continue
-                if dn.startswith("missing:"):
-                    # the tool can never appear — no internet means nothing
-                    # to install it with; deny the binary on that host.
-                    # Only when it's actually INVOKED though: preceded by a
-                    # command boundary, not by '/' — `scp /usr/bin/sshpass
-                    # u@h:/tmp/` ships the tool as PAYLOAD to fix exactly
-                    # this denial and must pass (live on s84: the agent's
-                    # workaround got bricked by its own dead-end guard)
-                    if re.search(rf"(?:^|[\s;|&'\"`(]){re.escape(key)}\b",
-                                 scope):
+                if vantage == "kali":
+                    # each local segment independently — cross-segment
+                    # joins must not fabricate evidence
+                    if any(_deny(key, dn, _head(s)) for s in segs):
                         return dn
-                    continue
-                if dn.startswith("unreachable:"):
-                    return dn
-                # filtered = every scanned port dead — scans AND connect
-                # attempts to the ip are dead ends (s84: the agent kept
-                # burning 15-20s timeouts on ssh to a fully-filtered ip).
-                # A bare user@ip token counts as a connect too (-J hops).
-                if (re.search(
-                        r"\b(nmap|masscan|rustscan|unicornscan|nc|"
-                        r"netcat|fping|ping|ssh|sshpass|curl|wget|"
-                        r"telnet|sshuttle|proxychains4?|socat)\b", scope)
-                        or re.search(rf"\S+@{re.escape(key)}\b", scope)):
-                    return dn
+                else:
+                    # host facts see only what runs ON that host
+                    if _deny(key, dn, _tail(vantage)):
+                        return dn
                 continue
             m = _DENIAL_FORM.match(dn)
             if not m:

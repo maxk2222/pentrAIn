@@ -2362,6 +2362,31 @@ async def test_denials_scope_local_vs_remote():
     assert did, res
 
 
+async def test_remote_vantage_ip_not_pinned_to_kali():
+    """A connect run via python ON web01 must not be denied by a kali-scoped
+    filtered fact — the IP lives in the remote tail's quoted code, and a
+    naive `;`-split fabricated local segments out of it (s84: the working
+    urllib pivot to app01's inventory API got bricked mid-run)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials += ["filtered:10.1.10.32@kali"]
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "sshpass -p 'x' ssh deploy@web01 'python3 -c \"import "
+                    "urllib.request; r=urllib.request.Request("
+                    "\\\"http://10.1.10.32:8080/x\\\"); "
+                    "print(urllib.request.urlopen(r))\"'"},
+        proactive=True)
+    assert did, res
+    # but a kali-local connect to the same ip still denies
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -s http://10.1.10.32:8080/x"},
+        proactive=True)
+    assert not did and "filtered:10.1.10.32@kali" in res
+
+
 async def test_filtered_denies_connect_attempts_not_just_scans():
     """filtered:ip@vantage = EVERY port dead from that vantage — connect
     verbs (ssh/curl/ping) to the ip are the same dead end as rescans
