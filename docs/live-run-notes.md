@@ -323,3 +323,23 @@ Per-quest findings appended below the ladder table.
 - Tool surface changes mid-session: additive only; watch for the
   model exploring new tools vs finishing the report deliverable.
 2026-11-04 19:15
+
+## SOLVED: lab-t1-assessment (s1, ~5h wall, ~60 turns)
+- Winning sequence: unicode fix deployed → INFRA-retry hint told the
+  agent transport failure != denial → agent retried `cat > lan-report.md`
+  → "Report written: 113 lines" → check_flag verified report → solved.
+- The deliverable was a verified report file, not a flag string —
+  flag_submissions stayed 0; check_flag target-side check is what closed it.
+- Deep-effort marker recorded in traj (kind:"effort") — restart-safe
+  mechanism live; re-read advisory fired correctly pre-write.
+
+## FALSE-ALARM: dockerd fifo death mimics a hung coach
+- dockerd's stdout copier died ("reading from a closed fifo" 19:45) →
+  coach logs stopped reaching json-file → looked frozen for 35min.
+- py-spy showed idle epoll loop; coach was actually DETACHED-correct:
+  session had solved, active_sessions=[]. Log silence is NOT hang
+  evidence — verify via traj mtime + backend access-log + DB state.
+- Ops lesson: check `docker logs --since` freshness against watchdog
+  cadence (300s) — silence longer than one interval means the logging
+  pipeline died, not necessarily the app.
+2026-11-04 20:05
