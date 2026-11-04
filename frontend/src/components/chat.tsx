@@ -359,13 +359,25 @@ export function ChatPanel({ sessionId, events, autonomy, onAutonomy,
             activity: merge(a[agent]?.activity ?? null) }));
         }
       }
-      // worker roster snapshot — chip labels/status; feed data is preserved
+      // worker roster snapshot — chip labels/status; feed data is preserved.
+      // The push is AUTHORITATIVE for liveness: an empty roster after a coach
+      // restart must kill ghost chips (worker tasks died with the process) —
+      // merge-only semantics left stale 'running' chips pulsing forever and
+      // kept ids from earlier session eras (pre-wipe rosters) on screen
       if (ev.type === "coach_agents") {
         const list = (ev.data.agents ?? []) as AgentInfo[];
+        const present = new Set(list.map((i) => i.id));
         setAgents((a) => {
           let next = a;
           for (const info of list) {
             next = patchFeed(next, info.id, { info });
+          }
+          for (const [id, feed] of Object.entries(next)) {
+            if (!present.has(id) && feed.info?.status === "running") {
+              next = patchFeed(next, id, {
+                info: { ...feed.info, status: "killed" },
+              });
+            }
           }
           return next;
         });

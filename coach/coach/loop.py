@@ -2599,7 +2599,7 @@ class SessionCoach:
         task = (a.get("task") or a.get("content") or "").strip()
         if not task:
             return "error: empty task"
-        max_w = int(self.cfg.get("coach", {}).get("max_workers", 6))
+        max_w = int(self.cfg.get("coach", {}).get("max_workers", 4))
         if max_w < 1:
             return "denied: workers disabled (coach.max_workers < 1)"
         running = sum(1 for w in self._workers.values()
