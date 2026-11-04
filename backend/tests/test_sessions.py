@@ -252,6 +252,19 @@ async def test_one_active_session_only(db_with_packs):
     await _abort_done(db, s2.id)
 
 
+async def test_create_session_subagents_first_commit(db_with_packs):
+    """subagents_enabled must land at creation — post-commit writes race the
+    deploy task + coach context (same class as the autonomy_level fix)."""
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold",
+                                          autonomy_level=4,
+                                          subagents_enabled=True)
+    await db.refresh(s)
+    assert s.autonomy_level == 4
+    assert s.subagents_enabled is True
+    await _abort_done(db, s.id)
+
+
 # every quest in the library must survive a mock deploy —
 # compile_topology + provider roundtrip + flag seeding.
 # Discovered dynamically so newly-authored quests are covered automatically.

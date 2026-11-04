@@ -60,7 +60,8 @@ def _out(s: Session) -> SessionOut:
 async def start_session(body: SessionStartIn, db: AsyncSession = Depends(get_db)):
     try:
         s = await sessions_svc.create_session(db, body.quest_id,
-                                              body.autonomy_level)
+                                              body.autonomy_level,
+                                              body.subagents_enabled)
     except sessions_svc.SessionError as e:
         raise HTTPException(409, str(e)) from e
     return _out(s)

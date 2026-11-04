@@ -111,6 +111,9 @@ class CoachEnabledIn(BaseModel):
 class SessionStartIn(BaseModel):
     quest_id: str
     autonomy_level: int | None = Field(default=None, ge=1, le=4)
+    # creation-time toggle — same race class as autonomy_level: post-commit
+    # writes lose against the deploy task / coach context reading the row
+    subagents_enabled: bool = False
 
 
 class FlagSubmitIn(BaseModel):

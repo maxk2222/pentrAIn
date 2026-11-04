@@ -394,7 +394,8 @@ async def active_session(db: AsyncSession) -> Session | None:
 # ---------------- lifecycle ----------------
 
 async def create_session(db: AsyncSession, quest_id: str,
-                         autonomy_level: int | None = None) -> Session:
+                         autonomy_level: int | None = None,
+                         subagents_enabled: bool = False) -> Session:
     async with _create_lock:  # one active session at a time — no TOCTOU
         quest = await db.get(Quest, quest_id)
         if not quest or not quest.active:
@@ -415,6 +416,7 @@ async def create_session(db: AsyncSession, quest_id: str,
             quest_id=quest_id, state=SessionState.QUEUED.value,
             flag_seed=new_seed(), telemetry_token=new_telemetry_token(),
             autonomy_level=autonomy, coach_enabled=coach_enabled,
+            subagents_enabled=bool(subagents_enabled),
         )
         db.add(session)
         await db.commit()
