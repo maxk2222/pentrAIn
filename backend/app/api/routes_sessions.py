@@ -59,12 +59,10 @@ def _out(s: Session) -> SessionOut:
 @router.post("/sessions", response_model=SessionOut, status_code=201)
 async def start_session(body: SessionStartIn, db: AsyncSession = Depends(get_db)):
     try:
-        s = await sessions_svc.create_session(db, body.quest_id)
+        s = await sessions_svc.create_session(db, body.quest_id,
+                                              body.autonomy_level)
     except sessions_svc.SessionError as e:
         raise HTTPException(409, str(e)) from e
-    if body.autonomy_level:
-        s.autonomy_level = body.autonomy_level
-        await db.commit()
     return _out(s)
 
 

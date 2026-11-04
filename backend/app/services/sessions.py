@@ -393,7 +393,8 @@ async def active_session(db: AsyncSession) -> Session | None:
 
 # ---------------- lifecycle ----------------
 
-async def create_session(db: AsyncSession, quest_id: str) -> Session:
+async def create_session(db: AsyncSession, quest_id: str,
+                         autonomy_level: int | None = None) -> Session:
     async with _create_lock:  # one active session at a time — no TOCTOU
         quest = await db.get(Quest, quest_id)
         if not quest or not quest.active:
@@ -403,7 +404,12 @@ async def create_session(db: AsyncSession, quest_id: str) -> Session:
             raise SessionError(f"quest locked: {reason}")
         if await active_session(db):
             raise SessionError("another session is active — abort it first")
-        autonomy = int(await settings_svc.get_setting(db, "coach.default_autonomy", 2))
+        # caller-supplied autonomy must land in the FIRST commit — the
+        # deploy task + coach context read the row immediately; setting it
+        # after commit races them into the default level (s2: attached at 2)
+        autonomy = (int(autonomy_level) if autonomy_level else
+                    int(await settings_svc.get_setting(
+                        db, "coach.default_autonomy", 2)))
         coach_enabled = bool(await settings_svc.get_setting(db, "coach.enabled", True))
         session = Session(
             quest_id=quest_id, state=SessionState.QUEUED.value,
