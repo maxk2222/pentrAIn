@@ -81,6 +81,7 @@ from .prompts import (
 )
 from .state import CheckpointMatcher, SessionState, normalize_plan
 from .tools import WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
+from .websearch import WebSearch
 
 log = structlog.get_logger(__name__)
 
@@ -224,6 +225,9 @@ class SessionCoach:
         # "denied:" text reads as fresh each turn, so a stubborn model
         # retries forever (s1: deploy@10.1.10.32 denied 3× identically)
         self._deny_counts: dict[str, int] = {}
+        # key-free research — one shared client so the DDG debounce covers
+        # parent + all workers (they'd otherwise stampede the endpoint)
+        self._web = WebSearch()
         # deep-effort spend marker: last_progress_ts at which the one deep
         # turn of this no-progress window already ran — at L4, stuck>hint_s
         # makes stage-2 the default state, so every-turn-deep burned the
@@ -1662,7 +1666,8 @@ class SessionCoach:
         if isinstance(result, str) and result.startswith("denied:"):
             args = {k: v for k, v in (a or {}).items()
                     if k in ("command", "text", "task", "worker_id",
-                             "value", "flag_key") and isinstance(v, str)}
+                             "value", "flag_key", "query", "url")
+                    and isinstance(v, str)}
             self._traj.record(kind="denial", tool=a.get("type"),
                               args=args, reason=result[7:].strip()[:300])
             report = getattr(self.client, "log_denial", None)
@@ -1678,7 +1683,8 @@ class SessionCoach:
             # reads as a fresh note each turn — escalate the count so the
             # model can't miss that this exact path is settled (s1: the same
             # deploy@10.1.10.32 attempt was denied 3× identically)
-            sig = f"{a.get('type')}|{str(a.get('command') or '')[:80]}"
+            sig = (f"{a.get('type')}|"
+                   f"{str(a.get('command') or a.get('query') or a.get('url') or '')[:80]}")
             n = self._deny_counts[sig] = self._deny_counts.get(sig, 0) + 1
             if n >= 2:
                 result += (f" (REPEATED ×{n} — this exact attempt was "
@@ -1820,9 +1826,9 @@ class SessionCoach:
         # already prevents it, this covers drift/compat endpoints). The deny
         # is part of the worker's story — its feed should show it
         if window and t not in WORKER_TOOL_NAMES:
-            result = ("denied: workers can only run exec_in_kali / "
-                      "type_in_pane — report findings via your last "
-                      "message, the parent coach relays them")
+            result = (f"denied: workers may only call "
+                      f"{sorted(WORKER_TOOL_NAMES)} — report findings via "
+                      "your last message, the parent coach relays them")
             await self.client.send_chat(
                 self.sid, f"Denied: `{t}` — workers may only exec/type",
                 kind="action_report", meta=self._msg_meta(window))
@@ -2573,6 +2579,38 @@ class SessionCoach:
                 {"count": n}))
             result = (f"lesson recorded ({n} kept) — visible in FACTS "
                       "lessons: to you and future workers")
+        elif t in ("web_search", "web_fetch"):
+            # key-free research, gated on the session's kali_internet flag —
+            # the same flag wires Kali's second NIC, so the gate doubles as
+            # lab isolation (resync() refreshes ctx → mid-session toggles
+            # propagate). Denial text teaches the alternative; CACHED:/
+            # error: results stay honest so a retry reads as a retry.
+            if not self.ctx.get("session", {}).get("kali_internet"):
+                result = ("denied: web — offline lab (kali_internet=false): "
+                          "no uplink this session. Use local tools "
+                          "(nmap/wordlists/guides) or ask the operator to "
+                          "enable internet on the session.")
+            elif t == "web_search":
+                q = str(a.get("query") or a.get("content") or "")
+                result = await self._web.search(
+                    q, int(a.get("max_results") or 6))
+            else:
+                u = str(a.get("url") or a.get("content") or "")
+                result = await self._web.fetch(u)
+            if not result.startswith(("denied:", "error:")):
+                # same recipe push exec output gets — a fetched page naming
+                # 'jwt'/'pivot' should pull the matching module once
+                arg = str(a.get("query") or a.get("url") or "")
+                result += self._guide_hint(f"{arg}\n{result[:3000]}", window)
+                if t == "web_fetch":
+                    result += await self._scan_flags(
+                        result, "web_fetch", window)
+            asyncio.create_task(self.client.log_action(
+                self.sid, t,
+                {"arg": str(a.get("query") or a.get("url") or "")[:200],
+                 "agent": window or "main"},
+                {"preview": result[:200],
+                 "ok": not result.startswith(("denied:", "error:"))}))
         # "none" or unknown → silence (reason captured above as working memory)
         if t == "none":
             result = "noted"

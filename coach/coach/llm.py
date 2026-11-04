@@ -25,6 +25,7 @@ ALLOWED_ACTIONS = {
     "submit_flag", "check_flag", "mark_checkpoint", "capture_screen", "none",
     "spawn_agent", "collect_agent", "agent_status", "kill_agent", "wait",
     "update_plan", "lookup_guide", "record_lesson",
+    "web_search", "web_fetch",
 }
 
 

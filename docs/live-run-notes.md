@@ -220,3 +220,25 @@ Per-quest findings appended below the ladder table.
 - Server-side alternative: edit the model's chat_template.jinja
   default('xhigh')->('low') in LM Studio (operator action).
 2026-11-04
+
+## web_search + web_fetch (key-free research, gated on kali_internet)
+- Engines: html.duckduckgo.com/html/ (primary — verified 10 organic
+  results from this egress) → lite.duckduckgo.com (fallback) →
+  Marginalia public API (3rd). No keys anywhere.
+- DDG lite throws anomaly-modal CAPTCHAs; html endpoint passes with
+  Sec-Fetch-*/Referer headers. challenge markers → honest error,
+  never silent-empty.
+- web_fetch: SSRF-guarded (per-hop incl. redirects) — private/
+  loopback/link-local/reserved + literal-IP tricks (2130706433, [::1])
+  denied, which also covers all lab CIDRs. trafilatura main-content
+  extraction, 8KB cap, binary content-types bounced to exec_in_kali.
+- JS-SPA sites (nvd) yield honest thin extraction — known limit,
+  no headless browser by design.
+- Gate: ctx.session.kali_internet — denial text teaches alternatives;
+  CACHED: prefix on TTL-cache hits; 2s DDG debounce shared by
+  parent+workers (single client).
+- Dispatch fixes folded in: denial sig now uses query/url (no false
+  REPEATED across different queries), worker deny text lists the
+  real toolset, ALLOWED_ACTIONS drift guard covers both tools.
+- Tools offered L3+; workers get both (research tasks parallelize).
+2026-11-05

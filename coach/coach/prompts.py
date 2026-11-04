@@ -219,7 +219,11 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         f"QUEST: {q['title']} (track={q['track']} tier={q['tier']})",
         f"SESSION: state={s['state']} autonomy={s['autonomy_level']} coach_on={s['coach_enabled']}",
         *([("INTERNET: YES — kali has a LAN uplink (second nic, DHCP) so "
-            "apt/pip/curl DO work this session; range targets stay isolated")]
+            "apt/pip/curl DO work this session; range targets stay isolated. "
+            "web_search(query) + web_fetch(url) are available for research "
+            "(CVEs, exploits, error strings, docs) — fetch the best hit "
+            "rather than crawling; local tools still cover anything "
+            "reachable inside the lab")]
           if s.get("kali_internet") else []),
         *([("SCOPE: " + q["scope"] + " — authorized LAN assessment; only touch "
             "in-scope hosts, never DoS or destructive actions. Hosts here are "

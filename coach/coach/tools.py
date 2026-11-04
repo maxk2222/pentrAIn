@@ -68,6 +68,23 @@ TOOLS: list[dict] = [
         "restarts. For hard-won session facts — not quest spoilers or "
         "raw output dumps. Costs no action budget.",
         {"text": _str("one distilled lesson, <=140 chars")}, ["text"]),
+    _fn("web_search",
+        "Search the web (no API key needed) — ONLY when INTERNET is enabled "
+        "for this session. Use for CVEs, exploits, error strings, technique "
+        "docs, vendor advisories — e.g. 'CVE-2024-4577 exploit', "
+        "'linpeas sudo -l output meaning'. Returns top hits with URLs; then "
+        "web_fetch the most promising one. Prefer local tools "
+        "(nmap/enum/wordlists) for anything reachable inside the lab.",
+        {"query": _str("search query — specific terms work best"),
+         "max_results": {"type": "integer", "minimum": 1, "maximum": 10}},
+        ["query"]),
+    _fn("web_fetch",
+        "Fetch and read one URL — extracts the main text (docs, blog posts, "
+        "advisories, PoC writeups). Private/lab addresses are denied; use "
+        "exec_in_kali curl for lab targets instead. Costs no action budget "
+        "but pages are capped — fetch the one best hit, don't crawl.",
+        {"url": _str("full http(s) URL, e.g. from web_search results")},
+        ["url"]),
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
@@ -114,10 +131,11 @@ TOOLS: list[dict] = [
         {"worker_id": _str("worker id, e.g. w1")}, ["worker_id"]),
 ]
 
-# tools a spawned worker may call — exec-only: no chat, flags, checkpoints
-# or nested spawns; completion stays with the parent coach.
+# tools a spawned worker may call — exec + research only: no chat, flags,
+# checkpoints or nested spawns; completion stays with the parent coach.
 WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none",
-                     "update_plan", "lookup_guide", "record_lesson"}
+                     "update_plan", "lookup_guide", "record_lesson",
+                     "web_search", "web_fetch"}
 SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
                        "kill_agent"}
 
@@ -132,10 +150,12 @@ _LEVEL_TOOLS = {
     2: {"send_chat", "offer_hint", "mark_checkpoint", "capture_screen",
         "update_plan", "lookup_guide", "record_lesson", "none"},
     3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
-        "capture_screen", "update_plan", "lookup_guide", "record_lesson", "none"},
+        "capture_screen", "update_plan", "lookup_guide", "record_lesson",
+        "web_search", "web_fetch", "none"},
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
-        "wait", "update_plan", "lookup_guide", "record_lesson", "none"},
+        "wait", "update_plan", "lookup_guide", "record_lesson",
+        "web_search", "web_fetch", "none"},
 }
 
 
