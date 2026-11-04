@@ -259,6 +259,30 @@ class CoachLesson(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class AttackPath(Base):
+    """Distilled successful attack sequence — the coach's long-term
+    memory of what worked (success-case memory). Written by the parent
+    coach via record_play at quest/engagement completion; retrieved via
+    search_memory at planning time. Sanitized like lessons — steps
+    teach the sequence, never carry flags, credentials or real target
+    addresses."""
+    __tablename__ = "attack_paths"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int | None] = mapped_column(
+        Integer, index=True, nullable=True)  # origin session (no FK)
+    title: Mapped[str] = mapped_column(String(160))
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    steps: Mapped[list] = mapped_column(JSON, default=list)
+    outcome: Mapped[str] = mapped_column(String(240), default="")
+    applies: Mapped[str] = mapped_column(String(80), default="global")  # global|track:X|quest:Y
+    status: Mapped[str] = mapped_column(String(16), default="active")   # active|disabled
+    confidence: Mapped[float] = mapped_column(default=0.5)
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    misses: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class HintUse(Base):
     __tablename__ = "hint_uses"
 

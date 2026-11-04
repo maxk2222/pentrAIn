@@ -316,6 +316,32 @@ class CoachLessonIn(BaseModel):
         return self
 
 
+class CoachPlayIn(BaseModel):
+    """Distilled successful attack path the coach wants in long-term
+    memory — written at quest/engagement completion via record_play.
+    Server-side sanitize strips flags/creds/IPs from every step so the
+    memory teaches moves, not loot."""
+    session_id: int | None = None
+    title: str = Field(min_length=8, max_length=160)
+    tags: list[str] = Field(default_factory=list, max_length=10)
+    steps: list[str] = Field(min_length=1, max_length=14)
+    outcome: str = Field(default="", max_length=240)
+    applies: str = Field(default="global", max_length=80)
+
+    @model_validator(mode="after")
+    def _valid_shape(self):
+        if not (self.applies == "global" or self.applies.startswith(
+                ("track:", "quest:"))):
+            raise ValueError("applies must be 'global', 'track:<x>' or 'quest:<y>'")
+        if len(self.tags) < 1:
+            raise ValueError("at least one tag required for retrieval matching")
+        self.tags = [str(t)[:32].lower() for t in self.tags]
+        self.steps = [str(s)[:180] for s in self.steps if str(s).strip()]
+        if not self.steps:
+            raise ValueError("steps must carry at least one non-empty entry")
+        return self
+
+
 class ObserverHintIn(BaseModel):
     """Live advisory tip from the observer to a running coach — delivered
     via session event onto the next tool result (guaranteed-read) plus a

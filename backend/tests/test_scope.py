@@ -12,7 +12,8 @@ from app.db import session_factory
 from app.main import app
 from app.models.domain import Quest, Session, Track
 from app.schemas import ScopeIn
-from app.services import coach_bridge, scope as scope_svc
+from app.services import coach_bridge
+from app.services import scope as scope_svc
 
 AUTH = "ACME contract #42, valid 2026"
 
@@ -41,7 +42,8 @@ async def test_normalize_requires_authorization():
     with pytest.raises(scope_svc.ScopeError):
         await scope_svc.normalize(_body(authorization=""))
     # the API schema enforces the same floor (422 before the service runs)
-    with pytest.raises(Exception):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         ScopeIn(authorization="short")
 
 

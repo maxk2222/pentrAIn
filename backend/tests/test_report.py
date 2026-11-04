@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.db import session_factory

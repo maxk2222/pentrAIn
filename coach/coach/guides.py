@@ -162,6 +162,36 @@ def lookup(query: str, cap: int = 1900) -> str:
             "call lookup_guide again with the exact id")
 
 
+# role → knowledge modules pre-inlined into the worker spawn prompt —
+# the common-case recipes for that specialty, so the worker does not
+# have to discover them via lookup_guide mid-task (Strix preload
+# pattern). Keep it short: workers have ~80 turns, every loaded byte is
+# prompt tax on a narrow task. Empty list = pull via lookup_guide.
+ROLE_MODULES: dict[str, list[str]] = {
+    "recon":   ["minimal-hosts"],
+    "web":     ["web-app", "ssrf-lfi", "sqli-basic"],
+    "creds":   [],
+    "svc":     ["minimal-hosts", "log-parsing"],
+    "privesc": ["privesc-linux", "privesc-cron", "privesc-win"],
+    "pivot":   ["pivoting", "nested-rce"],
+    "verify":  [],
+    "general": [],
+}
+
+
+def preload_for(role: str, *, max_mods: int = 3, cap_per: int = 1100,
+                cap_total: int = 3200) -> str:
+    """Recipe bodies for the given worker role — pre-rendered so the
+    spawn prompt can carry them directly. Unknown/empty role → ''."""
+    mods = load_modules()
+    parts: list[str] = []
+    for mid in ROLE_MODULES.get(role or "", [])[:max_mods]:
+        m = mods.get(mid)
+        if m:
+            parts.append(f"### {m.title}\n{m.body[:cap_per]}")
+    return "\n\n".join(parts)[:cap_total]
+
+
 def _trigger_re(trigger: str) -> re.Pattern:
     """Trigger → regex. Word edges get \\b anchors so 'pod' can't fire on
     'tripod'; triggers with non-word edges (like '.git/' or '?c=') are

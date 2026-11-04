@@ -22,6 +22,7 @@ from ..schemas import (
     CoachFlagIn,
     CoachLessonIn,
     CoachMessageIn,
+    CoachPlayIn,
     CoachStreamIn,
     CoachSuggestIn,
     CoachTypeIn,
@@ -765,6 +766,9 @@ async def coach_config(db: AsyncSession = Depends(get_db)):
             "effort_routine": await settings_svc.get_setting(db, "coach.effort_routine", "medium"),
             "effort_deep": await settings_svc.get_setting(db, "coach.effort_deep", ""),
             "effort_worker": await settings_svc.get_setting(db, "coach.effort_worker", "medium"),
+            # eval ablation — "" in production; "ptg,roles,…" disables
+            # subsystems for ablation runs (agent_eval --ablation)
+            "ablation": await settings_svc.get_setting(db, "coach.ablation", ""),
         },
     }
 
@@ -840,6 +844,47 @@ async def coach_observer_hint(body: ObserverHintIn,
     via session event (guaranteed-read) plus a hint message for the UI."""
     await coach_bridge.post_observer_hint(db, body.session_id, body.text)
     return {"delivered": True}
+
+
+@coach_router.post("/play", status_code=201)
+async def coach_play_create(body: CoachPlayIn,
+                            db: AsyncSession = Depends(get_db)):
+    """Distilled successful attack path — the coach's success-case memory
+    write at quest/engagement completion. Sanitized + IP-generalized +
+    deduped server-side; merged paths return the existing row id."""
+    row = await coach_bridge.record_attack_path(
+        db, body.session_id, body.title, body.tags, body.steps,
+        body.outcome, body.applies)
+    if row is None:
+        raise HTTPException(422, "play rejected by sanitizer")
+    return {"id": row.id, "merged": bool(row.created_at and
+            row.hits and row.session_id != body.session_id)}
+
+
+@coach_router.get("/memory")
+async def coach_memory_search(q: str = "", session_id: int | None = None,
+                              db: AsyncSession = Depends(get_db)):
+    """Success-case retrieval — top-3 attack paths for a situation query,
+    scoped global + the session's track + quest. Rows are consult-
+    counted; play_outcome reports the real reinforcement."""
+    return {"hits": await coach_bridge.search_attack_paths(
+        db, q, session_id=session_id)}
+
+
+@coach_router.post("/play/{play_id}/feedback", status_code=204)
+async def coach_play_feedback(play_id: int, ok: bool = True,
+                              db: AsyncSession = Depends(get_db)):
+    """Reinforcement ping — the coach followed a retrieved path and
+    reports whether it worked."""
+    await coach_bridge.attack_path_feedback(db, play_id, ok)
+
+
+@coach_router.post("/peek")
+async def coach_peek(body: dict, db: AsyncSession = Depends(get_db)):
+    """Read-only pane tail — channel_read's transport; types nothing."""
+    return await coach_bridge.peek_pane(
+        db, int(body.get("session_id") or 0),
+        str(body.get("window") or "") or None)
 
 
 @router.get("/admin/lessons")

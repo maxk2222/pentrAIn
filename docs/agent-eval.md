@@ -59,7 +59,35 @@ The script:
 
 Useful flags: `--action-budget N`, `--token-budget N`,
 `--deploy-timeout-min`, `--timeout-min`, `--poll-s`, `--no-subagents`,
-`--autonomy 3` (non-takeover baseline).
+`--autonomy 3` (non-takeover baseline),
+`--ablation ptg,roles,coverage,memory` (subsystem ablation — comma list;
+restored after the run like the budgets).
+
+## Ablation runs
+
+`--ablation` disables coach subsystems for the run via the
+`coach.ablation` setting — A/B evidence for what each layer buys:
+
+- `ptg` — plan items collapse to flat `{t,s}`; no deps/ready queue, no
+  worker↔task binding
+- `roles` — `spawn_agent` ignores `role` (all workers run `general`)
+- `coverage` — coverage-ledger + notes tools are hidden from the toolset
+- `memory` — `search_memory`/`record_play`/`play_outcome` are hidden
+
+The metrics endpoint reports `engagement` (time-to-foothold,
+first-confirmed, coverage%, findings by status, scope denials) and
+`orchestration` (worker execs/util%, parent↔worker overlap) per run —
+the ablation comparison axes.
+
+## Blind packs (unknown-scenario regression)
+
+`scripts/gen_blind_pack.py --seed N --out content/packs/blind/<slug>`
+emits a randomized engagement pack: different org profile, crown-jewel
+assets, attacker model and report-checker fingerprint per seed, so the
+coach can't pattern-match a memorized quest path. Run it through
+`agent_eval.py` with a real authorized scope snapshot (POST
+`/api/sessions/{id}/scope` before activation). Same `--seed` reproduces
+the identical pack for A/B comparisons.
 
 ## Reading results
 

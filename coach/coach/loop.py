@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import httpx
 import structlog
 
-from . import guides, percept, ptg
+from . import guides, percept, playbooks, ptg
 from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
@@ -155,6 +155,14 @@ class SessionCoach:
         self.usage = usage if usage is not None else {"day": "", "tokens": 0}
         self._budget_warned = False
         self.state = SessionState(session_id=session_id)
+        # eval ablations — coach.ablation = "ptg,roles,coverage,memory"
+        # disables subsystems for ablation runs (P3 eval). One flag set,
+        # checked at each feature's seam; empty in production.
+        _abl = str(cfg.get("coach", {}).get("ablation") or "")
+        self._ablate = {x.strip().lower()
+                        for x in _abl.replace(";", ",").split(",")
+                        if x.strip()}
+        self.state.ablation = self._ablate
         self.ctx: dict = {}
         self.matcher = CheckpointMatcher([])
         self.llm: LlmClient | None = None
@@ -228,6 +236,12 @@ class SessionCoach:
         # worker-dup advisory dedup: (worker_id, cmd-target) already noted
         # — the hint is pop-once per pair, not a per-scan nag
         self._dup_noted: set[tuple[str, str]] = set()
+        # persistent interactive channels (channel_open) — named tmux
+        # windows c-<name> for ssh/msfconsole/nc-style sessions the model
+        # converses with turn by turn. Max 2; a channel survives across
+        # turns until channel_close (a coach restart orphans the window —
+        # reopening the name reuses the pane).
+        self._channels: dict[str, dict] = {}
         # worker completion notices → the parent's guaranteed-read channel.
         # Without this the parent only learns of a finished worker by
         # polling agent_status (s1: 3 workers died unnoticed, never
@@ -540,6 +554,10 @@ class SessionCoach:
                 if tool == "record_finding":
                     self.facts.apply_finding(
                         args, owner=str(args.get("agent") or "main"))
+                elif tool == "threat_model":
+                    self.state.threat_model = {
+                        k: str(v)[:200] for k, v in args.items()
+                        if k in ("attacker", "boundaries", "assets") and v}
         # orphaned workers: spawned pre-restart, killed with the process —
         # their command outputs reseeded via coach_outputs but the TASK died.
         # A note is all the parent needs to not re-do (or misplace) their work
@@ -1146,6 +1164,21 @@ class SessionCoach:
                     self.state.autonomy_level,
                     subagents=self.state.subagents_enabled)
                     if tools_active else None)
+                if tools and self._ablate:
+                    # eval ablation — hide the ablated subsystem's tools
+                    # from the offered set; the model can't call what it
+                    # never sees (dispatch stays a second gate)
+                    drop = set()
+                    if "coverage" in self._ablate:
+                        drop |= {"record_coverage", "update_coverage",
+                                 "list_coverage", "create_note",
+                                 "list_notes"}
+                    if "memory" in self._ablate:
+                        drop |= {"search_memory", "record_play",
+                                 "play_outcome"}
+                    if drop:
+                        tools = [t for t in tools
+                                 if t["function"]["name"] not in drop]
                 try:
                     resp = await self.llm.chat(messages, on_delta=on_delta,
                                                tools=tools,
@@ -1827,7 +1860,8 @@ class SessionCoach:
         if isinstance(result, str) and result.startswith("denied:"):
             args = {k: v for k, v in (a or {}).items()
                     if k in ("command", "text", "task", "worker_id",
-                             "value", "flag_key", "query", "url")
+                             "value", "flag_key", "query", "url",
+                             "name", "channel")
                     and isinstance(v, str)}
             self._traj.record(kind="denial", tool=a.get("type"),
                               args=args, reason=result[7:].strip()[:300])
@@ -1844,8 +1878,10 @@ class SessionCoach:
             # reads as a fresh note each turn — escalate the count so the
             # model can't miss that this exact path is settled (s1: the same
             # deploy@10.1.10.32 attempt was denied 3× identically)
-            sig = (f"{a.get('type')}|"
-                   f"{str(a.get('command') or a.get('query') or a.get('url') or '')[:80]}")
+            sig_tgt = str(a.get("command") or a.get("query")
+                          or a.get("url") or a.get("text")
+                          or a.get("name") or a.get("channel") or "")[:80]
+            sig = f"{a.get('type')}|{sig_tgt}"
             n = self._deny_counts[sig] = self._deny_counts.get(sig, 0) + 1
             if n >= 2:
                 result += (f" (REPEATED ×{n} — this exact attempt was "
@@ -2782,7 +2818,13 @@ class SessionCoach:
             # self-maintained roadmap — atomic full-replace so a truncated
             # rewrite can't leave zombie steps. A worker's plan lives on
             # its _Worker, never the parent's.
-            items = normalize_plan(a.get("items") or a.get("plan") or [])
+            raw = a.get("items") or a.get("plan") or []
+            if "ptg" in self._ablate:
+                # ablation: structured fields collapse to flat {t,s} —
+                # the task-graph layer (deps/ready/marks) never engages
+                raw = [{"t": i.get("t", ""), "s": i.get("s", "todo")}
+                       if isinstance(i, dict) else i for i in raw]
+            items = normalize_plan(raw)
             target = (self._workers[window].plan
                       if window and window in self._workers
                       else self.state.plan)
@@ -2946,6 +2988,198 @@ class SessionCoach:
                 {"count": n}))
             result = (f"lesson recorded ({n} kept) — visible in FACTS "
                       "lessons: to you and future workers")
+        elif t == "threat_model":
+            # engagement threat-model card — attacker/boundaries/assets;
+            # merges field-wise (an amend keeps the rest), replayed from
+            # ledger_log like coverage so a restart keeps the card
+            tm = self.state.threat_model
+            for k in ("attacker", "boundaries", "assets"):
+                if v := str(a.get(k) or "").strip():
+                    tm[k] = v[:200]
+            if not tm:
+                result = "error: threat_model needs at least one of attacker/boundaries/assets"
+            else:
+                asyncio.create_task(self.client.log_action(
+                    self.sid, "threat_model",
+                    {**tm, "agent": window or "main"},
+                    {"fields": sorted(tm)}))
+                result = (f"threat model recorded — "
+                          f"attacker={tm.get('attacker', '-')} | "
+                          f"boundaries={tm.get('boundaries', '-')} | "
+                          f"assets={tm.get('assets', '-')} "
+                          "— workers see this card at spawn")
+        elif t == "search_memory":
+            # long-term success-case memory — top-3 distilled attack paths
+            # from past sessions. Guidance, never evidence: the model must
+            # verify a path fits THIS target before following it.
+            q = str(a.get("query") or a.get("content") or "")[:200]
+            try:
+                res = await self.client.search_memory(self.sid, q)
+            except (TimeoutError, httpx.HTTPError) as e:
+                res = {"error": str(e)}
+            hits = (res or {}).get("hits") or []
+            if (res or {}).get("error"):
+                result = (f"error: memory search failed — "
+                          f"{str(res['error'])[:120]}")
+            elif not hits:
+                result = ("no memory hits — this situation is new ground; "
+                          "proceed with fundamentals (enum → vectors → "
+                          "proof) and record_play the chain when it works")
+            else:
+                parts = []
+                for h in hits:
+                    steps = "\n".join(
+                        f"  {i + 1}. {s}"
+                        for i, s in enumerate((h.get("steps") or [])[:10]))
+                    parts.append(
+                        f"ap{h['id']} [conf {h.get('confidence', 0.5):.2f}] "
+                        f"{h.get('title', '')}\n{steps}"
+                        + (f"\n  → {h['outcome']}" if h.get("outcome") else ""))
+                result = ("MEMORY — proven paths from past sessions "
+                          "(adapt to THIS target; verify before trusting):\n"
+                          + "\n\n".join(parts)
+                          + "\n— followed one? report the outcome via "
+                          "play_outcome(play_id, ok) once it resolves")
+            asyncio.create_task(self.client.log_action(
+                self.sid, "search_memory",
+                {"query": q, "agent": window or "main"},
+                {"hits": len(hits)}))
+        elif t == "record_play":
+            # success-case write — distills the winning chain into
+            # long-term memory; backend sanitizes secrets + generalizes
+            # IPs so the memory teaches moves, not loot
+            try:
+                res = await self.client.record_play(
+                    self.sid, str(a.get("title") or "")[:160],
+                    a.get("tags") or [], a.get("steps") or [],
+                    str(a.get("outcome") or "")[:240])
+            except (TimeoutError, httpx.HTTPError) as e:
+                res = {"error": str(e)}
+            if res and res.get("id"):
+                result = (f"play stored as ap{res['id']} — future sessions "
+                          "retrieve it via search_memory")
+            else:
+                result = ("error: play rejected — "
+                          + str((res or {}).get("detail")
+                                or (res or {}).get("error")
+                                or "sanitize/validation failure")[:160])
+            asyncio.create_task(self.client.log_action(
+                self.sid, "record_play",
+                {"title": str(a.get("title") or "")[:160],
+                 "agent": window or "main"},
+                {"ok": bool(res and res.get("id"))}))
+        elif t == "play_outcome":
+            # reinforcement feedback for a memory hit the model followed
+            try:
+                pid = int(a.get("play_id") or 0)
+            except (TypeError, ValueError):
+                pid = 0
+            if pid <= 0:
+                result = ("error: play_outcome needs a numeric play_id "
+                          "from a search_memory hit")
+            else:
+                ok = bool(a.get("ok"))
+                asyncio.create_task(self.client.play_feedback(pid, ok))
+                result = (f"feedback recorded — memory path ap{pid} "
+                          f"{'reinforced' if ok else 'marked stale'}")
+        elif t == "run_playbook":
+            # bounded macro-chain — one validated command on the 'pb'
+            # pane, parsed back into coverage rows + notes. Scope guard
+            # is identical to exec_in_kali: the built line gets checked
+            # BEFORE anything is typed.
+            if level < 4:
+                result = f"denied: autonomy level {level} < 4"
+            elif not (pb := playbooks.get(str(a.get("name") or ""))):
+                result = (f"error: unknown playbook — known: "
+                          f"{playbooks.describe()}")
+            elif not isinstance(a.get("args") or {}, dict):
+                result = ("error: run_playbook args must be an object "
+                          f"— {pb.args_hint()}")
+            else:
+                args = {str(k)[:24]: str(v)[:160]
+                        for k, v in (a.get("args") or {}).items()}
+                missing = [k for k in pb.required if not args.get(k)]
+                have = set((self.ctx.get("session_tools") or "").split())
+                lack = [b for b in pb.needs if b not in have]
+                if missing:
+                    result = (f"error: {pb.name} missing "
+                              f"{', '.join(missing)} — {pb.args_hint()}")
+                elif lack:
+                    result = (f"error: {pb.name} needs "
+                              f"{', '.join(lack)} — not in KALI_TOOLS "
+                              "(probed at deploy, so it is NOT installed)")
+                else:
+                    try:
+                        cmd = pb.build(args)
+                    except (ValueError, TypeError, KeyError) as e:
+                        # a bad arg (port 'eighty', empty path) is a
+                        # model error, not a crash — the turn continues
+                        cmd = ""
+                        result = (f"error: {pb.name} arg invalid — {e}; "
+                                  f"{pb.args_hint()}")
+                    bad = ((self._foreign_ip(cmd)
+                            or (self._foreign_host(cmd)
+                                if self._scope_locked else None))
+                           if cmd else None)
+                    if cmd and bad:
+                        # no branch-internal log_denial — the "denied:"
+                        # prefix makes _dispatch's central audit write the
+                        # row (one denial, one row; repeat-tracking rides
+                        # along for free)
+                        result = (f"denied: {pb.name} would reach {bad} "
+                                  "— outside the authorized scope; pick "
+                                  "an in-scope target")
+                    elif cmd:
+                        self._coach_cmds.append((cmd, time.time()))
+                        await self.client.send_activity(
+                            self.sid, f"playbook {pb.name} running on pb pane",
+                            agent=window or "main")
+                        try:
+                            res = await self.client.exec_in_kali(
+                                self.sid, cmd,
+                                window=playbooks.PLAYBOOK_WINDOW)
+                        except (TimeoutError, httpx.HTTPError) as e:
+                            self._coach_cmds.pop()
+                            res = {"error": str(e)}
+                        out = (res.get("out") or res.get("err")
+                               or res.get("error") or "")
+                        code = res.get("exitcode")
+                        self.state.add_command(time.time(), cmd,
+                                               from_coach=True)
+                        self.state.commands[-1].exit_code = code
+                        self.facts.observe_output(cmd, out, code)
+                        merged = []
+                        parsed = pb.parse(out) or {}
+                        for c in parsed.get("coverage") or []:
+                            r = self.state.coverage.record(
+                                c.get("surface"), c.get("area") or pb.name,
+                                c.get("outcome") or "testing",
+                                c.get("evidence") or "",
+                                owner=window or "main")
+                            if r.get("ok"):
+                                merged.append(c.get("surface") or "?")
+                        for n in parsed.get("notes") or []:
+                            self.state.pad.create(
+                                n.get("key"), n.get("text") or "",
+                                owner=window or "main")
+                        asyncio.create_task(self.client.log_action(
+                            self.sid, "run_playbook",
+                            {"name": pb.name, "args": args,
+                             "agent": window or "main"},
+                            {"coverage": len(merged)}))
+                        tail = percept.normalize(
+                            cmd, out, code,
+                            timed_out=bool(res.get("timed_out"))).reply[:900]
+                        result = (f"playbook {pb.name} done "
+                                  f"(exit={code}, {len(merged)} coverage "
+                                  f"rows: {', '.join(merged[:10]) or '-'})\n"
+                                  f"{tail}")
+        elif t in ("channel_open", "channel_send", "channel_read",
+                   "channel_close"):
+            if level < 4:
+                result = f"denied: autonomy level {level} < 4"
+            else:
+                result = await self._channel_dispatch(t, a, window)
         elif t in ("web_search", "web_fetch"):
             # key-free research, gated on the session's kali_internet flag —
             # the same flag wires Kali's second NIC, so the gate doubles as
@@ -3021,7 +3255,7 @@ class SessionCoach:
         wid = next((i for i in ids if i not in self._workers),
                    next(i for i in ids if i not in running_ids))
         role = str(a.get("role") or "general").strip().lower()
-        if role not in WORKER_ROLES:
+        if role not in WORKER_ROLES or "roles" in self._ablate:
             role = "general"
         done_when = str(a.get("done_when") or "").strip()[:140]
         # PTG binding — a spawn against a plan task claims it (ow=wid,
@@ -3030,6 +3264,8 @@ class SessionCoach:
         # dead vector, not bad luck)
         task_id = str(a.get("task_id") or "").strip()[:16]
         bound = None
+        if task_id and "ptg" in self._ablate:
+            task_id = ""   # ablation: no task-graph binding exists
         if task_id:
             bound = ptg.by_id(self.state.plan, task_id)
             if bound is None:
@@ -3154,6 +3390,104 @@ class SessionCoach:
         if self._workers:
             self._push_agents()
 
+    # ---------- persistent interactive channels (channel_* tools) ----------
+
+    _CHAN_NAME = re.compile(r"^[a-z0-9-]{1,16}$")
+    _CHAN_MAX = 2
+
+    async def _channel_dispatch(self, t: str, a: dict,
+                                window: str | None) -> str:
+        """channel_open/send/read/close — named tmux windows (c-<name>)
+        for sessions the model converses with turn by turn. Same guards
+        as exec: scope check on anything carrying an IP/host, denials
+        self-reported via log_denial."""
+        name = str(a.get("channel") or "").strip().lower()
+        name = name.removeprefix("c-")   # model may pass the window name
+        if not self._CHAN_NAME.match(name):
+            return ("error: channel name must be [a-z0-9-]{1,16} "
+                    "(e.g. c1, ssh1)")
+        win = f"c-{name}"
+        if t == "channel_open":
+            if name in self._channels:
+                return (f"error: channel {name!r} already open — "
+                        "send/read/close it, or pick another name")
+            if len(self._channels) >= self._CHAN_MAX:
+                return (f"error: channel limit {self._CHAN_MAX} — "
+                        f"open: {sorted(self._channels)}; close one first")
+            cmd = str(a.get("command") or a.get("content") or "").strip()
+            if not cmd:
+                return "error: channel_open needs a command"
+            bad = (self._foreign_ip(cmd)
+                   or (self._foreign_host(cmd)
+                       if self._scope_locked else None))
+            if bad:
+                return (f"denied: {bad} is outside the authorized scope "
+                        "— channels follow the same ROE as exec_in_kali")
+            res = await self.client.type_in_pane(self.sid, cmd, window=win)
+            if res.get("error"):
+                return f"error: channel open failed — {res['error'][:160]}"
+            self._channels[name] = {"window": win, "command": cmd[:160],
+                                    "opened": time.time()}
+            asyncio.create_task(self.client.log_action(
+                self.sid, "channel_open",
+                {"channel": name, "cmd": cmd[:160]}, {"ok": True}))
+            cur = res.get("current_command") or ""
+            stale = (f"\nNOTE: window {win} already ran '{cur}' — your "
+                     "command was typed INTO that session, not a fresh "
+                     "shell (reused pane after restart). channel_close "
+                     "and reopen for a clean window."
+                     if cur and cur not in ("zsh", "bash", "sh", "fish",
+                                            "tmux", str(cmd.split()[0]))
+                     else "")
+            return (f"channel {name} open on window {win} "
+                    f"(running: {cmd[:80]}){stale}\n"
+                    f"{str(res.get('out') or '')[-1200:]}")
+        if t == "channel_close":
+            if name not in self._channels:
+                return f"error: channel {name!r} not open"
+            # kill-window runs on the main pane — a tmux control call,
+            # not a target action
+            res = await self.client.exec_in_kali(
+                self.sid, f"tmux kill-window -t pentrain-coach:{win}")
+            if res.get("error"):
+                # keep the registry entry — the window still lives on
+                # Kali, so send/read should keep working and a later
+                # close can retry
+                return (f"error: close failed (main pane busy?) — "
+                        f"{res['error'][:120]} — channel {name} kept")
+            del self._channels[name]
+            asyncio.create_task(self.client.log_action(
+                self.sid, "channel_close", {"channel": name}, {"ok": True}))
+            return f"channel {name} closed (window {win} killed)"
+        # send/read need an open channel
+        if name not in self._channels:
+            return (f"error: channel {name!r} not open — "
+                    f"open: {sorted(self._channels) or 'none'}")
+        if t == "channel_read":
+            res = await self.client.peek_pane(self.sid, win)
+            if res.get("error"):
+                return f"error: peek failed — {res['error'][:160]}"
+            cur = res.get("current_command") or ""
+            return (f"[{name}] {cur or 'idle'}:\n"
+                    f"{str(res.get('out') or '')[-1500:]}")
+        # channel_send — scope-check the input line too: `ssh root@8.8.8.8`
+        # typed INSIDE a channel is still a target connection (pivot!)
+        text = str(a.get("text") or a.get("content") or "")
+        if not text:
+            return "error: channel_send needs text"
+        bad = (self._foreign_ip(text)
+               or (self._foreign_host(text)
+                   if self._scope_locked else None))
+        if bad:
+            return (f"denied: {bad} outside scope — pivoting out through "
+                    "a channel is still out-of-scope")
+        res = await self.client.type_in_pane(self.sid, text, window=win)
+        if res.get("error"):
+            return f"error: send failed — {res['error'][:160]}"
+        cur = res.get("current_command") or ""
+        return (f"[{name}] {cur or 'idle'}:\n"
+                f"{str(res.get('out') or '')[-1500:]}")
+
     def _merge_worker_report(self, w: _Worker) -> str:
         """Push a finished worker's report into shared facts — runs at
         finish time so findings exist even if the parent never collects
@@ -3205,7 +3539,7 @@ class SessionCoach:
         # done when it reported, blocked when it died/timeout/killed.
         # The task stays visible (ow kept) so the parent's next plan
         # update sees the attempt's outcome, not a vanished claim.
-        if w.task_id:
+        if w.task_id and "ptg" not in self._ablate:
             ptg.mark(self.state.plan, w.task_id,
                      "done" if w.status == "done" else "blocked")
         await self.client.send_activity(self.sid, active=False, agent=w.id)
@@ -3213,6 +3547,13 @@ class SessionCoach:
             meta = self._msg_meta(w.id)
             await self.client.send_chat(
                 self.sid, w.report[:2000], kind="action_report", meta=meta)
+        # finished-pane cleanup — w-windows pile up across long runs and
+        # each holds a shell the model might later mistake for live
+        # state; the report already landed in the feed so the scrollback
+        # served its purpose
+        asyncio.create_task(self.client.exec_in_kali(
+            self.sid,
+            f"tmux kill-window -t pentrain-coach:{w.id} 2>/dev/null; true"))
         # notify the parent on its guaranteed-read channel — findings are
         # already merged into FACTS, this note announces the finish and
         # points at collect_agent for the full text (s1: three workers
@@ -3236,9 +3577,18 @@ class SessionCoach:
         cc = self.cfg.get("coach", {})
         turn_cap = int(cc.get("worker_turn_cap", 80))
         time_cap = int(cc.get("worker_time_cap_s", 3600))
-        shared = "\n".join(t for t in
-                           (self.state.coverage.render(300),
-                            self.state.pad.render(300)) if t)
+        _cov_off = "coverage" in self._ablate
+        shared = "\n".join(
+            t for t in (
+                ("THREAT_MODEL: attacker="
+                 + str(self.state.threat_model.get("attacker") or "?")
+                 + " | boundaries="
+                 + str(self.state.threat_model.get("boundaries") or "?")
+                 + " | assets="
+                 + str(self.state.threat_model.get("assets") or "?")
+                 if self.state.threat_model else ""),
+                "" if _cov_off else self.state.coverage.render(300),
+                "" if _cov_off else self.state.pad.render(300)) if t)
         msgs = [{"role": "system",
                  "content": render_worker_prompt(
                      self.ctx, w, self.facts.render(500, compact=True),
@@ -3351,7 +3701,7 @@ class SessionCoach:
                                  and a.get("type") != "none"]
                     is_invalid = (bool(bad_tools) or "parsed" in none_reason
                                   or "think block" in none_reason)
-                    if is_invalid and invalid_turns < 2:
+                    if is_invalid and invalid_turns < 3:
                         invalid_turns += 1
                         # pair any dispatched tool calls BEFORE the corrective
                         # — an unpaired tool_call corrupts the message list on
@@ -3371,15 +3721,27 @@ class SessionCoach:
                                f"have {sorted(WORKER_TOOL_NAMES)}"
                                if bad_tools else "no tool call parsed")
                         msgs.append({"role": "user", "content": (
-                            f"[corrective {invalid_turns}/2] {why} — emit "
+                            f"[corrective {invalid_turns}/3] {why} — emit "
                             "exec_in_kali/type_in_pane/wait calls, or your "
                             "final report as plain text.")})
                         continue
                     # no tool calls or only 'none' — the worker is done; its
-                    # trailing message IS the report to the parent
-                    w.report = ((resp.get("content") or "").strip()
-                                or last_out[-1500:] or "(finished silently)")
-                    w.status = "done"
+                    # trailing message IS the report to the parent. UNLESS
+                    # the correctives ran out on a parse-broken worker —
+                    # then its trailing text is garbage, not a report:
+                    # mark failed and take the salvage path so partial
+                    # evidence still merges instead of lying 'done'.
+                    if is_invalid:
+                        w.status = "failed"
+                        w.report = (f"worker never produced a valid "
+                                    f"report after {invalid_turns} "
+                                    f"corrective turns — last output:\n"
+                                    f"{last_out[-800:]}")
+                    else:
+                        w.report = ((resp.get("content") or "").strip()
+                                    or last_out[-1500:]
+                                    or "(finished silently)")
+                        w.status = "done"
                     # a failed report-post must not flip a finished worker
                     # to 'failed' and overwrite its real report
                     with contextlib.suppress(Exception):

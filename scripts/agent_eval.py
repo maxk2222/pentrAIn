@@ -54,6 +54,9 @@ def main() -> int:
     ap.add_argument("--password", required=True, help="admin password (auth/login)")
     ap.add_argument("--autonomy", type=int, default=4)
     ap.add_argument("--no-subagents", action="store_true")
+    ap.add_argument("--ablation", default="",
+                    help="comma list of subsystems to disable for ablation "
+                         "runs: ptg,roles,coverage,memory")
     ap.add_argument("--action-budget", type=int, default=300)
     ap.add_argument("--token-budget", type=int, default=0,
                     help="llm.daily_token_budget during the run (0 = unlimited)")
@@ -72,9 +75,11 @@ def main() -> int:
     api(args.base, token, "PATCH", "/api/settings", {"updates": {
         "coach.action_budget": args.action_budget,
         "llm.daily_token_budget": args.token_budget,
+        "coach.ablation": args.ablation,
     }})
     print(f"[{fmt_ts()}] budgets: action_budget={args.action_budget} "
-          f"token_budget={args.token_budget}")
+          f"token_budget={args.token_budget}"
+          + (f" ablation={args.ablation}" if args.ablation else ""))
 
     sid = None
     deploy_s = run_s = 0
@@ -131,6 +136,7 @@ def main() -> int:
             "coach.action_budget": old.get("coach.action_budget", 50),
             "llm.daily_token_budget":
                 old.get("llm.daily_token_budget", 2_000_000),
+            "coach.ablation": old.get("coach.ablation", ""),
         }})
 
     flags = api(args.base, token, "GET", f"/api/sessions/{sid}/flags")
@@ -150,9 +156,9 @@ def main() -> int:
         + ("" if args.no_subagents else " + subagents"),
         f"- deploy time: {deploy_s}s · run time: {run_s}s",
         f"- flags: {flags['solved']}/{flags['total']}",
-        *([f"- score: {attempt['score']} (attempt #{attempt['id']}, "
-           f"{attempt.get('flags_found', '?')} flags, "
-           f"{attempt.get('duration_s', '?')}s)"] if attempt else []),
+        *([(f"- score: {attempt['score']} (attempt #{attempt['id']}, "
+            f"{attempt.get('flags_found', '?')} flags, "
+            f"{attempt.get('duration_s', '?')}s)")] if attempt else []),
         "",
         "| flag | name | points | solved | first seen |",
         "|---|---|---|---|---|",
@@ -175,8 +181,8 @@ def main() -> int:
             "",
             "## agent metrics",
             "",
-            f"- actions: {am['actions_total']} in {am['span_s']:.0f}s "
-            f"({tools})",
+            (f"- actions: {am['actions_total']} in {am['span_s']:.0f}s "
+             f"({tools})"),
             f"- exec ok/error: {am['exec']['ok']}/{am['exec']['error']}",
             f"- denied: {am['denied']['total']}"
             + (f" ({deny_head})" if deny_head else ""),
@@ -189,6 +195,47 @@ def main() -> int:
             (f"- llm: {am['llm']['calls']} calls, "
              f"{am['llm']['total_tokens']} tokens"),
         ]
+        # P3 engagement/orchestration metrics — the "did it coordinate"
+        # view: foothold time, coverage pct, findings states, worker
+        # utilization and parent↔worker overlap
+        eng = am.get("engagement") or {}
+        orch = am.get("orchestration") or {}
+        mem = am.get("memory") or {}
+        cov = eng.get("coverage") or {}
+        if eng or orch:
+            lines += ["", "## engagement metrics", ""]
+            if eng.get("time_to_foothold_s") is not None:
+                lines.append(
+                    f"- time to foothold: {eng['time_to_foothold_s']}s")
+            if eng.get("time_to_first_confirmed_s") is not None:
+                lines.append(
+                    f"- first confirmed finding: "
+                    f"{eng['time_to_first_confirmed_s']}s")
+            if cov.get("surfaces"):
+                lines.append(
+                    f"- coverage: {cov.get('settled')}/{cov.get('surfaces')} "
+                    f"surfaces settled ({cov.get('pct')}%) "
+                    f"by-outcome={cov.get('by_outcome')}")
+            if eng.get("findings"):
+                lines.append(f"- findings: {eng['findings']}"
+                             + (" report built" if eng.get("report_built")
+                                else ""))
+            if eng.get("scope_denials"):
+                lines.append(f"- scope denials: {eng['scope_denials']}")
+            if orch.get("worker_spawns"):
+                lines.append(
+                    f"- workers: {orch['worker_spawns']} spawns, "
+                    f"{orch.get('worker_execs')} execs "
+                    f"(util {orch.get('worker_util_pct')}%), "
+                    f"parent-worker overlap {orch.get('recon_overlap_execs')} "
+                    "execs")
+            if any(mem.values()):
+                lines.append(
+                    f"- memory: {mem.get('search')} searches, "
+                    f"{mem.get('recorded')} plays recorded, "
+                    f"{mem.get('feedback')} feedback")
+            if am.get("playbooks"):
+                lines.append(f"- playbooks: {am['playbooks']}")
     if usage:
         lines += ["", "## LLM usage (last 24h)", "",
                   "```json", json.dumps(usage, indent=2)[:2000], "```"]

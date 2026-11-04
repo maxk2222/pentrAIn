@@ -12,7 +12,7 @@ import asyncio
 import ipaddress
 import re
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 MAX_ITEMS = 32
@@ -29,7 +29,7 @@ def _norm_nets(raw: list[str]) -> list[str]:
         try:
             net = ipaddress.ip_network(str(c).strip(), strict=False)
         except ValueError:
-            raise ScopeError(f"invalid CIDR/net: {c!r}")
+            raise ScopeError(f"invalid CIDR/net: {c!r}") from None
         if net.is_loopback or net.is_link_local or net.is_multicast:
             raise ScopeError(f"not a usable target net: {c}")
         s = str(net)
@@ -64,7 +64,7 @@ def _norm_ports(raw: list) -> list[int]:
         try:
             p = int(p)
         except (TypeError, ValueError):
-            raise ScopeError(f"invalid port: {p!r}")
+            raise ScopeError(f"invalid port: {p!r}") from None
         if not (1 <= p <= 65535):
             raise ScopeError(f"port out of range: {p}")
         if p not in ports:
@@ -119,11 +119,11 @@ async def normalize(body) -> dict:
                 nets.append(net)
         except ValueError:
             if not _HOST_RE.match(h):
-                raise ScopeError(f"invalid url host: {h!r}")
+                raise ScopeError(f"invalid url host: {h!r}") from None
             if h not in hosts:
                 hosts.append(h)
         if p.port is not None and p.port not in ports:
-            ports = sorted(ports + [p.port])
+            ports = sorted([*ports, p.port])
 
     # pin every authorized hostname's current A records as /32 nets —
     # the coach's literal-IP guard then ALSO covers what DNS resolves to,
@@ -144,7 +144,7 @@ async def normalize(body) -> dict:
     return {
         "version": 1, "locked": True, "mode": "external-engagement",
         "authorized_by": auth[:300],
-        "authorized_at": datetime.now(timezone.utc).isoformat(),
+        "authorized_at": datetime.now(UTC).isoformat(),
         "nets": nets, "hosts": hosts, "ports": ports,
         "resolved": resolved,
         "unresolved": [h for h in hosts if h not in resolved],

@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.domain import (
+    AttackPath,
     AutonomyLevel,
     CoachAction,
     CoachLesson,
@@ -158,7 +159,7 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
                 CoachAction.session_id == session_id,
                 CoachAction.tool.in_(
                     ["record_coverage", "update_coverage", "create_note",
-                     "record_finding"]))
+                     "record_finding", "threat_model"]))
             .order_by(CoachAction.id.desc()).limit(96))).all())]
     # observer field notes — session-scoped by applies (global + this
     # track + this quest); consumed via push-hints and lookup_guide only,
@@ -420,6 +421,119 @@ async def active_lessons(db: AsyncSession, *, track: str | None = None,
         .order_by(CoachLesson.id.desc()).limit(limit))).scalars().all()
 
 
+_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+
+
+def _scrub_step(text: str) -> str:
+    """Attack-path step sanitizer — a memory must teach the MOVE, never
+    carry the loot: secrets die, concrete addresses generalize to <ip>
+    (a path pinned to 10.0.0.5 is useless in the next lab)."""
+    t = sanitize_lesson_text(text)
+    return _IP_RE.sub("<ip>", t)[:180]
+
+
+async def record_attack_path(
+        db: AsyncSession, session_id: int | None, title: str,
+        tags: list, steps: list, outcome: str = "",
+        applies: str = "global") -> AttackPath | None:
+    """Success-case memory write — sanitized, IP-generalized, deduped
+    against active paths in the same scope (Jaccard ≥0.6 on titles →
+    merge-hit, the re-derived path reinforces instead of duplicating).
+    Returns the stored/merged row or None when the payload is unusable."""
+    clean_title = sanitize_lesson_text(title)[:160]
+    clean_steps = [s for s in (_scrub_step(x) for x in (steps or [])) if s]
+    if len(clean_title) < 8 or not clean_steps:
+        return None
+    existing = (await db.execute(
+        select(AttackPath).where(
+            AttackPath.status == "active",
+            AttackPath.applies == applies)
+        .order_by(AttackPath.id.desc()).limit(80))).scalars().all()
+    for row in existing:
+        if _jaccard(row.title, clean_title) >= 0.6:
+            row.hits = (row.hits or 0) + 1
+            # re-derived → keep the richer steps/outcome, never shrink them
+            if len(clean_steps) > len(row.steps or []):
+                row.steps = clean_steps
+            clean_out = _scrub_step(outcome)
+            if len(clean_out) > len(row.outcome or ""):
+                row.outcome = clean_out
+            await db.commit()
+            return row
+    row = AttackPath(
+        session_id=session_id, title=clean_title,
+        tags=[str(t)[:32].lower() for t in (tags or [])][:10],
+        steps=clean_steps[:14], outcome=_scrub_step(outcome),
+        applies=applies, confidence=0.5)
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+async def search_attack_paths(
+        db: AsyncSession, query: str, *, session_id: int | None = None,
+        limit: int = 3) -> list[dict]:
+    """Success-case retrieval — keyword score over title/tags/steps/
+    outcome, scoped to global + the caller's track + quest, ordered by
+    score then confidence. Returned rows bump `hits` (consult count —
+    play_outcome reports the real reinforcement signal)."""
+    scopes = ["global"]
+    if session_id is not None:
+        sess = await db.get(Session, session_id)
+        # explicit quest fetch — sess.quest would lazy-load, which is
+        # illegal off an awaited session in async context
+        qrow = (await db.get(Quest, sess.quest_id)) if sess else None
+        if qrow:
+            scopes += [f"track:{qrow.track_slug}",
+                       f"quest:{sess.quest_id}"]
+    rows = (await db.execute(
+        select(AttackPath).where(
+            AttackPath.status == "active",
+            AttackPath.applies.in_(scopes))
+        .order_by(AttackPath.id.desc()).limit(120))).scalars().all()
+    qwords = {w for w in re.findall(r"[a-z0-9_+.-]+", (query or "").lower())
+              if len(w) > 2}
+    scored: list[tuple[float, AttackPath]] = []
+    for r in rows:
+        hay = " ".join([r.title, " ".join(r.tags or []),
+                        " ".join(r.steps or []), r.outcome or ""]).lower()
+        score = sum(1 for w in qwords if w in hay)
+        if score:
+            scored.append((score + 0.25 * (r.confidence or 0.5), r))
+    scored.sort(key=lambda sr: -sr[0])
+    out = []
+    for _s, r in scored[:limit]:
+        r.hits = (r.hits or 0) + 1
+        out.append({"id": r.id, "title": r.title, "tags": r.tags or [],
+                    "steps": r.steps or [], "outcome": r.outcome or "",
+                    "confidence": r.confidence or 0.5})
+    if out:
+        await db.commit()
+    return out
+
+
+async def attack_path_feedback(db: AsyncSession, play_id: int,
+                               ok: bool) -> None:
+    """Reinforcement signal — the coach followed a retrieved path and
+    reports whether it worked. Confidence drifts 0.05/step, clamped;
+    misses on a stale path let it sink instead of keeping zombie
+    guidance ranked by ancient wins."""
+    row = await db.get(AttackPath, play_id)
+    if not row:
+        return
+    if ok:
+        row.hits = (row.hits or 0) + 1
+        row.confidence = min(1.0, (row.confidence or 0.5) + 0.05)
+    else:
+        row.misses = (row.misses or 0) + 1
+        row.confidence = max(0.05, (row.confidence or 0.5) - 0.05)
+        # a path that fails twice more often than it works gets retired
+        if (row.misses or 0) >= 3 and (row.misses or 0) > (row.hits or 0):
+            row.status = "disabled"
+    await db.commit()
+
+
 async def post_message(db: AsyncSession, session_id: int, role: str, kind: str,
                        content: str, meta: dict | None = None) -> CoachMessage:
     msg = CoachMessage(session_id=session_id, role=role, kind=kind,
@@ -568,7 +682,10 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str,
         # interactive fast-path keys off this: still-busy means the next
         # input should follow at LLM cadence, not the ~90s reflect tick.
         busy = bool(cur) and cur not in ("zsh", "bash", "sh", "fish", "tmux")
-        await record_action(db, session_id, "type_in_pane", {"text": text[:80]},
+        t_args: dict = {"text": text[:80]}
+        if window:
+            t_args["window"] = window   # channel attribution in the audit
+        await record_action(db, session_id, "type_in_pane", t_args,
                             {"out": out[-600:]}, status="ok")
         if session_id:
             await publish_session(session_id, "coach_activity", {
@@ -581,6 +698,46 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str,
     except Exception as e:
         await record_action(db, session_id, "type_in_pane", {"text": text[:80]},
                             {"error": str(e)}, status="error")
+        return {"error": str(e), "status": "error"}
+
+
+async def peek_pane(db: AsyncSession, session_id: int,
+                    window: str | None = None) -> dict:
+    """Read-only capture of a named coach pane — for channel_read. No
+    typing, no Enter key, no busy-mutation; returns the tail plus the
+    pane's foreground command so the model sees what holds the channel."""
+    session = await db.get(Session, session_id)
+    if not session:
+        return {"error": "session not found", "status": "error"}
+    if session.state not in (SessionState.READY.value, SessionState.ACTIVE.value):
+        return {"error": f"session state {session.state}", "status": "denied"}
+    if session.autonomy_level < AutonomyLevel.TAKEOVER.value:
+        return {"error": "autonomy level too low", "status": "denied"}
+    if not session.kali_vmid:
+        return {"error": "no kali vmid", "status": "error"}
+    engine = await get_engine(db)
+    try:
+        target = _pane_target(window)
+        pane = await engine.pve.agent_exec_sh(
+            session.kali_vmid,
+            f"tmux capture-pane -pJ -t {target} -S - 2>/dev/null; "
+            f"echo @@FG@@; "
+            f"tmux display-message -p -t {target} "
+            "'#{pane_current_command}' 2>/dev/null", timeout_s=10)
+        p_out = pane.get("out") or ""
+        body, _, cur = p_out.rpartition("@@FG@@")
+        lines = body.rstrip("\n").splitlines()
+        out = "\n".join(lines[-50:])[-3000:]
+        cur = cur.strip()
+        busy = bool(cur) and cur not in ("zsh", "bash", "sh", "fish", "tmux")
+        # read-only but auditable — a channel_read that leaves no row is
+        # invisible to trajectory review and the metrics trail
+        await record_action(db, session_id, "peek_pane",
+                            {"window": window or ""},
+                            {"out": out[-400:], "fg": cur}, status="ok")
+        return {"out": out, "current_command": cur, "busy": busy,
+                "exists": bool(out.strip() or cur)}
+    except Exception as e:
         return {"error": str(e), "status": "error"}
 
 
@@ -626,9 +783,17 @@ async def check_flag(db: AsyncSession, session_id: int, flag_key: str) -> dict:
 COACH_TMUX = "pentrain-coach"
 
 
+_WINDOW_OK = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
+
+
 def _pane_target(window: str | None) -> str:
     """tmux target for a pane — main session window by default, a named
-    worker window (pentrain-coach:w1..w3) for parallel subagents."""
+    worker window (pentrain-coach:w1..w3) for parallel subagents. The
+    name interpolates UNQUOTED into tmux -t targets, so it is validated
+    here — callers upstream regex-check too, but the boundary defends
+    itself."""
+    if window and not _WINDOW_OK.fullmatch(window):
+        raise ValueError(f"invalid pane window name {window!r}")
     return f"{COACH_TMUX}:{window}" if window else COACH_TMUX
 
 
@@ -933,6 +1098,83 @@ async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
         round((actions[-1].created_at - actions[0].created_at)
               .total_seconds(), 1)
         if len(actions) > 1 and actions[0].created_at else 0.0)
+
+    # ---- engagement/orchestration metrics (P3 eval) — all from the
+    # action audit trail so a restarted coach doesn't lose the run's story
+    foothold_ts = confirmed_ts = None
+    cov_latest: dict[str, str] = {}        # surface → last outcome
+    findings_state: dict[str, str] = {}    # id|title+host → last status
+    worker_execs = parent_execs = 0
+    spawn_tasks: list[str] = []
+    memory = {"search": 0, "recorded": 0, "feedback": 0}
+    playbooks_used: dict[str, int] = {}
+    scope_denials = 0
+    for a in actions:
+        out = str((a.result or {}).get("out") or "")
+        if (foothold_ts is None
+                and a.tool in ("exec_in_kali", "type_in_pane")
+                and a.status in ("ok", "confirmed")
+                and re.search(r"uid=\d+", out)):
+            foothold_ts = a.created_at
+        if a.tool == "record_finding":
+            fa = a.args or {}
+            fid = str(fa.get("id")
+                      or f"{fa.get('title', '')[:60]}|{fa.get('host', '')}")
+            st = str(fa.get("status") or "candidate")
+            findings_state[fid] = st
+            if confirmed_ts is None and st == "confirmed":
+                confirmed_ts = a.created_at
+        elif a.tool in ("record_coverage", "update_coverage"):
+            ca = a.args or {}
+            if ca.get("surface"):
+                cov_latest[str(ca["surface"])] = str(
+                    ca.get("outcome") or "testing")
+        elif a.tool == "exec_in_kali":
+            win = str((a.args or {}).get("window") or "")
+            if re.fullmatch(r"w\d+", win):
+                worker_execs += 1
+            else:
+                parent_execs += 1
+        elif a.tool == "spawn_agent":
+            spawn_tasks.append(str((a.args or {}).get("task") or ""))
+        elif a.tool == "search_memory":
+            memory["search"] += 1
+        elif a.tool == "record_play":
+            memory["recorded"] += 1
+        elif a.tool == "play_outcome":
+            memory["feedback"] += 1
+        elif a.tool == "run_playbook":
+            pn = str((a.args or {}).get("name") or "?")
+            playbooks_used[pn] = playbooks_used.get(pn, 0) + 1
+        if (a.status == "denied"
+                and re.search(r"scope|authorized|known target",
+                              str((a.result or {}).get("reason")
+                                  or (a.result or {}).get("error") or ""),
+                              re.IGNORECASE)):
+            scope_denials += 1
+    # recon-overlap: parent execs that hit an IP a spawned worker's task
+    # already claims — the orchestration duplication signal
+    spawn_ips = {ip for tsk in spawn_tasks for ip in re.findall(
+        r"\b\d{1,3}(?:\.\d{1,3}){3}\b", tsk)}
+    overlap = sum(
+        1 for a in actions
+        if a.tool == "exec_in_kali" and not (a.args or {}).get("window")
+        and spawn_ips
+        and any(ip in str((a.args or {}).get("command") or "")
+                for ip in spawn_ips))
+    settled = sum(1 for o in cov_latest.values()
+                  if o in ("tested_clean", "confirmed"))
+    coverage = {
+        "surfaces": len(cov_latest),
+        "settled": settled,
+        "pct": round(100.0 * settled / len(cov_latest), 1)
+        if cov_latest else None,
+        "by_outcome": {o: sum(1 for v in cov_latest.values() if v == o)
+                       for o in sorted(set(cov_latest.values()))},
+    }
+    findings_counts = {st: n for st, n in sorted(
+        {s: sum(1 for v in findings_state.values() if v == s)
+         for s in set(findings_state.values())}.items())}
     return {
         "session_id": session_id,
         "actions_total": len(actions),
@@ -963,4 +1205,30 @@ async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
             "completion_tokens": sum(x.completion_tokens for x in usage),
         },
         "span_s": span,
+        # P3 eval block — engagement + orchestration quality from the
+        # audit trail
+        "engagement": {
+            "time_to_foothold_s": (
+                round((foothold_ts - t0).total_seconds(), 1)
+                if foothold_ts and t0 else None),
+            "time_to_first_confirmed_s": (
+                round((confirmed_ts - t0).total_seconds(), 1)
+                if confirmed_ts and t0 else None),
+            "coverage": coverage,
+            "findings": findings_counts,
+            "report_built": bool(tool_counts.get("build_report")),
+            "scope_denials": scope_denials,
+        },
+        "orchestration": {
+            "worker_execs": worker_execs,
+            "parent_execs": parent_execs,
+            "worker_util_pct": (
+                round(100.0 * worker_execs
+                      / (worker_execs + parent_execs), 1)
+                if worker_execs + parent_execs else None),
+            "worker_spawns": len(spawn_tasks),
+            "recon_overlap_execs": overlap,
+        },
+        "memory": memory,
+        "playbooks": playbooks_used,
     }

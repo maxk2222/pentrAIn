@@ -285,9 +285,20 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
           else []),
         # agent-declared coverage + shared notes — what was TESTED (with
         # outcome) and cross-agent curated context; complements FACTS
-        # (extracted evidence) — check before spawning or re-testing
-        *([cov_txt] if (cov_txt := st.coverage.render(340)) else []),
-        *([pad_txt] if (pad_txt := st.pad.render(300)) else []),
+        # (extracted evidence) — check before spawning or re-testing.
+        # Under a coverage ablation the subsystem is fully hidden, not
+        # just its tools — otherwise the render leaks the ablated state
+        *([cov_txt] if ("coverage" not in st.ablation
+                        and (cov_txt := st.coverage.render(340))) else []),
+        *([pad_txt] if ("coverage" not in st.ablation
+                       and (pad_txt := st.pad.render(300))) else []),
+        # threat-model card — the engagement's aim: which attacker, which
+        # boundaries, which crown jewels. Workers see the same card at
+        # spawn; amend it via threat_model as the picture sharpens
+        *([("THREAT_MODEL: attacker=" + str(_tm.get("attacker") or "?")
+            + " | boundaries=" + str(_tm.get("boundaries") or "?")
+            + " | assets=" + str(_tm.get("assets") or "?"))]
+          if (_tm := st.threat_model) else []),
         # deterministic next-step suggestion (mini-PTG) — one concrete
         # action from open work, so long-horizon runs don't lose the thread
         *([obj_txt] if (obj_txt := (objective_render(ctx, facts, st)
@@ -296,7 +307,7 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         # ready work — point at the first unblocked task so the plan's
         # deps actually drive order (blind/engagement runs have no
         # checkpoints and few flag-shaped objectives)
-        *([ptg_next] if (not obj_txt
+        *([ptg_next] if (not obj_txt and "ptg" not in st.ablation
                          and (rdy := ptg.ready(st.plan))
                          and (ptg_next := (
                              "PTG_NEXT: " + rdy[0]["t"][:110]
@@ -389,6 +400,21 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
                     f"PARALLEL_HINT: {len(tgts)} independent targets "
                     f"({', '.join(tgts[:4])}) — spawning a worker per host "
                     "halves wall-time vs attacking them serially.")
+        parts.append(
+            ("MEMORY: search_memory(query) retrieves proven attack paths "
+             "from past sessions — consult it when planning an unfamiliar "
+             "target or phase (results are guidance to verify, never "
+             "evidence). When the engagement/quest completes or a chain "
+             "clearly works, record_play distills the winning sequence so "
+             "the next session starts smarter; play_outcome reports "
+             "whether a followed path held up. "
+             if "memory" not in st.ablation else "")
+            + "threat_model sets the "
+            "engagement's aim card (attacker/boundaries/assets) early — "
+            "workers read it at spawn. run_playbook executes bounded "
+            "macro-chains (recon/web_enum/smb_enum/cred_try/…) on their "
+            "own pane; channel_open keeps a persistent interactive "
+            "session (ssh/msfconsole/nc) on window c1/c2.")
         if (st.operator_directive
                 and time.time() - st.operator_directive_ts < 600):
             parts.append(
@@ -450,8 +476,9 @@ _ROLE_FRAGMENTS = {
     "pivot": (
         "ROLE: pivot — establish reachability to an internal segment "
         "through a compromised host (ssh -J, sshuttle, port-forward). "
-        "Prove the path with ONE probe; hand the working recipe back "
-        "verbatim in your report."),
+        "Use literal IPs everywhere — name aliases don't resolve across "
+        "hops. Prove the path with ONE probe; hand the working recipe "
+        "back verbatim in your report."),
     "verify": (
         "ROLE: verify — reproduce reported evidence READ-ONLY: re-run the "
         "proof commands, then report each item confirmed|rejected. No "
@@ -512,6 +539,13 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
             ("^ shared coverage ledger + notes at spawn time — surfaces "
              "already covered are settled, don't re-test them; extend them "
              "in your report's coverage/notes keys instead."),
+        ]
+    if preload := guides.preload_for(getattr(w, "role", "") or ""):
+        lines += [
+            "",
+            ("PRELOADED RECIPES for your role — apply them directly, no "
+             "lookup_guide call needed for these:"),
+            preload,
         ]
     lines += [
         "RULES:",

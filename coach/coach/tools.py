@@ -8,6 +8,8 @@ import json
 
 import structlog
 
+from . import playbooks
+
 log = structlog.get_logger(__name__)
 
 # ---------- tool schema (single source of truth) ----------
@@ -226,6 +228,92 @@ TOOLS: list[dict] = [
     _fn("kill_agent",
         "Cancel a running worker before it finishes.",
         {"worker_id": _str("worker id, e.g. w1")}, ["worker_id"]),
+    _fn("search_memory",
+        "Search long-term attack-path memory — distilled SUCCESSFUL "
+        "sequences from past sessions (recon→foothold→privesc chains that "
+        "worked). Call at planning time for an unfamiliar target or when "
+        "a phase stalls: a hit is a proven sequence to ADAPT, not a "
+        "guarantee — verify it fits before following it. Hits carry ids "
+        "for play_outcome feedback. Costs no action budget.",
+        {"query": _str("situation keywords — services/tech/goal, e.g. "
+                       "'wordpress creds foothold' or 'linux privesc'")},
+        ["query"]),
+    _fn("record_play",
+        "Distill ONE successful attack sequence into long-term memory — "
+        "call when the quest/engagement completes or a major chain "
+        "succeeds: name it, tag the techniques, list the ordered steps "
+        "that WORKED. Future sessions retrieve this via search_memory — "
+        "write for an agent that never saw this one. Moves, not loot: "
+        "never put flags, passwords or session-specific secrets in "
+        "steps. Costs no action budget.",
+        {"title": _str("one-line chain name, e.g. 'wp-admin creds → "
+                       "theme shell → suid root'"),
+         "tags": {"type": "array", "items": {"type": "string"},
+                  "description": "technique/service tags: wordpress|ssh|"
+                                 "sudo|smb …"},
+         "steps": {"type": "array", "items": {"type": "string"},
+                   "description": "ordered steps that worked, each "
+                                  "'phase: what did it' <=140 chars"},
+         "outcome": _str("what the chain achieved, <=200 chars")},
+        ["title", "tags", "steps"]),
+    _fn("play_outcome",
+        "Report whether a memory path you followed worked — play_id from "
+        "a search_memory hit. ok=true reinforces it for the next session; "
+        "ok=false marks a miss so stale paths lose rank.",
+        {"play_id": {"type": "integer",
+                     "description": "attack-path id from search_memory"},
+         "ok": {"type": "boolean"}},
+        ["play_id", "ok"]),
+    _fn("threat_model",
+        "Set or amend the engagement threat-model card — the attacker's "
+        "assumed position, the trust boundaries in play, the crown-jewel "
+        "assets to reach. Shared with workers at spawn so parallel tasks "
+        "aim at what matters; amendable as facts emerge. Engagement "
+        "bookkeeping — costs no action budget.",
+        {"attacker": _str("assumed attacker position/capability, e.g. "
+                          "'external, unauthenticated, standard tools'"),
+         "boundaries": _str("trust boundaries crossed, e.g. 'internet→dmz "
+                            "web tier→internal lan'"),
+         "assets": _str("crown jewels to reach or prove access to")},
+        []),
+    _fn("run_playbook",
+        "Run ONE bounded macro-playbook — a scripted command chain with "
+        "built-in scope check, timeout and result parser (facts+coverage "
+        "merge automatically). Use for commodity phases instead of "
+        "hand-rolling every step: "
+        + playbooks.names()
+        + ". Args are validated; out-of-scope targets are denied before "
+        "anything runs. The result returns coverage rows merged plus an "
+        "output tail.",
+        {"name": {"type": "string",
+                  "enum": [p.name for p in playbooks.PLAYBOOKS]},
+         "args": {"type": "object",
+                  "description": "playbook args — target (host/ip), port, "
+                                 "user, creds etc; schema per playbook"}},
+        ["name"]),
+    _fn("channel_open",
+        "Open a persistent interactive channel on its own tmux window "
+        "(c1/c2) — for sessions you must converse with turn by turn: "
+        "ssh, msfconsole, ftp, nc listeners, remote shells. The command "
+        "runs through the same scope/deny guards as exec_in_kali. Max "
+        "2 open channels; read/send/close them by name.",
+        {"channel": _str("channel name, e.g. c1 — becomes tmux window c-c1"),
+         "command": _str("command that STARTS the interactive session")},
+        ["channel", "command"]),
+    _fn("channel_send",
+        "Type one input line into an open channel — passwords, remote "
+        "shell commands, menu choices. Returns the pane tail.",
+        {"channel": _str("open channel name"),
+         "text": _str("literal input line")},
+        ["channel", "text"]),
+    _fn("channel_read",
+        "Read an open channel's pane tail without typing — check what a "
+        "long-running listener or slow session produced.",
+        {"channel": _str("open channel name")}, ["channel"]),
+    _fn("channel_close",
+        "Close an open channel — kills its tmux window and frees the "
+        "slot. Always close channels you no longer need.",
+        {"channel": _str("open channel name")}, ["channel"]),
 ]
 
 # tools a spawned worker may call — exec + research only: no chat, flags,
@@ -254,7 +342,10 @@ _LEVEL_TOOLS = {
         "wait", "update_plan", "lookup_guide", "record_lesson",
         "web_search", "web_fetch", "none",
         "record_coverage", "update_coverage", "list_coverage",
-        "create_note", "list_notes", "record_finding", "build_report"},
+        "create_note", "list_notes", "record_finding", "build_report",
+        "search_memory", "record_play", "play_outcome", "threat_model",
+        "run_playbook",
+        "channel_open", "channel_send", "channel_read", "channel_close"},
 }
 
 

@@ -64,6 +64,14 @@ class SessionState:
     # owned: workers contribute via their report merge, never mid-run.
     coverage: CoverageLedger = field(default_factory=CoverageLedger)
     pad: NotesPad = field(default_factory=NotesPad)
+    # engagement threat-model card — attacker profile, trust boundaries,
+    # crown-jewel assets (set/amended via threat_model tool; replayed
+    # from ledger_log; shared with workers at spawn so parallel tasks
+    # aim at what matters)
+    threat_model: dict = field(default_factory=dict)
+    # eval ablation switches (coach.ablation) — subsystem names disabled
+    # for ablation runs; read by prompt render + dispatch seams
+    ablation: set = field(default_factory=set)
     _grace_noted: bool = False         # one-shot: operator told budget hit grace
     # rolling summary — what trim_history dropped, distilled to one line per
     # item so long-horizon runs keep a trace of their early turns

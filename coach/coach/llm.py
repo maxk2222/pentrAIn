@@ -28,6 +28,9 @@ ALLOWED_ACTIONS = {
     "web_search", "web_fetch",
     "record_coverage", "update_coverage", "list_coverage",
     "create_note", "list_notes", "record_finding", "build_report",
+    "search_memory", "record_play", "play_outcome", "threat_model",
+    "run_playbook",
+    "channel_open", "channel_send", "channel_read", "channel_close",
 }
 
 

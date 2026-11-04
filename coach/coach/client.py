@@ -181,6 +181,37 @@ class BackendClient:
         return await self._post("/api/coach/observer-hint", {
             "session_id": session_id, "text": text[:400]})
 
+    async def record_play(self, session_id: int | None, title: str,
+                          tags: list, steps: list, outcome: str = "",
+                          applies: str = "global") -> dict:
+        """Success-case memory write — backend sanitizes/dedupes; a
+        merged path returns the existing row's id."""
+        return await self._post("/api/coach/play", {
+            "session_id": session_id, "title": title[:160],
+            "tags": list(tags or [])[:10],
+            "steps": [str(s)[:180] for s in (steps or [])][:14],
+            "outcome": outcome[:240], "applies": applies[:80]})
+
+    async def search_memory(self, session_id: int | None,
+                            query: str) -> dict:
+        """Success-case retrieval — top-3 attack paths for a situation."""
+        from urllib.parse import urlencode
+        qs = urlencode({"q": query[:200],
+                        **({"session_id": session_id}
+                           if session_id else {})})
+        return await self._get(f"/api/coach/memory?{qs}")
+
+    async def play_feedback(self, play_id: int, ok: bool) -> dict:
+        """Reinforcement ping — a followed memory path worked or not."""
+        return await self._post(
+            f"/api/coach/play/{play_id}/feedback"
+            f"?ok={'true' if ok else 'false'}", {}, timeout=10.0)
+
+    async def peek_pane(self, session_id: int, window: str) -> dict:
+        """Read-only pane tail for a channel window — no typing, no Enter."""
+        return await self._post("/api/coach/peek", {
+            "session_id": session_id, "window": window[:32]}, timeout=15.0)
+
     async def report_llm_usage(self, session_id: int | None, model: str,
                                kind: str, usage: dict | None,
                                latency_ms: int | None) -> dict:

@@ -73,6 +73,7 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.effort_routine": ("medium", False),   # stage 0-1 proactive turns
     "coach.effort_deep": ("", False),            # stage 2 ("" = llm default)
     "coach.effort_worker": ("medium", False),    # subagent exec chains
+    "coach.ablation": ("", False),               # eval-only: "ptg,roles,coverage,memory" disables subsystems
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

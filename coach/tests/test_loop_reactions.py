@@ -2920,9 +2920,10 @@ async def test_worker_parse_failure_retried_then_done():
     assert any("corrective" in str(m) for m in coach.llm.msgs_seen[-1])
 
 
-async def test_worker_three_parse_failures_give_up():
-    """The retry is bounded — three consecutive invalid turns end the
-    worker with whatever content it produced."""
+async def test_worker_parse_failures_hit_salvage_path():
+    """The retry is bounded — a parse-broken worker that burns through all
+    three correctives must NOT report its garbage text as a successful
+    report: status=failed with a salvage report carrying the last output."""
     from coach.loop import _Worker
     bad = {"content": "nope", "tool_calls": [],
            "actions": [{"type": "none", "reason": "no valid actions parsed"}],
@@ -2930,11 +2931,12 @@ async def test_worker_three_parse_failures_give_up():
     coach, _ = _coach()
     coach.state.autonomy_level = 4
     coach.ctx["session"]["autonomy_level"] = 4
-    coach.llm = QueueLlm([bad, bad, bad])
+    coach.llm = QueueLlm([bad, bad, bad, bad])
     w = _Worker(id="w1", task="x", started=time.monotonic())
     await coach._worker_loop(w)
-    assert w.status == "done" and w.actions == 0
-    assert len(coach.llm.calls) == 3  # initial + 2 retries, not infinite
+    assert w.status == "failed" and w.actions == 0
+    assert "never produced a valid report" in w.report
+    assert len(coach.llm.calls) == 4  # initial + 3 correctives, not infinite
 
 
 async def test_worker_task_brief_survives_context_trim():
