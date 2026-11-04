@@ -284,3 +284,42 @@ Per-quest findings appended below the ladder table.
 - Covers every caller: coach /tmp/ptn-*.sh scripts, kali_net up/down,
   flags seeding, hosts.sh. Tests: b64 fallback path + ascii-reraise.
 2026-11-04 18:20
+
+## BUG: deep-effort spend marker died on every coach restart
+- _deep_spent_ts was in-memory only → each redeploy burned one fresh
+  600s deep cancel at stage>=2 (s1: 3 rebuilds = ~30min dead time).
+- Fix: spend now records kind="effort" in the session traj (survives,
+  rotated per attempt); attach restores + CLAMPS to attach-time —
+  last_progress_ts re-seeds to now without progress events, so only
+  new observed progress re-earns depth. 2 tests.
+2026-11-04 18:55
+
+## INFRA error message taught 'probe' but not 'retry'
+- After the unicode 500, agent waited 30s then abandoned the report
+  deliverable — the message said probe with `echo ok` but never said
+  RETRY the command; agent read it as a soft denial and fell back to
+  template re-reads (denied 3x). Reworded: transport failure is not a
+  denial — retry after the channel probe.
+2026-11-04 18:55
+
+## Worker parse failures were undiagnosable notes
+- w1-w4 all logged bare 'no valid actions parsed' — no sample of what
+  the model emitted. Notes now carry the raw output head (140 chars).
+- Salvage path added: 3 correctives burned → status=failed + salvage
+  report (last real output) instead of garbage-as-report.
+2026-11-04 19:05
+
+## web_search/web_fetch: 0 uses in ~5h despite INTERNET=YES
+- s1 is a pure LAN-assessment quest — arguably legit non-use, but the
+  router httpd/3.0 fingerprint + service CVE lookup were real chances.
+  Watch whether memory/playbook tools change the consult reflex.
+2026-11-04 19:05
+
+## New feature block deployed mid-eval (6824e2d)
+- attack-path long-term memory (record_play/search_memory/play_outcome),
+  bounded playbooks, persistent channels c1/c2, threat_model card,
+  peek_pane, coach.ablation kill-switches, role knowledge-preload,
+  7 new modules, scope DNS-pinning. 421 coach + 157 backend tests.
+- Tool surface changes mid-session: additive only; watch for the
+  model exploring new tools vs finishing the report deliverable.
+2026-11-04 19:15
