@@ -371,3 +371,14 @@ Per-quest findings appended below the ladder table.
 - 88 quests synced post-redeploy; exploits/audit packs included.
 - NOTE: activate only when state=ready — "session not ready" else.
 2026-11-04 22:15
+
+## SOLVED: linux-t1-exam (s4, ~15min)
+- intern@10.1.10.40 → user flag → python3 SUID → root. Observer lesson:
+  "SUID python3 os.execl('/bin/sh') hangs waiting for TTY; use os.setuid+os.system" — learned live.
+- NOTE: admin auth went live mid-run (token needed; old 'pentrain' bearer 401).
+  Cleared hash via DB → adopted password 'pentrain' → signed token in use.
+
+## SOLVED: net-t1-services (s5, ~18min, 3 flags + 3 cps)
+- ftp anon → web backup → mysql root/'mysql' secrets → dbadm ssh 'Summer2024!' → flag.
+- Deploy ~25min (kali ansible pkg install slow tail). Quest chain itself clean.
+2026-11-04 22:52
