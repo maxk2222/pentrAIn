@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from coach.loop import SessionCoach, _Worker
 from coach.prompts import render_worker_prompt
-from coach.tools import WORKER_TOOL_NAMES, worker_tools
+from coach.tools import WORKER_ROLES, WORKER_TOOL_NAMES, worker_tools
 
 
 def test_verify_role_drops_bookkeeping_tools():
@@ -128,6 +128,18 @@ def test_worker_prompt_without_role_stays_generic():
         w, turn_cap=10, time_cap_s=300)
     assert "ROLE:" not in out
     assert "DONE WHEN:" not in out
+
+
+def test_audit_worker_roles_are_registered_and_scoped():
+    for role in ("ai-audit", "cloud-audit", "exploit-audit", "linux-audit"):
+        assert role in WORKER_ROLES
+        worker = _Worker(id="w1", task="review local evidence", role=role)
+        prompt = render_worker_prompt(
+            {"quest": {"title": "Audit", "track": "audit", "targets": []}},
+            worker, turn_cap=10, time_cap_s=300)
+        assert f"ROLE: {role}" in prompt
+        assert "local synthetic" in prompt or "local permission" in prompt
+        assert "Do not" in prompt
 
 
 async def test_ledger_delegate_hint_fires_once():

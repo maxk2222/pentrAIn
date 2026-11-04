@@ -343,3 +343,19 @@ Per-quest findings appended below the ladder table.
   cadence (300s) — silence longer than one interval means the logging
   pipeline died, not necessarily the app.
 2026-11-04 20:05
+
+## SOLVED: linux-t1-first-foothold (s2, ~12min vs s1's 5h)
+- Chain: briefing creds → ssh user flag → sudo -l → sudo vim →
+  :!/bin/sh → root flag. Two clean submits, zero wasted turns.
+- routine=low (thinking-off) held ~10-80s turns vs s1's 40-600s.
+- Observer distilled 2 banner/MOTD cred-hint lessons post-solve.
+- type_in_pane handled the interactive vim escape natively.
+2026-11-04 20:45
+
+## BUG: create autonomy race (fixed 7d1a251)
+- SessionStartIn.autonomy_level applied after create_session's first
+  commit → coach attached at autonomy 2 despite create(4). Now passed
+  through create_session before first commit.
+- Note: abort on solved keeps attempts but frees RAM for next quest —
+  the ladder teardown path is abort(), not solve-auto-destroy.
+2026-11-04 20:45

@@ -1,0 +1,45 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: cloud-t2-exam
+  track: cloud-native
+  tier: 2
+  title: "Exam: Cloud Identity"
+  exam: true
+  version: 1
+display:
+  tagline: "Assess workload permissions, metadata exposure and storage scope from synthetic evidence."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_cloud_t2_exam]
+flags:
+  - id: cloud-identity-exam
+    name: "Submit the cloud identity assessment"
+    kind: command
+    points: 500
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/cloud-identity-exam.md && grep -qi 'metadata' /tmp/pentrain-audit-reports/cloud-identity-exam.md && grep -qi 'least.privilege' /tmp/pentrain-audit-reports/cloud-identity-exam.md"
+hints: []
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-evidence
+      name: "Correlated identity and metadata evidence"
+      detect: { command_match: "(cloud-t2-exam|metadata-review|catalogue-reader|storage)" }
+      hint_after_s: 1200
+  escalation: { observe_grace_s: 240, nudge_s: 900, hint_s: 1500 }
+scoring:
+  base: 500
+  time_bonus_max: 180
+  par_s: 2400
+  takeover_cost: 150

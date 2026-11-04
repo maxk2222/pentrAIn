@@ -208,7 +208,8 @@ TOOLS: list[dict] = [
                       "PATH (host, creds, pivot), and what to report back"),
          "role": {"type": "string",
                   "enum": ["general", "recon", "web", "creds", "svc",
-                           "privesc", "pivot", "verify"],
+                           "privesc", "pivot", "verify", "ai-audit",
+                           "cloud-audit", "exploit-audit", "linux-audit"],
                   "description": "specialist role — narrows the worker's "
                                  "operating contract"},
          "done_when": _str("acceptance criterion the report is measured "
@@ -366,7 +367,8 @@ def worker_tools(role: str | None = None) -> list[dict]:
 
 
 WORKER_ROLES = {"general", "recon", "web", "creds", "svc", "privesc",
-                "pivot", "verify"}
+                "pivot", "verify", "ai-audit", "cloud-audit",
+                "exploit-audit", "linux-audit"}
 
 
 # ---------- normalization ----------

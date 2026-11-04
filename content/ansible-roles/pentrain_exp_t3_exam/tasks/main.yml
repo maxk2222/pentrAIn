@@ -1,0 +1,11 @@
+---
+- name: install exploit analysis tier three exam fixtures
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files:
+      - exploits/serialization-review.md
+      - exploits/binary-hardening-review.md
+      - exploits/pipeline-review.md
+      - exploits/cve-response-review.md
+      - exploits/exp-t3-exam.md

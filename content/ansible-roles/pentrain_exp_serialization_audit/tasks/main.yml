@@ -1,0 +1,6 @@
+---
+- name: install serialization review fixture
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files: [exploits/serialization-review.md]

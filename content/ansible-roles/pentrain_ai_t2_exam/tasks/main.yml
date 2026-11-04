@@ -1,0 +1,8 @@
+---
+- name: install AI tier two exam fixtures
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files:
+      - ai/mcp-review.md
+      - ai/model-registry-review.md

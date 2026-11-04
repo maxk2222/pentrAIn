@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ai-t1-rag-audit
+  track: ai-security
+  tier: 1
+  title: "The Retrieval Boundary"
+  version: 1
+display:
+  tagline: "Review a local RAG service for tenant isolation and tool authorization failures."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_ai_rag_audit]
+flags:
+  - id: rag-assessment
+    name: "Submit an evidence-backed RAG security assessment"
+    kind: command
+    points: 300
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/rag-boundary.md && grep -qi 'tenant' /tmp/pentrain-audit-reports/rag-boundary.md && grep -qi 'authorization' /tmp/pentrain-audit-reports/rag-boundary.md"
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Read the review bundle from the local audit directory and trace when tenant filtering happens."
+  - id: h2
+    cost: 50
+    stage: analysis
+    text: "Compare the retrieval, summarization and tool permission boundaries with the required outcome in the bundle."
+  - id: h3
+    cost: 75
+    stage: post
+    text: "Write an evidence-backed report that names the cross-tenant data path, tool authorization gap and a server-side remediation."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-review
+      name: "Reviewed the retrieval and tool boundaries"
+      detect: { command_match: "(pentrain-audit|rag-boundary|tenant|authorization)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 300
+  time_bonus_max: 100
+  par_s: 1200
+  takeover_cost: 100

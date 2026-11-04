@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ai-t2-model-review
+  track: ai-security
+  tier: 2
+  title: "Model Provenance"
+  version: 1
+display:
+  tagline: "Review a model registry's artifact loading, worker isolation and provenance controls."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_ai_model_registry_audit]
+flags:
+  - id: model-provenance-report
+    name: "Submit the model artifact risk assessment"
+    kind: command
+    points: 350
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/model-provenance.md && grep -qi 'digest' /tmp/pentrain-audit-reports/model-provenance.md && grep -qi 'isolation' /tmp/pentrain-audit-reports/model-provenance.md"
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Read the registry behavior, artifact evidence and worker permissions."
+  - id: h2
+    cost: 55
+    stage: analysis
+    text: "Assess executable artifact loading, publisher identity, digest records and unrelated worker access."
+  - id: h3
+    cost: 80
+    stage: post
+    text: "Recommend provenance verification, isolation, secret minimization and a safe validation workflow."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-artifact
+      name: "Reviewed artifact provenance controls"
+      detect: { command_match: "(model-registry-review|artifact|digest|publisher)" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 180, nudge_s: 540, hint_s: 960 }
+scoring:
+  base: 350
+  time_bonus_max: 120
+  par_s: 1500
+  takeover_cost: 120

@@ -1,0 +1,8 @@
+---
+- name: install cloud tier two exam fixtures
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files:
+      - cloud/metadata-review.md
+      - cloud/cloud-t2-exam.md

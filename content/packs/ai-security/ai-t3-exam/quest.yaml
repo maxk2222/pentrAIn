@@ -1,0 +1,45 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ai-t3-exam
+  track: ai-security
+  tier: 3
+  title: "Exam: Responsible Agent Platform"
+  exam: true
+  version: 1
+display:
+  tagline: "Produce an end-to-end AI platform assessment from retrieval, tools, artifacts and agent evidence."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_ai_t3_exam]
+flags:
+  - id: responsible-agent-assessment
+    name: "Submit the responsible agent platform assessment"
+    kind: command
+    points: 550
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/responsible-agent.md && grep -qi 'authorization' /tmp/pentrain-audit-reports/responsible-agent.md && grep -qi 'provenance' /tmp/pentrain-audit-reports/responsible-agent.md"
+hints: []
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-review
+      name: "Correlated the AI platform evidence"
+      detect: { command_match: "(ai-platform-exam|agent-boundary-review|provenance|authorization)" }
+      hint_after_s: 1500
+  escalation: { observe_grace_s: 300, nudge_s: 1080, hint_s: 1800 }
+scoring:
+  base: 550
+  time_bonus_max: 200
+  par_s: 2700
+  takeover_cost: 180

@@ -174,6 +174,10 @@ ROLE_MODULES: dict[str, list[str]] = {
     "svc":     ["minimal-hosts", "log-parsing"],
     "privesc": ["privesc-linux", "privesc-cron", "privesc-win"],
     "pivot":   ["pivoting", "nested-rce"],
+    "ai-audit": ["ai-security-audit"],
+    "cloud-audit": ["cloud-security-audit"],
+    "exploit-audit": ["exploit-analysis"],
+    "linux-audit": ["linux-permission-audit"],
     "verify":  [],
     "general": [],
 }

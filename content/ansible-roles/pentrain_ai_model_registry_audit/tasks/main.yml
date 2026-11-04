@@ -1,0 +1,6 @@
+---
+- name: install model artifact review fixture
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files: [ai/model-registry-review.md]

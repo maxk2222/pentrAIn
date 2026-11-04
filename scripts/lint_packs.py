@@ -42,13 +42,15 @@ def check_roles(found) -> list[str]:
     roles_root = REPO / "content" / "ansible-roles"
     errors: list[str] = []
     for qdir, spec in found:
-        for v in spec.topology.vms:
-            for r in v.roles:
+        role_owners = [("kali", spec.topology.kali.roles)]
+        role_owners.extend((v.name, v.roles) for v in spec.topology.vms)
+        for vm_name, roles in role_owners:
+            for r in roles:
                 name = r["name"] if isinstance(r, dict) else r
                 if not isinstance(name, str):
                     continue
                 if not (roles_root / name / "tasks" / "main.yml").exists():
-                    errors.append(f"{qdir.name}: role {name!r} on vm {v.name} "
+                    errors.append(f"{qdir.name}: role {name!r} on vm {vm_name} "
                                   "missing content/ansible-roles/" + name)
     return errors
 
@@ -60,7 +62,6 @@ def check_role_tasks() -> list[str]:
     - every `notify:` must have a matching handler
     - roles creating password-login users must enable PasswordAuthentication
     """
-    import re
     import yaml as _yaml
 
     errors: list[str] = []
@@ -86,6 +87,15 @@ def check_role_tasks() -> list[str]:
         for i, t in enumerate(task_list):
             if not isinstance(t, dict):
                 continue
+            included = (t.get("include_role") or t.get("ansible.builtin.include_role")
+                        or t.get("import_role") or t.get("ansible.builtin.import_role") or {})
+            included_name = included.get("name") if isinstance(included, dict) else None
+            if included_name and not (
+                roles_root / str(included_name) / "tasks" / "main.yml"
+            ).exists():
+                errors.append(
+                    f"{rdir.name}: included role {included_name!r} "
+                    "missing content/ansible-roles/" + str(included_name))
             fmod = t.get("file") or t.get("ansible.builtin.file") or {}
             if isinstance(fmod, dict) and fmod.get("state") == "directory":
                 dirs_at.setdefault(str(fmod.get("path", "")), i)

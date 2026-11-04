@@ -1,0 +1,11 @@
+---
+- name: install cloud tier three exam fixtures
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files:
+      - cloud/rbac-review.md
+      - cloud/metadata-review.md
+      - cloud/gitops-review.md
+      - cloud/gitops-hardening-review.md
+      - cloud/cloud-t3-exam.md

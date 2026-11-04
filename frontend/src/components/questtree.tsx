@@ -2,8 +2,8 @@
    visual. Nodes link to quest detail; dim() fades non-matching nodes. */
 import { Link } from "react-router-dom";
 import {
-  Building2, CheckCircle2, Cpu, Globe, Home, Lock, Radar, Search, Server,
-  Shield, Target, Terminal, Wifi,
+  Bot, Bug, Building2, CheckCircle2, Cloud, Cpu, Crown, Globe, Home, Lock,
+  Radar, Search, Server, Shield, Target, Terminal, Wifi,
 } from "lucide-react";
 import type { Quest, Track } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,7 @@ import { Badge, Card, CardContent, CardHeader, CardTitle, Progress } from "@/com
 const TRACK_ICONS: Record<string, React.ElementType> = {
   terminal: Terminal, wifi: Wifi, radar: Radar, building: Building2,
   search: Search, target: Target, shield: Shield, cpu: Cpu, globe: Globe,
-  server: Server, home: Home,
+  server: Server, home: Home, cloud: Cloud, bot: Bot, crown: Crown, bug: Bug,
 };
 
 export function TrackSection({ track, quests, dim }: {

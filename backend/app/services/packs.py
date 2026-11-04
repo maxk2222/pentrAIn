@@ -144,6 +144,7 @@ TRACK_TITLES = {
     "engagement": ("External Engagement", "Authorized real-target engagements — operator-scoped recon, validation and reporting.", "shield", 81),
     "cloud-native": ("Cloud Native", "Kubernetes and container attack paths — RBAC, service accounts, cluster escape.", "cloud", 82),
     "ai-security": ("AI Security", "Prompt injection, data exfiltration and tool misuse against LLM-backed apps.", "bot", 84),
+    "exploits": ("Exploit & Vulnerability Analysis", "Safely analyze vulnerable-code patterns, binary hardening, CI/CD trust and CVE exposure.", "bug", 86),
     "capstone": ("Capstone", "Full engagement simulations — multi-tier networks, chained objectives, zero walkthroughs.", "crown", 90),
 }
 

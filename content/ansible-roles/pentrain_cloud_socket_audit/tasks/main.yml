@@ -1,0 +1,6 @@
+---
+- name: install container runtime boundary fixture
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files: [cloud/container-socket-review.md]

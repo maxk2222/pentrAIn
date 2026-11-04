@@ -95,3 +95,36 @@ def test_hint_stages_valid():
     for _qdir, spec in _quests():
         for h in spec.hints:
             assert h.stage in ok, f"{spec.meta.id}: hint {h.id} bad stage {h.stage!r}"
+
+
+def test_new_audit_quests_are_lightweight_and_local():
+    expected = {
+        "ai-t1-rag-audit", "ai-t1-tool-exam",
+        "ai-t2-mcp-review", "ai-t2-model-review", "ai-t2-exam",
+        "ai-t3-agent-review", "ai-t3-exam",
+        "cloud-t1-rbac-review", "cloud-t1-gitops-review", "cloud-t1-exam",
+        "cloud-t1-container-review",
+        "cloud-t2-metadata-review", "cloud-t2-exam",
+        "cloud-t3-gitops-review", "cloud-t3-exam",
+        "exp-t1-source-review", "exp-t1-pipeline-review", "exp-t1-exam",
+        "exp-t1-serialization-review", "exp-t2-binary-review", "exp-t2-exam",
+        "exp-t3-cve-review", "exp-t3-exam",
+        "web-t3-template-review", "linux-t3-capability-review",
+        "cap-t4-neuralswarm",
+    }
+    specs = {spec.meta.id: spec for _, spec in _quests()}
+    assert expected <= specs.keys()
+    for quest_id in expected:
+        spec = specs[quest_id]
+        assert spec.topology.vms == [], f"{quest_id}: audit fixture must not deploy a target"
+        assert spec.topology.kali.ram_gb == 6
+        assert spec.topology.kali.roles
+        assert all(flag.kind == "command" and
+                   (flag.command or {}).get("vm") == "kali"
+                   for flag in spec.flags), quest_id
+    for track in ("ai-security", "cloud-native", "exploits"):
+        for tier in (1, 2, 3):
+            quests = [spec for spec in specs.values()
+                      if spec.meta.track == track and spec.meta.tier == tier]
+            assert any(not spec.meta.exam for spec in quests), (track, tier, "teaching quest missing")
+            assert any(spec.meta.exam for spec in quests), (track, tier, "exam missing")

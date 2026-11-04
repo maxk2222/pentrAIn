@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ai-t3-agent-review
+  track: ai-security
+  tier: 3
+  title: "Agent Permission Boundaries"
+  version: 1
+display:
+  tagline: "Assess data authorization, identity separation and auditability in a multi-component agent."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_ai_agent_boundary_audit]
+flags:
+  - id: agent-boundary-report
+    name: "Submit the multi-component agent security review"
+    kind: command
+    points: 400
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/agent-boundaries.md && grep -qi 'identity' /tmp/pentrain-audit-reports/agent-boundaries.md && grep -qi 'authorization' /tmp/pentrain-audit-reports/agent-boundaries.md"
+hints:
+  - id: h1
+    cost: 35
+    stage: recon
+    text: "Read the architecture summary and the analyst's permitted data scope."
+  - id: h2
+    cost: 60
+    stage: analysis
+    text: "Trace which component enforces policy, which identity reads data and what the action log records."
+  - id: h3
+    cost: 90
+    stage: post
+    text: "Recommend service-side authorization, separated identities and a source-to-action audit trail."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-boundaries
+      name: "Mapped agent identities and data boundaries"
+      detect: { command_match: "(agent-boundary-review|quarterly_summary|identity|authorization)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 600, hint_s: 1080 }
+scoring:
+  base: 400
+  time_bonus_max: 150
+  par_s: 1800
+  takeover_cost: 150

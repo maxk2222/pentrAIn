@@ -1,0 +1,35 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: cap-t4-neuralswarm
+  track: capstone
+  tier: 4
+  title: "NeuralSwarm"
+  version: 1
+display:
+  tagline: "Assess a synthetic AI-to-cloud release chain and deliver a prioritized risk report."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_capstone_neuralswarm_audit]
+flags:
+  - id: final-report
+    name: "Flag 1"
+    kind: command
+    points: 1000
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/neuralswarm.md && grep -qi 'rag' /tmp/pentrain-audit-reports/neuralswarm.md && grep -qi 'provenance' /tmp/pentrain-audit-reports/neuralswarm.md && grep -qi 'remediation' /tmp/pentrain-audit-reports/neuralswarm.md"
+scoring:
+  base: 1000
+  time_bonus_max: 300
+  par_s: 3600
+  takeover_cost: 200

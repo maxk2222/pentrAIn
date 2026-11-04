@@ -17,7 +17,7 @@
 | 🚀 | [**Getting started**](getting-started.md) | Requirements, install modes, setup wizard, your first quest |
 | 🖥️ | [**The workspace**](workspace.md) | Session UI: console, panels, flags, resets, Kali internet |
 | 🤖 | [**The AI coach**](coach.md) | Autonomy levels, tools, subagents, slash commands, guardrails |
-| 🗺️ | [**Tracks & quests**](tracks.md) | All 9 tracks, progression rules, exams, scoring |
+| 🗺️ | [**Tracks & quests**](tracks.md) | All 13 tracks, progression rules, exams, scoring |
 
 ## Operate
 

@@ -82,6 +82,11 @@ The Kali VM is implicit per session — add every other box under `vms`.
 `.254` is the range router (linted). `requirements.min_ram_gb` should cover
 the sum of `ram_gb` plus ~2 G for the implicit router.
 
+`topology.kali.roles` may add quest-specific setup roles to the Kali VM. This
+is useful for lightweight, read-only audit quests that need no target VM. Role
+names are validated by the pack linter. Keep fixture data synthetic, and use
+Kali-side command flags to check a learner-produced report.
+
 ### Flags
 
 ```yaml

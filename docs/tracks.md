@@ -1,9 +1,8 @@
 # Tracks & quests
 
-**61 quests across 11 tracks**, organized in tiers 1–4. Quests ship a
-briefing, coach checkpoints, staged hints and a `defense.md` (what broke, how
-to detect it, how to fix it) — capstone quests are the exception: they go in
-blind.
+**88 quests across 13 tracks**, organized in tiers 1–4. Teaching quests
+generally include a briefing, coach checkpoints, staged hints and
+`defense.md`; exams assess synthesis, while capstones go in blind.
 
 ![Quest library](assets/screenshots/04-library.png)
 
@@ -35,7 +34,7 @@ flowchart TD
 
 ## The tracks
 
-### 🐧 Linux Fundamentals — `linux-fundamentals` (8)
+### 🐧 Linux Fundamentals — `linux-fundamentals` (9)
 
 Host services, misconfigurations, privilege escalation — guided basics to
 multi-host chains.
@@ -49,9 +48,10 @@ multi-host chains.
 | Wildcard | 2 | `tar *` in root's cron — filenames are arguments |
 | **Exam: The Maintenance Window** | 2 | Two privesc paths, find at least one |
 | The Pivot | 3 | Web host is the only path to the DB — pivot through |
+| Permission Baseline | 3 | Read-only audit of service capabilities against an approved baseline |
 | **Exam: Supply Chain** | 3 | Three hosts deep, creds leak at every hop |
 
-### 🌐 Web AppSec — `web-appsec` (12)
+### 🌐 Web AppSec — `web-appsec` (13)
 
 OWASP vulnerability classes from basics to chained auth-bypass.
 
@@ -69,6 +69,7 @@ OWASP vulnerability classes from basics to chained auth-bypass.
 | Signed & Confused | 3 | JWT secret → IDOR → admin |
 | **Exam: The Reporting API** | 3 | JWT + IDOR + API → root shell |
 | Split-Second | 4 | 0.CL request smuggling: nginx front-end vs. Flask back-end desync |
+| Template Trust | 3 | Static review of a customer-controlled server-side template boundary |
 
 ### 📡 Network & Recon — `network-recon` (8)
 
@@ -164,31 +165,72 @@ regeneration: [ops.md — wireless labs](ops.md#wireless-hwsim-labs).
 > read-only probes, and a shared action budget — but the ROE is on you:
 > only devices you own, no DoS, no aggressive brute force.
 
-### ☁️ Cloud-Native — `cloud-native` (1)
+### 🛡️ External Engagement — `engagement` (1)
 
-Kubernetes attack paths on a real `kind` cluster — from a pod debug
-endpoint to node compromise.
+Authorized real-target engagements use an operator-locked scope snapshot and
+read-only validation. The coach denies actions outside the declared ROE.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| External Engagement | 1 | Operator-scoped reconnaissance, evidence validation and reporting |
+
+### ☁️ Cloud-Native — `cloud-native` (9)
+
+One live `kind`-cluster exercise plus lightweight, read-only RBAC and
+GitOps release reviews.
 
 | Quest | Tier | Focus |
 |---|---|---|
 | Soft-Schedule | 1 | Pod RCE → over-permissive service account → secrets → privileged pod → host flag |
+| The Overbroad Role | 1 | Read-only review of Kubernetes RBAC against workload requirements |
+| Release Gate | 1 | Read-only review of CI runner, production secrets and artifact provenance |
+| Runtime Socket Exception | 1 | Static review of container runtime socket and host mount permissions |
+| **Exam: Production Boundary** | 1 | Combined RBAC and release-provenance assessment |
+| Metadata Boundary | 2 | Synthetic cloud metadata, outbound network and workload identity review |
+| **Exam: Cloud Identity** | 2 | Combined workload permission and metadata exposure assessment |
+| Reconciliation Authority | 3 | Read-only production GitOps permission and artifact provenance review |
+| **Exam: Platform Assurance** | 3 | Correlated identity, metadata and reconciliation assessment |
 
-### 🤖 AI Security — `ai-security` (1)
+### 🤖 AI Security — `ai-security` (8)
 
-LLM application attacks — OWASP LLM Top-10 against a deterministic
-embedded assistant (no external API key needed).
+AI application security: a deterministic assistant exercise plus read-only
+RAG and agent trust-boundary reviews (no external API key or GPU required).
 
 | Quest | Tier | Focus |
 |---|---|---|
 | AskOps | 1 | Prompt injection: guard bypass → system-prompt leak → indirect injection via trusted docs → tool abuse |
+| The Retrieval Boundary | 1 | Read-only RAG tenant-isolation and tool-authorization assessment |
+| **Exam: Helio Support** | 1 | Combined review of AI data, identity, tool and audit boundaries |
+| Protocol Ownership | 2 | Static review of tool registration, permissions and provenance |
+| Model Provenance | 2 | Model artifact publisher, digest and validation-worker review |
+| **Exam: Model Operations** | 2 | Combined AI tool governance and artifact provenance assessment |
+| Agent Permission Boundaries | 3 | Multi-component identity, data authorization and audit review |
+| **Exam: Responsible Agent Platform** | 3 | End-to-end assessment of AI retrieval, tools, artifacts and agent boundaries |
 
-### 👑 Capstone — `capstone` (3)
+### 🐛 Exploit & Vulnerability Analysis — `exploits` (8)
+
+Static, read-only review of vulnerability patterns and release controls. These
+quests do not execute samples or provide working exploit payloads.
+
+| Quest | Tier | Focus |
+|---|---|---|
+| Telemetry Under Review | 1 | Unsafe formatting boundary, compiler hardening and artifact evidence |
+| Shared Runner | 1 | CI contribution trust, runner isolation, secret scope and artifact handoff |
+| Data, Not Objects | 1 | Static review of unsafe artifact loading and data-only schema controls |
+| **Exam: Release Readiness** | 1 | Prioritized source, pipeline and package assessment |
+| Build Assurance | 2 | Source, compiler policy and release artifact provenance review |
+| **Exam: Build Integrity** | 2 | Correlated source/build and CI runner assurance assessment |
+| Patch Decision | 3 | Synthetic advisory triage, containment and vendor-fix verification |
+| **Exam: Appliance Assurance** | 3 | Full read-only appliance release and vulnerability response assessment |
+
+### 👑 Capstone — `capstone` (4)
 
 | Quest | Tier | Focus |
 |---|---|---|
 | Nordmarkt Feinkost | 2 | Single-box engagement: web enum → backup leak → foothold → internal API cmd-injection → DB LOAD_FILE → cron privesc → written report |
 | Nordwind Logistics | 3 | Full engagement: recon → source leak → foothold → two pivots → API compromise → DB creds → hash crack → privesc → written report |
 | Cloudburst | 4 | Cloud-native kill chain: edge SSRF → k8s API abuse → privileged escape → node loot — end to end |
+| NeuralSwarm | 4 | Blind, read-only assessment correlating AI retrieval, cloud delivery and release evidence |
 
 > [!NOTE]
 > Capstone quests ship **no hints, no checkpoints, no cheatsheet and no

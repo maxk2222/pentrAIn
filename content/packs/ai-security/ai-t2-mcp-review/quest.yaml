@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ai-t2-mcp-review
+  track: ai-security
+  tier: 2
+  title: "Protocol Ownership"
+  version: 1
+display:
+  tagline: "Audit tool registration, permissions and provenance in a synthetic MCP integration."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_ai_mcp_audit]
+flags:
+  - id: mcp-governance-report
+    name: "Submit the MCP tool-governance assessment"
+    kind: command
+    points: 350
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/mcp-governance.md && grep -qi 'owner' /tmp/pentrain-audit-reports/mcp-governance.md && grep -qi 'authorization' /tmp/pentrain-audit-reports/mcp-governance.md"
+hints:
+  - id: h1
+    cost: 30
+    stage: recon
+    text: "Read the local service inventory and compare it with the intended tool policy."
+  - id: h2
+    cost: 55
+    stage: analysis
+    text: "Review who can publish tools, what data each tool can access and what the logs prove."
+  - id: h3
+    cost: 80
+    stage: post
+    text: "Submit a report covering ownership, least privilege, output trust and an auditable approval process."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-tools
+      name: "Reviewed the tool registration boundary"
+      detect: { command_match: "(mcp-review|tool|publisher|authorization)" }
+      hint_after_s: 720
+  escalation: { observe_grace_s: 180, nudge_s: 540, hint_s: 960 }
+scoring:
+  base: 350
+  time_bonus_max: 120
+  par_s: 1500
+  takeover_cost: 120

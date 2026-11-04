@@ -1,0 +1,6 @@
+---
+- name: install vulnerability response fixture
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files: [exploits/cve-response-review.md]

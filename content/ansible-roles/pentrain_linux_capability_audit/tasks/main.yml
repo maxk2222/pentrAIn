@@ -1,0 +1,6 @@
+---
+- name: install Linux permission-review fixture
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files: [linux/capability-review.md]

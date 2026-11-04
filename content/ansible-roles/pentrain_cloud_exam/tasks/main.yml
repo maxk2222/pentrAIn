@@ -1,0 +1,8 @@
+---
+- name: install cloud deployment exam fixtures
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files:
+      - cloud/rbac-review.md
+      - cloud/gitops-review.md

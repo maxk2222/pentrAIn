@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: web-t3-template-review
+  track: web-appsec
+  tier: 3
+  title: "Template Trust"
+  version: 1
+display:
+  tagline: "Review a server-side invoice template boundary and recommend a safe rendering design."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_web_template_audit]
+flags:
+  - id: template-review
+    name: "Submit a safe template-rendering assessment"
+    kind: command
+    points: 300
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/template-review.md && grep -qi 'customer' /tmp/pentrain-audit-reports/template-review.md && grep -qi 'approved' /tmp/pentrain-audit-reports/template-review.md"
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Review the local source excerpt and identify whether template text or data is controlled by the customer."
+  - id: h2
+    cost: 50
+    stage: analysis
+    text: "Compare the rendering behavior with the stated business need for approved invoice layouts."
+  - id: h3
+    cost: 75
+    stage: post
+    text: "Recommend fixed server-owned templates with customer values passed only as data, plus a regression test."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-review
+      name: "Reviewed the template trust boundary"
+      detect: { command_match: "(template-review|render_template_string|customer|layout)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 300
+  time_bonus_max: 100
+  par_s: 1200
+  takeover_cost: 100

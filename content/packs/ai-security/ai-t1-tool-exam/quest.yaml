@@ -1,0 +1,45 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: ai-t1-tool-exam
+  track: ai-security
+  tier: 1
+  title: "Exam: Helio Support"
+  exam: true
+  version: 1
+display:
+  tagline: "Assess a support agent's data, identity and tool boundaries from incident evidence."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_ai_tool_exam]
+flags:
+  - id: ai-exam-report
+    name: "Submit the Helio agent security assessment"
+    kind: command
+    points: 400
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/helio-assessment.md && grep -qi 'authorization' /tmp/pentrain-audit-reports/helio-assessment.md && grep -qi 'audit' /tmp/pentrain-audit-reports/helio-assessment.md"
+hints: []
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-evidence
+      name: "Reviewed the AI trust-boundary evidence"
+      detect: { command_match: "(tool-boundary-exam|authorization|audit)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 240, nudge_s: 720, hint_s: 1200 }
+scoring:
+  base: 400
+  time_bonus_max: 150
+  par_s: 1800
+  takeover_cost: 100

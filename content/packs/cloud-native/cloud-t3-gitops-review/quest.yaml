@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: cloud-t3-gitops-review
+  track: cloud-native
+  tier: 3
+  title: "Reconciliation Authority"
+  version: 1
+display:
+  tagline: "Review a production reconciler's permissions, exception process and artifact provenance."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_cloud_gitops_hardening_audit]
+flags:
+  - id: reconciler-review
+    name: "Submit the production reconciler hardening review"
+    kind: command
+    points: 400
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/reconciler-review.md && grep -qi 'provenance' /tmp/pentrain-audit-reports/reconciler-review.md && grep -qi 'scope' /tmp/pentrain-audit-reports/reconciler-review.md"
+hints:
+  - id: h1
+    cost: 35
+    stage: recon
+    text: "Read the reconciler permissions, release record and policy exception evidence."
+  - id: h2
+    cost: 60
+    stage: analysis
+    text: "Compare deployment authority, image identity and source review requirements."
+  - id: h3
+    cost: 90
+    stage: post
+    text: "Recommend scoped reconciliation, protected source changes, immutable artifacts and verified provenance."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-release
+      name: "Reviewed production reconciliation controls"
+      detect: { command_match: "(gitops-hardening-review|reconciler|REL-208|provenance)" }
+      hint_after_s: 900
+  escalation: { observe_grace_s: 180, nudge_s: 600, hint_s: 1080 }
+scoring:
+  base: 400
+  time_bonus_max: 150
+  par_s: 1800
+  takeover_cost: 150

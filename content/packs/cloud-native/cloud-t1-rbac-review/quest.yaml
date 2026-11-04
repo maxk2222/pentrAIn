@@ -1,0 +1,56 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: cloud-t1-rbac-review
+  track: cloud-native
+  tier: 1
+  title: "The Overbroad Role"
+  version: 1
+display:
+  tagline: "Audit a Kubernetes workload identity and reduce its permissions to the stated need."
+requirements:
+  min_ram_gb: 8
+  min_vcpus: 5
+  min_disk_gb: 60
+  est_deploy_min: 6
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    ram_min_gb: 3
+    cpus: 4
+    roles: [pentrain_cloud_rbac_audit]
+flags:
+  - id: rbac-review
+    name: "Submit a least-privilege RBAC recommendation"
+    kind: command
+    points: 300
+    command:
+      vm: kali
+      cmd: "test -s /tmp/pentrain-audit-reports/rbac-review.md && grep -qi 'verbs' /tmp/pentrain-audit-reports/rbac-review.md && grep -qi 'namespace' /tmp/pentrain-audit-reports/rbac-review.md"
+hints:
+  - id: h1
+    cost: 25
+    stage: recon
+    text: "Read the local manifest review bundle and compare the role with the workload's stated requirements."
+  - id: h2
+    cost: 50
+    stage: analysis
+    text: "Review API groups, resources, verbs and the number of workloads sharing this identity."
+  - id: h3
+    cost: 75
+    stage: post
+    text: "Report the excess permissions, recommend a namespace-scoped least-privilege role and explain how to verify it."
+coach:
+  briefing_ref: coach_context.md
+  checkpoints:
+    - id: cp-manifest
+      name: "Reviewed the workload identity"
+      detect: { command_match: "(rbac-review|resources:|verbs:|service.account)" }
+      hint_after_s: 600
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 300
+  time_bonus_max: 100
+  par_s: 1200
+  takeover_cost: 100

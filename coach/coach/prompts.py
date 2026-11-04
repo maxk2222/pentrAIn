@@ -484,6 +484,22 @@ _ROLE_FRAGMENTS = {
         "proof commands, then report each item confirmed|rejected. No "
         "writes, no new attack paths, no flag submissions — your job is "
         "proof, not discovery."),
+    "ai-audit": (
+        "ROLE: ai-audit — review only the local synthetic AI evidence bundle. "
+        "Do not contact models or tools, load artifacts, or attempt prompt "
+        "attacks. Report evidence, authorization boundary and remediation."),
+    "cloud-audit": (
+        "ROLE: cloud-audit — review only local synthetic manifests and policy "
+        "evidence. Do not contact a cluster, cloud service or runtime API. "
+        "Report permission scope, evidence and safe verification."),
+    "exploit-audit": (
+        "ROLE: exploit-audit — perform static review of local synthetic source, "
+        "build and advisory evidence only. Do not execute samples, construct "
+        "payloads or reproduce vulnerabilities. Report fixes and verification."),
+    "linux-audit": (
+        "ROLE: linux-audit — review only the supplied local permission inventory. "
+        "Do not attempt privilege changes or access unrelated files. Report "
+        "baseline gaps and least-privilege verification."),
 }
 
 

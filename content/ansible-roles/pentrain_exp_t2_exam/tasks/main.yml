@@ -1,0 +1,9 @@
+---
+- name: install exploit analysis tier two exam fixtures
+  ansible.builtin.include_role:
+    name: pentrain_audit_fixtures
+  vars:
+    audit_files:
+      - exploits/binary-hardening-review.md
+      - exploits/pipeline-review.md
+      - exploits/exp-t2-exam.md
