@@ -123,6 +123,8 @@ class _Worker:
     # on restart)
     plan: list[dict] = field(default_factory=list)
     wrap_nudged: bool = False   # budget-low wrap-up already injected
+    last_out: str = ""          # newest tool result — on kill, its tail
+    # becomes the report so partial findings merge instead of dying
     task_obj: asyncio.Task | None = None
 
 
@@ -200,9 +202,10 @@ class SessionCoach:
         # per-worker in-turn reasoning — attached once to that worker's next
         # posted message (pop-once), mirroring the parent's _turn_reasoning
         self._worker_reasoning: dict[str, str] = {}
-        self._denial_seen: set[str] = set()   # denials already surfaced in
-        # a guaranteed-read NOTE (facts render alone reaches only the
-        # parent's next turn — a worker's prompt snapshot is frozen)
+        # denials already surfaced in a guaranteed-read NOTE — PER WINDOW:
+        # a worker's frozen facts snapshot makes the note its only channel,
+        # and a shared set lets one agent eat the note for everyone
+        self._denial_seen: dict[str, set[str]] = {}
         self._guides_hinted: set[str] = set()  # modules already hinted on
         # the guaranteed-read channel — one push per module per session
         # guide pull dedup: window → module ids already fetched — a repeat
@@ -212,6 +215,15 @@ class SessionCoach:
         # worker-dup advisory dedup: (worker_id, cmd-target) already noted
         # — the hint is pop-once per pair, not a per-scan nag
         self._dup_noted: set[tuple[str, str]] = set()
+        # worker completion notices → the parent's guaranteed-read channel.
+        # Without this the parent only learns of a finished worker by
+        # polling agent_status (s1: 3 workers died unnoticed, never
+        # collected — their findings arrived only via silent fact-merge)
+        self._worker_done: list[str] = []
+        # denial-repeat escalation: tool|cmd-sig → times denied — the same
+        # "denied:" text reads as fresh each turn, so a stubborn model
+        # retries forever (s1: deploy@10.1.10.32 denied 3× identically)
+        self._deny_counts: dict[str, int] = {}
         # deep-effort spend marker: last_progress_ts at which the one deep
         # turn of this no-progress window already ran — at L4, stuck>hint_s
         # makes stage-2 the default state, so every-turn-deep burned the
@@ -1523,6 +1535,20 @@ class SessionCoach:
                 return w.id
         return None
 
+    def _guide_hint(self, text: str, window: str | None) -> str:
+        """Deterministic module push: the first unhinted module whose
+        triggers match this cmd/output/denial text — once per module per
+        window (shared `_guides_hinted` dedup)."""
+        for mid in guides.triggers_for(text):
+            hkey = f"{window or 'main'}:{mid}"
+            if hkey in self._guides_hinted:
+                continue
+            self._guides_hinted.add(hkey)
+            return (f"\nGUIDE: module '{mid}' covers this situation — "
+                    f"lookup_guide(\"{mid}\") pulls the recipe "
+                    "(verbatim commands).")
+        return ""
+
     def _drain_observer_hints(self, result: str, a: dict,
                               window: str | None) -> str:
         """Observer channels on the guaranteed-read result:
@@ -1531,7 +1557,13 @@ class SessionCoach:
         3. hit feedback — progress within ~10 turns after a push → hit++
         Everything is bounded so the channel can never swamp a result."""
         out = result
-        if self.state.pending_observer_hints:
+        if window is None and self._worker_done:
+            # worker lifecycle notice — parent-only: a worker's own results
+            # must not be spammed with sibling status it can't act on
+            out += f"\nWORKER DONE: {self._worker_done.pop(0)}"
+        if window is None and self.state.pending_observer_hints:
+            # parent-only too — a worker's frozen facts snapshot makes the
+            # advisory useless to it, and it would eat the parent's copy
             hint = self.state.pending_observer_hints.pop(0)
             out += f"\nOBSERVER (unverified): {hint}"
         # hit feedback: did a note we pushed earlier actually help?
@@ -1642,6 +1674,20 @@ class SessionCoach:
                     except Exception as e:   # audit must never break a turn
                         await log.adebug("denial audit failed", error=str(e))
                 asyncio.create_task(_audit())
+            # repeat-tracking: the identical denied command returning N times
+            # reads as a fresh note each turn — escalate the count so the
+            # model can't miss that this exact path is settled (s1: the same
+            # deploy@10.1.10.32 attempt was denied 3× identically)
+            sig = f"{a.get('type')}|{str(a.get('command') or '')[:80]}"
+            n = self._deny_counts[sig] = self._deny_counts.get(sig, 0) + 1
+            if n >= 2:
+                result += (f" (REPEATED ×{n} — this exact attempt was "
+                           "already denied; it does not start working on "
+                           "retry. Different user, host, or vector.)")
+            # a denial's reason names the same triggers real output would —
+            # `filtered:` fires the pivoting recipe even though no exec ran
+            result += self._guide_hint(
+                f"{a.get('command','')}\n{result}", window)
         # plan maintenance in the guaranteed-read channel: a plan untouched
         # >15min (or still absent after real work) means the agent lost its
         # thread — the context-block suffix was ignored for 40+ actions on
@@ -2048,11 +2094,13 @@ class SessionCoach:
                         # tells it mid-flight to stop rescanning a host
                         # that is filtered from its vantage (s84: w1 ran
                         # 4 nmap variants at an isolated app01)
+                        seen = self._denial_seen.setdefault(
+                            window or "main", set())
                         for dn in self.facts.denials:
-                            if dn in self._denial_seen or not dn.startswith(
+                            if dn in seen or not dn.startswith(
                                     ("filtered:", "unreachable:")):
                                 continue
-                            self._denial_seen.add(dn)
+                            seen.add(dn)
                             tgt, _, vant = dn.split(":", 1)[1].partition("@")
                             result += (
                                 f"\nNOTE: {tgt} is unreachable/filtered from"
@@ -2066,17 +2114,8 @@ class SessionCoach:
                         # name the recipe module that covers this situation —
                         # a weak model should not have to know what to search
                         # for; one hint per module per session keeps it quiet
-                        for mid in guides.triggers_for(
-                                f"{cmd}\n{out[:3000]}"):
-                            hkey = f"{window or 'main'}:{mid}"
-                            if hkey in self._guides_hinted:
-                                continue
-                            self._guides_hinted.add(hkey)
-                            result += (
-                                f"\nGUIDE: module '{mid}' covers this "
-                                f"situation — lookup_guide(\"{mid}\") pulls "
-                                "the recipe (verbatim commands).")
-                            break
+                        result += self._guide_hint(
+                            f"{cmd}\n{out[:3000]}", window)
                         # literal-var footgun: `sshpass -p '$pass'` passes
                         # the literal text "$pass" — single quotes stop
                         # expansion, so the auth failure that follows looks
@@ -2673,6 +2712,11 @@ class SessionCoach:
                 w.status = "killed"
                 if w.task_obj:
                     w.task_obj.cancel()
+                # belt: if the task was already past its loop the Cancel
+                # never reaches _finish_worker — drop the live indicator
+                # explicitly so the chip can't spin forever
+                asyncio.create_task(self.client.send_activity(
+                    self.sid, active=False, agent=w.id))
         if self._workers:
             self._push_agents()
 
@@ -2705,6 +2749,20 @@ class SessionCoach:
             meta = self._msg_meta(w.id)
             await self.client.send_chat(
                 self.sid, w.report[:2000], kind="action_report", meta=meta)
+        # notify the parent on its guaranteed-read channel — findings are
+        # already merged into FACTS, this note announces the finish and
+        # points at collect_agent for the full text (s1: three workers
+        # finished and died unnoticed, the parent never polled)
+        head = next((ln.strip() for ln in (w.report or "").splitlines()
+                     if ln.strip()), "")[:110]
+        self._worker_done.append(
+            f"{w.id} {w.status} — {w.actions} actions in "
+            f"{int(time.monotonic() - w.started)}s — task: "
+            f"\"{w.task[:80]}\"{f' — {head}' if head else ''} — "
+            f"its findings already merged into FACTS; "
+            f"collect_agent(\"{w.id}\") returns the full report")
+        self._worker_done = self._worker_done[-4:]
+        self._worker_reasoning.pop(w.id, None)
         self._push_agents()
 
     async def _worker_loop(self, w: _Worker) -> None:
@@ -2726,6 +2784,7 @@ class SessionCoach:
         last_out = ""
         try:
             llm_fails = 0
+            invalid_turns = 0
             while (w.turns < turn_cap
                    and time.monotonic() - t0 < time_cap):
                 # soft wrap-up: a worker that is about to hit its hard caps
@@ -2794,10 +2853,49 @@ class SessionCoach:
                     if cid := a.get("_call_id"):
                         call_results[cid] = res
                     last_out = res or last_out
+                    w.last_out = last_out
                 # per-turn roster push — the chip's action count stays live
                 # instead of freezing at its spawn-time snapshot
                 self._push_agents()
                 if not calls or not exec_acts:
+                    # distinguish "finished reporting" from "emitted nothing
+                    # usable" — a parse failure or an illegal-tool turn must
+                    # not kill the worker after one bad response (s1: w1/w2/w3
+                    # each died on their FIRST turn to a parse fail after
+                    # ~10min of LLM time, never retried, never collected)
+                    none_reason = next(
+                        (str(a.get("reason") or "")
+                         for a in resp["actions"]
+                         if a.get("type") == "none"), "")
+                    bad_tools = [str(a.get("type")) for a in resp["actions"]
+                                 if a.get("type") not in WORKER_TOOL_NAMES
+                                 and a.get("type") != "none"]
+                    is_invalid = (bool(bad_tools) or "parsed" in none_reason
+                                  or "think block" in none_reason)
+                    if is_invalid and invalid_turns < 2:
+                        invalid_turns += 1
+                        # pair any dispatched tool calls BEFORE the corrective
+                        # — an unpaired tool_call corrupts the message list on
+                        # strict endpoints
+                        if calls:
+                            msgs.append({"role": "assistant",
+                                         "content": (resp.get("content")
+                                                    or None),
+                                         "tool_calls": calls})
+                            for i, call in enumerate(calls):
+                                cid = call.get("id") or f"call_{i}"
+                                msgs.append({"role": "tool",
+                                             "tool_call_id": cid,
+                                             "content": call_results.get(
+                                                 cid, "error: dropped")[:2000]})
+                        why = (f"invalid tool(s) {bad_tools} — workers only "
+                               f"have {sorted(WORKER_TOOL_NAMES)}"
+                               if bad_tools else "no tool call parsed")
+                        msgs.append({"role": "user", "content": (
+                            f"[corrective {invalid_turns}/2] {why} — emit "
+                            "exec_in_kali/type_in_pane/wait calls, or your "
+                            "final report as plain text.")})
+                        continue
                     # no tool calls or only 'none' — the worker is done; its
                     # trailing message IS the report to the parent
                     w.report = ((resp.get("content") or "").strip()
@@ -2808,6 +2906,7 @@ class SessionCoach:
                     with contextlib.suppress(Exception):
                         await self._finish_worker(w)
                     return
+                invalid_turns = 0
                 # assistant/tool pairing identical to the parent turn — strict
                 # endpoints reject a tool_call left without its reply
                 msgs.append({"role": "assistant",
@@ -2818,7 +2917,10 @@ class SessionCoach:
                     msgs.append({"role": "tool", "tool_call_id": cid,
                                  "content": call_results.get(
                                      cid, "error: dropped")[:2000]})
-                msgs = msgs[:1] + msgs[-29:]  # bounded ctx, keep the system prompt
+                # bounded ctx — keep the system prompt AND the task brief or
+                # the worker drifts off-task after ~15 turns (msgs[:1] alone
+                # dropped msgs[1], the whole assignment)
+                msgs = msgs[:2] + msgs[-28:]
             w.status = "timeout"
             w.report = (f"hit worker caps after {w.actions} actions/"
                         f"{w.turns} turns — {last_out[-800:]}")
@@ -2826,6 +2928,13 @@ class SessionCoach:
                 await self._finish_worker(w)
         except asyncio.CancelledError:
             w.status = "killed"
+            # a killed worker's last output still holds findings — fold its
+            # tail into the report so _finish_worker merges it into FACTS
+            # rather than letting partial evidence die with the slot
+            if not w.report and w.last_out:
+                w.report = (f"killed after {w.actions} actions/"
+                            f"{w.turns} turns — last output:\n"
+                            f"{w.last_out[-400:]}")
             with contextlib.suppress(Exception):
                 await self._finish_worker(w)
             raise

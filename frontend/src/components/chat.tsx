@@ -61,6 +61,14 @@ const AGENT_STATUS_DOT: Record<string, string> = {
   killed: "bg-muted",
 };
 
+/** terminal-status → outcome color for the feed's final-result card */
+const AGENT_STATUS_EDGE: Record<string, string> = {
+  done: "border-l-success",
+  timeout: "border-l-warning",
+  failed: "border-l-danger",
+  killed: "border-l-muted",
+};
+
 /** Model chain-of-thought — muted block above the answer. Open while the
  * draft streams, a collapsed <details> once the real message lands. */
 function ThinkingBlock({ text, open }: { text: string; open?: boolean }) {
@@ -727,6 +735,40 @@ function WorkerFeed({ agent, feed, messages, onConfirm, onSelectAgent, now,
       {feed?.activity && (
         <ActivityBlock activity={feed.activity} now={now} outRef={actOutRef} />
       )}
+      {(() => {
+        // terminal workers get an outcome card at the end of their feed —
+        // status-colored edge, elapsed/actions summary, and the last
+        // action_report collapsed so a finished worker reads as a closed
+        // chapter, not a pane that mysteriously went quiet
+        const terminal = status && AGENT_TERMINAL.has(status);
+        if (!terminal) return null;
+        const report = [...messages].reverse().find(
+          (m) => m.kind === "action_report");
+        return (
+          <div className={cn(
+            "rounded-md border border-l-4 border-border bg-surface-2 px-3 py-2",
+            AGENT_STATUS_EDGE[status ?? ""] ?? "border-l-muted")}>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              {agent} {status}
+              {info ? ` · ${info.actions} actions · ${Math.round(info.elapsed)}s` : ""}
+            </div>
+            {report ? (
+              <details className="mt-1 text-xs">
+                <summary className="cursor-pointer select-none text-muted hover:text-foreground">
+                  final report
+                </summary>
+                <div className="mt-1 max-h-96 overflow-auto">
+                  <MarkdownView>{report.content}</MarkdownView>
+                </div>
+              </details>
+            ) : (
+              <div className="mt-1 text-xs text-muted">
+                ended without a report
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {!messages.length && !feedDrafts.length && !feed?.activity && (
         <p className="p-2 text-sm text-muted">No output from {agent} yet.</p>
       )}
@@ -734,11 +776,20 @@ function WorkerFeed({ agent, feed, messages, onConfirm, onSelectAgent, now,
   );
 }
 
+/** terminal-status → a scannable outcome glyph on the roster chip */
+const AGENT_STATUS_GLYPH: Record<string, { ch: string; cls: string }> = {
+  done: { ch: "✓", cls: "text-success" },
+  timeout: { ch: "⏱", cls: "text-warning" },
+  failed: { ch: "✗", cls: "text-danger" },
+  killed: { ch: "⊘", cls: "text-muted" },
+};
+
 /** Clickable live tag above the composer — status dot, label, unseen count. */
 function AgentChip({ label, title, status, selected, working, unseen, onClick }: {
   label: string; title?: string; status?: string; selected?: boolean;
   working?: boolean; unseen?: number; onClick: () => void;
 }) {
+  const glyph = status ? AGENT_STATUS_GLYPH[status] : undefined;
   return (
     <button onClick={onClick} title={title}
       className={cn(
@@ -752,6 +803,11 @@ function AgentChip({ label, title, status, selected, working, unseen, onClick }:
         working ? "bg-primary animate-pulse"
                 : (AGENT_STATUS_DOT[status ?? ""] ?? "bg-muted"))} />
       {label}
+      {glyph && (
+        <span className={cn("text-[9px] leading-none", glyph.cls)}>
+          {glyph.ch}
+        </span>
+      )}
       {!!unseen && (
         <span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[9px] leading-none text-surface">
           {unseen}
@@ -853,13 +909,20 @@ const Message = memo(function Message({ m, onConfirm, onSelectAgent }: {
       </div>
       <div className={cn("max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed",
         m.role === "user" ? "bg-primary/15" : style.cls)}>
-        {style.label && (
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-            {style.label}
-            {m.kind === "hint" && m.meta?.level != null && ` · level ${m.meta.level}`}
-            {m.meta?.source === "observer" && " · observer"}
-          </div>
-        )}
+        {(() => {
+          // a worker's final report must name its author — "w2 report",
+          // not the generic "elliot action" label (main stays as-is)
+          const agent = m.meta?.agent as string | undefined;
+          const label = (m.kind === "action_report" && agent && agent !== "main")
+            ? `${agent} report` : style.label;
+          return label && (
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              {label}
+              {m.kind === "hint" && m.meta?.level != null && ` · level ${m.meta.level}`}
+              {m.meta?.source === "observer" && " · observer"}
+            </div>
+          );
+        })()}
         {typeof m.meta?.reasoning === "string" && m.meta.reasoning && (
           <ThinkingBlock text={m.meta.reasoning} />
         )}

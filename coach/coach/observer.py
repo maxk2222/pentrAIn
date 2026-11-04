@@ -305,6 +305,17 @@ class ObserverService:
             self._lessons_ts = time.time()
         return self._lesson_texts
 
+    @staticmethod
+    async def _chat(llm: LlmClient, msgs: list[dict], **kw) -> dict:
+        """One bounded retry — a 240s ReadTimeout on a busy local endpoint
+        (coach turns competing for the same 27B) must not forfeit the
+        whole analysis; a dead endpoint still fails after one attempt."""
+        try:
+            return await llm.chat(msgs, **kw)
+        except Exception:
+            await asyncio.sleep(20)
+            return await llm.chat(msgs, **kw)
+
     async def _analyze_advisory(self, w: _Watch, obs: dict) -> None:
         """One concrete unblock tip mid-stuck — the live equivalent of the
         manual nudges the capstone runs kept needing."""
@@ -331,7 +342,7 @@ class ObserverService:
             f"{self._facts_snapshot(w.sid)}")}]
         w.analyses += 1
         try:
-            resp = await llm.chat(msgs, json_mode=False)
+            resp = await self._chat(llm, msgs, json_mode=False)
             text = str(resp.get("content") or "").strip()
         except Exception as e:
             await log.awarning("observer advisory llm failed",
@@ -383,7 +394,7 @@ class ObserverService:
         w.last_analysis_ts = now
         w.analyses += 1
         try:
-            resp = await llm.chat(msgs)
+            resp = await self._chat(llm, msgs)
             proposals = self._parse_proposals(resp)
         except Exception as e:
             await log.awarning("observer lesson llm failed",

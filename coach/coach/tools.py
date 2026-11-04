@@ -96,7 +96,7 @@ TOOLS: list[dict] = [
         ["seconds"]),
     _fn("spawn_agent",
         "Delegate an INDEPENDENT subtask to a parallel worker agent running "
-        "on its own tmux window (w1..w3) — it executes commands autonomously "
+        "on its own tmux window (w1..w4) — it executes commands autonomously "
         "and reports findings back via collect_agent. Use for parallel work "
         "(e.g. enumerating different hosts/services at once); do NOT spawn "
         "for sequential steps that depend on each other's results.",

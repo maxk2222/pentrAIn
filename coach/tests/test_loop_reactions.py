@@ -2822,3 +2822,187 @@ async def test_deep_effort_spent_once_per_stall_window():
     coach.state.last_progress_ts = time.time() - 5000
     await coach._reflect_tick(10)
     assert coach.llm.kwargs[-1].get("reasoning_effort") == "high"
+
+
+class QueueLlm(FakeLlm):
+    """Sequential responses for worker-loop tests — items are resp dicts or
+    the string 'CANCEL' to raise CancelledError mid-loop."""
+    def __init__(self, seq):
+        super().__init__()
+        self.seq = list(seq)
+        self.msgs_seen: list[list] = []
+
+    async def chat(self, messages, **kw):
+        self.calls.append(messages)
+        self.msgs_seen.append([m.get("content") for m in messages])
+        item = self.seq.pop(0) if self.seq else {
+            "content": "done", "actions": [{"type": "none"}],
+            "tool_calls": [], "raw": {"usage": {}}, "reasoning": ""}
+        if item == "CANCEL":
+            raise asyncio.CancelledError()
+        return item
+
+
+def _exec_resp(cmd: str) -> dict:
+    return {"content": "", "tool_calls": [
+        {"id": "c1", "type": "function",
+         "function": {"name": "exec_in_kali",
+                      "arguments": f'{{"command": "{cmd}"}}'}}],
+        "actions": [{"type": "exec_in_kali", "command": cmd, "_call_id": "c1"}],
+        "raw": {"usage": {}}, "reasoning": ""}
+
+
+async def test_worker_done_note_reaches_parent_not_workers():
+    """_finish_worker queues a completion note; the PARENT's next result
+    carries it, a sibling worker's result must not eat it (s1: workers
+    finished unnoticed — the parent never polled agent_status)."""
+    from coach.loop import _Worker
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    w = _Worker(id="w1", task="scan web01", started=time.monotonic())
+    w.status, w.report, w.actions = "done", "found port 80", 7
+    coach._workers["w1"] = w
+    await coach._finish_worker(w)
+    assert coach._worker_done and "w1 done" in coach._worker_done[0]
+    # a sibling worker's dispatch must NOT drain the parent notice
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "id"},
+        proactive=True, window="w2")
+    assert did and "WORKER DONE" not in res
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "whoami"}, proactive=True)
+    assert "WORKER DONE" in res and "collect_agent(\"w1\")" in res
+
+
+async def test_worker_parse_failure_retried_then_done():
+    """A parse-failed first turn must NOT kill the worker — corrective
+    retry, then normal work (s1: w1..w3 each died on their FIRST turn
+    to 'no valid actions parsed')."""
+    from coach.loop import _Worker
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = QueueLlm([
+        {"content": "let me think...", "tool_calls": [],
+         "actions": [{"type": "none", "reason": "no valid actions parsed"}],
+         "raw": {"usage": {}}, "reasoning": ""},
+        _exec_resp("id"),
+        {"content": "report: nothing found", "tool_calls": [],
+         "actions": [{"type": "none"}], "raw": {"usage": {}},
+         "reasoning": ""},
+    ])
+    w = _Worker(id="w1", task="check id", started=time.monotonic())
+    coach._workers["w1"] = w
+    await coach._worker_loop(w)
+    assert w.status == "done" and w.actions == 1
+    assert any("id" == cmd for cmd, _w in c.exec_calls)
+    # corrective message reached the model
+    assert any("corrective" in str(m) for m in coach.llm.msgs_seen[-1])
+
+
+async def test_worker_three_parse_failures_give_up():
+    """The retry is bounded — three consecutive invalid turns end the
+    worker with whatever content it produced."""
+    from coach.loop import _Worker
+    bad = {"content": "nope", "tool_calls": [],
+           "actions": [{"type": "none", "reason": "no valid actions parsed"}],
+           "raw": {"usage": {}}, "reasoning": ""}
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = QueueLlm([bad, bad, bad])
+    w = _Worker(id="w1", task="x", started=time.monotonic())
+    await coach._worker_loop(w)
+    assert w.status == "done" and w.actions == 0
+    assert len(coach.llm.calls) == 3  # initial + 2 retries, not infinite
+
+
+async def test_worker_task_brief_survives_context_trim():
+    """msgs[:1]+msgs[-29:] dropped the task brief after ~15 turns — the
+    worker drifted off-task. The brief must be present in EVERY call."""
+    from coach.loop import _Worker
+    seq = [_exec_resp("id") for _ in range(18)]
+    coach, _ = _coach({"coach": {"worker_turn_cap": 20,
+                                 "worker_time_cap_s": 3600},
+                       "llm": {}})
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = QueueLlm(seq)
+    w = _Worker(id="w1", task="MY-UNIQUE-BRIEF-42", started=time.monotonic())
+    coach._workers["w1"] = w
+    await coach._worker_loop(w)
+    last = coach.llm.msgs_seen[-1]
+    assert any("MY-UNIQUE-BRIEF-42" in str(c) for c in last)
+
+
+async def test_denial_note_is_per_window():
+    """A new denial fact must reach EVERY window's guaranteed-read note —
+    a shared _denial_seen let the first exec'ing agent eat it for all."""
+    from coach.loop import _Worker
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach._workers["w1"] = _Worker(id="w1", task="t",
+                                 started=time.monotonic())
+    coach.facts.denials.append("filtered:9.9.9.9@kali")
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "id"},
+        proactive=True, window="w1")
+    assert did and "filtered:9.9.9.9@kali" in res  # worker sees it
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "whoami"}, proactive=True)
+    assert did and "filtered:9.9.9.9@kali" in res  # parent sees it too
+
+
+async def test_observer_hint_parent_window_only():
+    """Observer advisories address the stuck parent — a worker's dispatch
+    must not pop and hide them (found in subagent audit)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.state.pending_observer_hints.append("try the vault on :8080")
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "id"},
+        proactive=True, window="w1")
+    assert did and "OBSERVER" not in res
+    assert coach.state.pending_observer_hints  # not eaten
+    did, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "whoami"}, proactive=True)
+    assert "OBSERVER (unverified): try the vault on :8080" in res
+
+
+async def test_denied_repeat_escalates_and_hints_guide():
+    """Identical denied cmd ×N escalates + the denial reason triggers
+    the matching guide hint once (filtered → pivoting)."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.facts.denials.append("filtered:10.1.10.32@kali")
+    did, res1 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "nmap -p- 10.1.10.32"},
+        proactive=True)
+    assert not did and "filtered:10.1.10.32@kali" in res1
+    assert "pivoting" in res1          # guide hint fired on the denial
+    did, res2 = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "nmap -p- 10.1.10.32"},
+        proactive=True)
+    assert not did and "REPEATED ×2" in res2
+    assert "pivoting" not in res2      # hint is once-per-module
+
+
+async def test_killed_worker_merges_last_output():
+    """kill_agent mid-work must not lose findings — the killed path
+    synthesizes a report from last_out so _finish_worker merges it."""
+    from coach.loop import _Worker
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.llm = QueueLlm([_exec_resp("id"), "CANCEL"])
+    w = _Worker(id="w2", task="enum", started=time.monotonic())
+    coach._workers["w2"] = w
+    with pytest.raises(asyncio.CancelledError):
+        await coach._worker_loop(w)
+    assert w.status == "killed"
+    assert "killed after" in w.report and "last output" in w.report
+    assert coach._worker_done and "w2 killed" in coach._worker_done[0]

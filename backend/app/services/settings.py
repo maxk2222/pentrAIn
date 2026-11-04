@@ -53,9 +53,9 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.action_grace": (80, False),           # soft-cap window after budget
     "coach.takeover_pace_s": (10, False),        # min gap between L4 chains
     "coach.takeover_chain_max": (48, False),     # max LLM calls per L4 turn
-    "coach.max_workers": (8, False),             # parallel L4 subagent panes
-    "coach.worker_turn_cap": (80, False),        # LLM turns per worker task
-    "coach.worker_time_cap_s": (3600, False),    # wall-clock per worker task
+    "coach.max_workers": (4, False),             # parallel L4 subagent panes
+    "coach.worker_turn_cap": (160, False),       # LLM turns per worker task
+    "coach.worker_time_cap_s": (7200, False),    # wall-clock per worker task
     "coach.collect_wait_s": (240, False),        # collect_agent block bound
     "coach.wait_max_s": (600, False),            # cap per wait-tool call
     "coach.observer_enabled": (True, False),     # session observer learns+advises
