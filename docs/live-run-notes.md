@@ -176,3 +176,19 @@ Findings from watching w1..w3 die silently in cap-t3:
   status-colored result card w/ collapsible report, action_report
   messages carry their wN author label.
 2026-11-04
+
+## Agent/subagent comms audit (w7 ghost chip)
+- coach_agents roster events merged only — never cleared. A 'running'
+  chip from an earlier roster survived restarts/wipes client-side
+  forever (user saw a phantom 'w7' from the pre-4-cap era; no such
+  worker ever existed in the DB). Fix: roster push is authoritative —
+  running-status entries absent from the list are marked killed.
+- collect_agent: bounded shield-wait (240s), preempted by operator
+  chat, merges report on read — audited clean.
+- agent_status: plain roster text, audited clean.
+- spawn inline default max_w was 6 vs new settings default 4 — aligned
+  (dead code, but misleading).
+- Worker tmux windows (pentrain-coach:w1..w4) are never closed —
+  panes linger on the trainee desktop after finish/kill. Cosmetic;
+  a respawned wN reuses its pane. Worth a kill-window on finish later.
+2026-11-04
