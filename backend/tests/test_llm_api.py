@@ -192,7 +192,11 @@ def _mk_session(state: str, tok: str) -> None:
     from app.models.domain import Session
 
     async def go():
+        from sqlalchemy import delete
         async with session_factory()() as s:
+            # file-backed test db persists rows across runs — replace, not add
+            await s.execute(delete(Session).where(
+                Session.telemetry_token == tok))
             s.add(Session(quest_id="ai-llm-injection", state=state,
                           telemetry_token=tok))
             await s.commit()
