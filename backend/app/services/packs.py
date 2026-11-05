@@ -37,6 +37,37 @@ class KaliSpec(BaseModel):
     roles: list[dict | str] = Field(default_factory=list)  # extra roles on kali
 
 
+class SetupFileSpec(BaseModel):
+    path: str
+    content: str | None = None
+    content_b64: str | None = None
+    mode: str = "0644"
+
+    @field_validator("path")
+    @classmethod
+    def _path_ok(cls, v: str) -> str:
+        if not v.startswith("/") or ".." in v.split("/"):
+            raise ValueError("setup file path must be absolute without '..'")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_ok(cls, v: str) -> str:
+        import re as _re
+        if not _re.fullmatch(r"[0-7]{3,4}", v):
+            raise ValueError("mode must be octal like 0644")
+        return v
+
+
+class SetupSpec(BaseModel):
+    """Post-deploy customization on a target VM — pushed via qemu-guest-agent
+    at finalize (same channel as flag injection, pre-snapshot so soft-reset
+    keeps it). This is how generated quests bring user configs (compose,
+    k8s manifests, app sources) to life without new ansible roles."""
+    files: list[SetupFileSpec] = Field(default_factory=list)
+    exec: list[str] = Field(default_factory=list)
+
+
 class VmSpec(BaseModel):
     name: str
     template: str
@@ -54,6 +85,7 @@ class VmSpec(BaseModel):
     domain: dict | None = None
     roles: list[dict | str] = Field(default_factory=list)
     gpos: list[str] = Field(default_factory=list)
+    setup: SetupSpec | None = None
 
     @field_validator("vlan")
     @classmethod
@@ -153,7 +185,26 @@ TRACK_TITLES = {
     "exploits": ("Exploit & Vulnerability Analysis", "Safely analyze vulnerable-code patterns, binary hardening, CI/CD trust and CVE exposure.", "bug", 86),
     "capstone": ("Capstone", "Full engagement simulations — multi-tier networks, chained objectives, zero walkthroughs.", "crown", 90),
     "lab": ("Free Lab", "Open Kali environment — no objectives, no scope, full internet.", "flask", 95),
+    "custom": ("Custom Quests", "AI-built quests from the builder — verified by an autonomous coach solve.", "wand", 97),
 }
+
+
+def check_role_refs(spec: QuestYaml, roles_root: Path) -> list[str]:
+    """Every role a quest references must exist under the ansible-roles dir —
+    a typo'd name only fails at deploy time otherwise. Same rule as
+    scripts/lint_packs.check_quest_roles, reusable here for generated packs."""
+    errors: list[str] = []
+    role_owners = [("kali", spec.topology.kali.roles)]
+    role_owners.extend((v.name, v.roles) for v in spec.topology.vms)
+    for vm_name, roles in role_owners:
+        for r in roles:
+            name = r["name"] if isinstance(r, dict) else r
+            if not isinstance(name, str):
+                continue
+            if not (roles_root / name / "tasks" / "main.yml").exists():
+                errors.append(f"{spec.meta.id}: role {name!r} on {vm_name} "
+                              "missing under ansible-roles")
+    return errors
 
 
 # ---------------- validation ----------------
@@ -186,6 +237,29 @@ def validate_quest_dir(qdir: Path) -> tuple[QuestYaml | None, list[str]]:
                         "the range router owns it")
         if v.gpos and not (v.windows or not v.linux):
             errs.append(f"{qdir.name}: vm {v.name} sets gpos but isn't a windows vm")
+        if v.setup:
+            if v.windows or not v.linux:
+                errs.append(f"{qdir.name}: vm {v.name} has setup but isn't linux "
+                            "— QGA file/exec hooks need a POSIX guest")
+            if len(v.setup.files) > 12:
+                errs.append(f"{qdir.name}: vm {v.name} setup has "
+                            f"{len(v.setup.files)} files (max 12)")
+            total = 0
+            for f in v.setup.files:
+                if f.content is None and f.content_b64 is None:
+                    errs.append(f"{qdir.name}: setup file {f.path} needs "
+                                "content or content_b64")
+                total += len(f.content or f.content_b64 or "")
+                if len(f.content or "") > 65_536 or len(f.content_b64 or "") > 90_000:
+                    errs.append(f"{qdir.name}: setup file {f.path} exceeds 64KiB")
+            if total > 262_144:
+                errs.append(f"{qdir.name}: vm {v.name} setup files exceed 256KiB total")
+            if len(v.setup.exec) > 8:
+                errs.append(f"{qdir.name}: vm {v.name} setup has "
+                            f"{len(v.setup.exec)} exec commands (max 8)")
+            for cmd in v.setup.exec:
+                if not cmd.strip() or len(cmd) > 500:
+                    errs.append(f"{qdir.name}: vm {v.name} setup exec empty or >500 chars")
     for f in spec.flags:
         if f.kind == "file":
             if not f.vm:
@@ -229,9 +303,22 @@ def _read(p: Path) -> str:
 
 # ---------------- DB sync ----------------
 
-async def sync_packs(db: AsyncSession, content_dir: str | Path) -> dict:
+async def sync_packs(db: AsyncSession, content_dir: str | Path,
+                     extra_dirs: list[str | Path] | None = None) -> dict:
     root = Path(content_dir)
     found, errors = discover_quests(root)
+    # generated quests live outside the curated checkout (writable volume)
+    gen_root = Path(extra_dirs[0]) if extra_dirs else None
+    for d in extra_dirs or []:
+        g_found, g_errors = discover_quests(Path(d))
+        seen_ids = {spec.meta.id for _, spec in found}
+        for qdir, spec in g_found:
+            if spec.meta.id in seen_ids:
+                errors.append(f"{qdir.name}: generated quest shadows curated "
+                              "id — keeping curated")
+                continue
+            found.append((qdir, spec))
+        errors.extend(g_errors)
     seen_tracks: set[str] = set()
     seen_quests: set[str] = set()
 
@@ -273,6 +360,7 @@ async def sync_packs(db: AsyncSession, content_dir: str | Path) -> dict:
         else:
             for k, v in payload.items():
                 setattr(quest, k, v)
+        quest.generated = bool(gen_root and str(qdir).startswith(str(gen_root)))
         # flags: full replace
         await db.execute(delete(Flag).where(Flag.quest_id == qid))
         for f in spec.flags:

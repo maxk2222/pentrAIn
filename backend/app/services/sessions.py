@@ -359,9 +359,11 @@ async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
             # engine unavailable → don't brick quests on an infra hiccup
             pass
     # mode == "off" → no resource gate
-    if quest.tier > 1 or quest.exam:
+    # generated (builder) quests carry no track progression — tier/exam
+    # gates would dead-lock them since the custom track has no ladder.
+    if not quest.generated and (quest.tier > 1 or quest.exam):
         solved_ids = await solved_quest_ids(db)
-    if quest.tier > 1:
+    if quest.tier > 1 and not quest.generated:
         # any non-exam quest at the previous tier unlocks this one —
         # exams are capstones, not stepping stones
         prevs = (await db.execute(
@@ -370,7 +372,7 @@ async def check_unlock(db: AsyncSession, quest: Quest) -> tuple[bool, str]:
                                    Quest.exam.is_not(True)))).scalars().all()
         if prevs and not any(p in solved_ids for p in prevs):
             return False, f"solve a tier {quest.tier - 1} quest in this track first"
-    if quest.exam:
+    if quest.exam and not quest.generated:
         # capstone gate: every non-exam quest at this tier must be solved
         peers = (await db.execute(
             select(Quest.id).where(Quest.track_slug == quest.track_slug,
@@ -573,6 +575,58 @@ async def _inject_llm_envs(db: AsyncSession, engine, session: Session,
                               f"[pentrain] llm-proxy env {v['name']} warn: {e!r}")
 
 
+async def _run_vm_setup(db: AsyncSession, engine, session: Session,
+                        quest: Quest) -> None:
+    """Apply each VM's `setup:` spec — builder-generated customization that
+    drops files + runs execs on the target via qemu-guest-agent. Same trust
+    level as ansible roles (it IS quest content); every step lands in the
+    deploy log so the builder's diagnose loop gets honest evidence. Non-fatal
+    per step — a broken setup must not wedge the range, the verify pass
+    catches it downstream."""
+    if not getattr(engine, "pve", None):
+        return
+    import base64
+    for v in (quest.topology or {}).get("vms") or []:
+        setup = v.get("setup")
+        if not setup:
+            continue
+        vmid = (session.target_vmids or {}).get(v["name"])
+        if not vmid:
+            await _append_log(db, session,
+                              f"[pentrain] setup skipped — no vmid for {v['name']}")
+            continue
+        for f in setup.get("files") or []:
+            try:
+                raw = f.get("content")
+                if raw is None and f.get("content_b64"):
+                    raw = base64.b64decode(f["content_b64"]).decode(
+                        "utf-8", errors="replace")
+                await engine.pve.agent_file_write(vmid, f["path"], raw or "")
+                mode = f.get("mode")
+                if mode:
+                    await engine.pve.agent_exec_sh(
+                        vmid, f"chmod {mode} {f['path']}", timeout_s=10)
+                await _append_log(db, session,
+                                  f"[pentrain] setup file -> {v['name']}:{f['path']}")
+            except Exception as e:
+                await _append_log(db, session,
+                                  f"[pentrain] setup file {f['path']} FAILED: {e!r}")
+        for cmd in setup.get("exec") or []:
+            try:
+                res = await engine.pve.agent_exec_sh(vmid, cmd, timeout_s=600)
+                code = res.get("exitcode")
+                tail = (res.get("out") or res.get("err") or "").strip()[-400:]
+                await _append_log(
+                    db, session,
+                    f"[pentrain] setup exec {v['name']}$ {cmd[:160]} "
+                    f"-> exit {code}"
+                    + (f" | {tail[:300]}" if tail and code else ""))
+            except Exception as e:
+                await _append_log(db, session,
+                                  f"[pentrain] setup exec FAILED on {v['name']}: "
+                                  f"{cmd[:120]} — {e!r}")
+
+
 async def _finalize(db: AsyncSession, engine, session: Session,
                     quest: Quest, st) -> None:
     """RUNNING range → ready session. Idempotent — the resume path may re-run
@@ -631,6 +685,12 @@ async def _finalize(db: AsyncSession, engine, session: Session,
             await db.commit()
         except Exception:
             pass
+
+    # per-vm post-deploy customization — builder quests drop files + run
+    # execs via QGA (same channel as flag injection). Runs BEFORE flags so
+    # a flag may land inside a setup-created path/container; everything is
+    # pre-snapshot, so soft reset keeps the setup state.
+    await _run_vm_setup(db, engine, session, quest)
 
     # dynamic flags
     quest_flags = (await db.execute(

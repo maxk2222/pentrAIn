@@ -100,6 +100,18 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 | `coach.effort_deep` | *(empty)* | Stage 2 effort — empty = `llm.reasoning_effort` |
 | `coach.effort_worker` | `medium` | Effort for subagent exec chains |
 
+### AI quest builder
+
+| Key | Default | Meaning |
+|---|---|---|
+| `builder.enabled` | `true` | Quest Builder tab + `/api/builder` endpoints |
+| `builder.web_enabled` | `true` | Research tools may reach the internet |
+| `builder.tool_call_cap` | `10` | Max tool calls per builder turn |
+| `builder.verify_timeout_s` | `5400` | Wall-clock per coach verification run |
+| `builder.max_verify_iters` | `3` | Diagnose→patch→redeploy cycles |
+| `builder.min_solve_s` | `120` | Faster solves count as too_easy |
+| `builder.stuck_after_s` | `1200` | No coach progress = stuck |
+
 ### Content & data
 
 | Key | Default | Meaning |
@@ -117,6 +129,9 @@ Full semantics in [coach.md](coach.md#coach-tuning).
 |---|---|---|
 | `PENTRAIN_DATABASE_URL` | `sqlite+aiosqlite:///./pentrain.db` | SQLAlchemy URL — `/data/pentrain.db` in docker |
 | `PENTRAIN_CONTENT_DIR` | `/content/packs` | Where packs are mounted |
+| `PENTRAIN_GENERATED_PACKS_DIR` | `/data/generated_packs` | Writable root for builder quests (`custom/` lane inside) |
+| `PENTRAIN_ROLES_DIR` | `/ansible-roles` | Read-only role source for builder introspection |
+| `PENTRAIN_COACH_SRC_DIR` | `/coach-src` | Read-only coach tree — builder reuses its research modules |
 | `PENTRAIN_ENGINE_MODE` | `nested` | Bootstrap engine mode (settings override per request) |
 | `PENTRAIN_PVE_URL` / `_TOKEN_ID` / `_TOKEN_SECRET` / `_NODE` / `_VERIFY_TLS` | — | Bootstrap PVE credentials |
 | `PENTRAIN_LUDUS_URL` / `_API_KEY` | — | Bootstrap Ludus credentials |

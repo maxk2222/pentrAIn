@@ -87,6 +87,38 @@ is useful for lightweight, read-only audit quests that need no target VM. Role
 names are validated by the pack linter. Keep fixture data synthetic, and use
 Kali-side command flags to check a learner-produced report.
 
+#### `setup:` — per-VM post-deploy customization
+
+For tweaks that don't warrant a whole ansible role — dropping a compose
+file, planting a config, starting a service — a VM may carry a `setup`
+block. It runs on the deployed guest via qemu-guest-agent at finalize,
+**before flag injection and before the post-deploy snapshot**, so soft
+resets keep the result:
+
+```yaml
+    - name: app01
+      template: debian-12-x64-server-template
+      setup:
+        files:
+          - path: /opt/app/docker-compose.yml
+            content: |
+              services:
+                web: {image: nginx:alpine, ports: ["8080:80"]}
+            mode: "0644"                       # optional octal, default 0644
+          - path: /opt/app/blob.bin
+            content_b64: "AAEC"               # for non-text payloads
+        exec:
+          - "cd /opt/app && docker compose up -d"
+```
+
+Rules enforced at pack validation: linux guests only (QGA exec needs a
+POSIX shell), ≤12 files / ≤8 execs per VM, ≤64 KiB per file, ≤256 KiB
+total, absolute paths without `..`, octal modes. Steps run in order and
+log to the deploy log — failures are non-fatal (a broken setup must not
+wedge the range; verification catches it downstream). This is the
+mechanism the AI quest builder uses for user-pasted configs, since new
+ansible roles cannot be distributed to the PVE host at runtime.
+
 ### Flags
 
 ```yaml
@@ -251,3 +283,36 @@ Ludus applies `roles: [...]` to each VM during deploy. Conventions:
    (deploy → flags → reset) is exercisable without a hypervisor.
 3. Real validation needs a Ludus host: deploy the quest, verify the role
    converges, flags submit, checkpoints fire on the right commands.
+
+## AI quest builder
+
+The **Quest Builder** tab (`/builder`) turns a description — optionally
+with pasted Docker Compose / k8s manifests / Proxmox notes — into a
+verified quest. Flow: chat (the builder asks clarifying questions when
+the intent is unclear) → draft pack → validation → autonomous
+verification.
+
+Generated packs live under `PENTRAIN_GENERATED_PACKS_DIR`
+(`/data/generated_packs`, track dir `custom/`) — the curated checkout
+stays read-only. Generated quests get `track: custom`, `exam: false`,
+`Quest.generated = true`, skip the tier/exam unlock ladder, and cannot
+reuse a curated quest id.
+
+**Verification contract**: a generated quest is not "finished" when the
+YAML validates — only when the coach solves it at autonomy 4 with
+subagents. After each run the builder diagnoses the outcome
+(`quest_bug` / `too_easy` / `coach_limitation`), patches the pack, and
+redeploys via **hard reset** — a soft reset restores the old snapshot and
+would keep the stale spec. A clean solve ends with a soft reset so the
+session stays open. `coach_limitation` is reported honestly instead of
+nerfing the quest; on a mock engine verification reports *skipped*, never
+"solved". Limits: `builder.max_verify_iters` (3), `builder.min_solve_s`
+(120 — faster counts as too_easy), `builder.stuck_after_s` (1200).
+
+The builder shares the coach's research modules via the read-only
+`/coach-src` mount (`web_search`, `web_fetch`, `query_vuln_db`,
+`rss_feed`, `search_technique`) plus catalog tools (`quest_catalog`,
+`read_quest`, `list_roles`, `read_role`, `list_templates`) and a
+verify-phase `kali_exec` on the live test Kali. Settings: `builder.*`
+(`enabled`, `web_enabled`, `tool_call_cap`, …). LLM calls are audited as
+`LlmUsage(kind="builder")`; tool calls appear as builder messages.

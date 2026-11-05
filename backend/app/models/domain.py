@@ -71,6 +71,7 @@ class Quest(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     exam: Mapped[bool] = mapped_column(Boolean, default=False)  # capstone — unlocks only when all same-tier quests are solved
+    generated: Mapped[bool] = mapped_column(Boolean, default=False)  # AI builder output — lives in generated_packs, not the curated checkout
 
     requirements: Mapped[dict] = mapped_column(JSON, default=dict)
     topology: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -329,3 +330,35 @@ class CoachSessionState(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     state: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class BuilderSession(Base):
+    """AI quest-builder conversation → draft → verified quest pipeline."""
+    __tablename__ = "builder_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(24), default="chat", index=True)
+    # chat|validating|materialized|verifying|verified|verified-partial|failed|interrupted
+    quest_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    draft: Mapped[dict] = mapped_column(JSON, default=dict)      # {path: content}
+    verify_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    iterations: Mapped[int] = mapped_column(Integer, default=0)
+    log: Mapped[list] = mapped_column(JSON, default=list)        # [{ts,kind,msg}]
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class BuilderMessage(Base):
+    __tablename__ = "builder_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("builder_sessions.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16))        # user|assistant|system
+    kind: Mapped[str] = mapped_column(String(16), default="chat")
+    # chat|question|draft|tool|status|error
+    content: Mapped[str] = mapped_column(Text, default="")
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

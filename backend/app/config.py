@@ -10,6 +10,11 @@ class Config(BaseSettings):
     # data
     database_url: str = "sqlite+aiosqlite:///./pentrain.db"
     content_dir: str = "/content/packs"
+    # AI quest builder — generated packs live in the writable data volume
+    # (curated packs stay ro-mounted); roles/coach sources mount ro alongside
+    generated_packs_dir: str = "/data/generated_packs"
+    roles_dir: str = "/ansible-roles"
+    coach_src_dir: str = "/coach-src"
 
     # engine connectivity (bootstrap values; WebGUI settings override per-request)
     engine_mode: str = "nested"  # nested|direct|mock

@@ -1,6 +1,7 @@
 """pentrAIn backend — FastAPI app factory."""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes_admin import coach_router
 from .api.routes_admin import router as admin_router
+from .api.routes_builder import router as builder_router
 from .api.routes_library import router as library_router
 from .api.routes_llm import router as llm_router
 from .api.routes_sessions import router as sessions_router
@@ -33,10 +35,23 @@ async def lifespan(app: FastAPI):
         await log.awarning("PENTRAIN_COACH_SERVICE_TOKEN is unset — coach API is open to anyone on the network")
     init_engine()
     await create_all()
-    # load quest packs into DB at boot
+    # load quest packs into DB at boot — curated root plus the writable
+    # generated-packs volume (builder quests survive restarts like packs)
     async with session_factory()() as db:
         try:
-            res = await packs_svc.sync_packs(db, cfg.content_dir)
+            gen_dir = Path(cfg.generated_packs_dir)
+            await asyncio.to_thread(
+                gen_dir.mkdir, parents=True, exist_ok=True)
+            extra_dirs = [gen_dir]
+        except Exception as e:
+            # e.g. dev checkout without the /data volume — generated packs
+            # are optional, curated sync must still run
+            await log.awarning("generated packs dir unavailable",
+                               error=str(e))
+            extra_dirs = []
+        try:
+            res = await packs_svc.sync_packs(
+                db, cfg.content_dir, extra_dirs=extra_dirs)
             await log.ainfo("packs synced", **res)
         except Exception as e:
             await log.awarning("pack sync failed", error=str(e))
@@ -49,6 +64,14 @@ async def lifespan(app: FastAPI):
                 await log.ainfo("lessons seeded", count=n)
         except Exception as e:
             await log.awarning("lesson seed failed", error=str(e))
+        # builder verify loops die with the process — never claim verified
+        try:
+            from .services import builder as builder_svc
+            n = await builder_svc.rescue_incomplete(db)
+            if n:
+                await log.ainfo("builder verify interrupted", count=n)
+        except Exception as e:
+            await log.awarning("builder rescue failed", error=str(e))
     # reattach deploy/reset watchers orphaned by the previous process —
     # ludus deploys server-side, so the range usually just kept going
     from .services import sessions as sessions_svc
@@ -75,6 +98,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
     )
     app.include_router(admin_router)
+    app.include_router(builder_router)
     app.include_router(library_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)

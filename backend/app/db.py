@@ -91,7 +91,8 @@ def _additive_columns(conn) -> None:
 
     wanted = {
         "quests": {"cheatsheet_md": "TEXT NOT NULL DEFAULT ''",
-                   "exam": "INTEGER NOT NULL DEFAULT 0"},
+                   "exam": "INTEGER NOT NULL DEFAULT 0",
+                   "generated": "INTEGER NOT NULL DEFAULT 0"},
         "tracks": {"cheatsheet_md": "TEXT NOT NULL DEFAULT ''"},
         "attempts": {"assistance": "JSON NOT NULL DEFAULT '{}'",
                      "breakdown": "JSON NOT NULL DEFAULT '{}'",

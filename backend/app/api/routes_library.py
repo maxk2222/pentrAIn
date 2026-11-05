@@ -24,7 +24,7 @@ def _quest_out(q: Quest, *, locked=False, reason="", solved=False, best=None,
         id=q.id, track_slug=q.track_slug, tier=q.tier, title=q.title,
         summary=q.summary, requirements=q.requirements or {},
         scoring=q.scoring_cfg or {}, locked=locked, lock_reason=reason,
-        solved=solved, best_score=best, exam=q.exam,
+        solved=solved, best_score=best, exam=q.exam, generated=q.generated,
         max_score=flag_points + int((q.scoring_cfg or {}).get("time_bonus_max") or 0))
 
 

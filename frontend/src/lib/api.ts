@@ -64,7 +64,7 @@ export interface Quest {
   requirements: Record<string, number>;
   scoring: { par_s?: number; time_bonus_max?: number; takeover_cost?: number };
   locked: boolean; lock_reason: string; solved: boolean; best_score: number | null;
-  exam: boolean;
+  exam: boolean; generated?: boolean;
   /** flag points + time bonus — denominator for XP percent. */
   max_score?: number;
 }
@@ -260,4 +260,18 @@ export interface SessionVmHistory {
 }
 export interface SessionMetricsHistory {
   ok: boolean; timeframe?: string; reason?: string; vms: SessionVmHistory[];
+}
+
+/* ---------- AI quest builder ---------- */
+
+export interface BuilderSession {
+  id: number; title: string; status: string;
+  quest_id: string | null; verify_session_id: number | null;
+  iterations: number; log: { ts: string; kind: string; msg: string }[];
+  created_at: string | null;
+}
+
+export interface BuilderMessage {
+  id: number; role: string; kind: string; content: string;
+  meta: Record<string, unknown>; ts: string | null;
 }

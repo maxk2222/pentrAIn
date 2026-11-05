@@ -1,0 +1,596 @@
+"""AI quest builder — chat → draft → validate → verify orchestration.
+
+Flow per builder session:
+  chat turns (clarify/learn/draft) → ```draft block → _materialize writes
+  the pack under generated_packs/<id>, validates + syncs it into the DB →
+  start_verify deploys it with the coach at autonomy 4 + subagents →
+  diagnose failures (quest_bug / too_easy / coach_limitation) → patch →
+  hard reset (the deploy snapshot still holds the OLD spec — soft reset
+  cannot pick up quest changes) → repeat up to builder.max_verify_iters.
+  A clean solve ends 'verified' with a SOFT reset so the session stays
+  usable for the human afterwards.
+
+Honesty rules encoded here: mock engine → verification reported skipped,
+never "solved"; coach_limitation is reported, not patched around; a
+sub-min_solve_s solve counts as too_easy, not success.
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import re
+import shutil
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+import httpx
+import yaml
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..config import get_config
+from ..db import session_factory
+from ..models.domain import (
+    BuilderMessage,
+    BuilderSession,
+    CoachAction,
+    LlmUsage,
+    Quest,
+    Session,
+    SessionState,
+)
+from . import builder_tools
+from . import packs as packs_svc
+from . import sessions as sessions_svc
+from . import settings as settings_svc
+from .builder_prompts import BUILDER_SYSTEM, DIAGNOSE_SYSTEM
+from .engine import get_engine
+from .sessions import SessionError
+
+_CHAT_HISTORY = 24
+_TOOL_RESULT_MAX = 16_000
+_DRAFT_RE = re.compile(r"```draft\s*\n(.*?)\n?```", re.DOTALL)
+_VERDICT_RE = re.compile(r"```verdict\s*\n(.*?)\n?```", re.DOTALL)
+_SAFE_QID = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
+_SAFE_PATH = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]*$")
+
+_verify_tasks: dict[int, asyncio.Task] = {}
+
+
+# ---------------------------------------------------------------- helpers
+
+def _utcnow() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+async def _log(db: AsyncSession, bs: BuilderSession, kind: str,
+               msg: str) -> None:
+    bs.log = (bs.log or []) + [{"ts": _utcnow(), "kind": kind,
+                                "msg": msg[:2000]}]
+    await db.commit()
+
+
+async def _msg(db: AsyncSession, bs: BuilderSession, role: str,
+               content: str, *, kind: str = "chat",
+               meta: dict | None = None) -> BuilderMessage:
+    m = BuilderMessage(session_id=bs.id, role=role, kind=kind,
+                       content=content, meta=meta or {})
+    db.add(m)
+    await db.commit()
+    return m
+
+
+async def _llm(db: AsyncSession, messages: list[dict],
+               *, tools: list[dict] | None = None) -> dict:
+    """One chat/completions call against the configured model, usage-logged."""
+    base_url = str(await settings_svc.get_setting(
+        db, "llm.base_url", "")).rstrip("/")
+    model = str(await settings_svc.get_setting(db, "llm.model", ""))
+    api_key = str(await settings_svc.get_setting(db, "llm.api_key", "") or "")
+    payload: dict = {
+        "model": model,
+        "messages": messages[-60:],
+        "temperature": float(await settings_svc.get_setting(
+            db, "llm.temperature", 0.4) or 0.4),
+        "stream": False,
+    }
+    if tools:
+        payload["tools"] = tools
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=15.0)) as c:
+        r = await c.post(f"{base_url}/chat/completions",
+                         json=payload, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+    usage = data.get("usage") or {}
+    db.add(LlmUsage(
+        model=model, kind="builder",
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
+        total_tokens=int(usage.get("total_tokens") or 0),
+        latency_ms=int((time.monotonic() - t0) * 1000)))
+    await db.commit()
+    choices = data.get("choices") or []
+    return (choices[0].get("message") if choices else {}) or {}
+
+
+async def _tool_loop(db: AsyncSession, bs: BuilderSession,
+                     ctx: builder_tools.ToolCtx, messages: list[dict],
+                     tools: list[dict], cap: int) -> str:
+    """LLM ↔ tool ping-pong until a plain answer arrives (or cap hits)."""
+    calls = 0
+    while True:
+        msg = await _llm(db, messages, tools=tools)
+        tcs = msg.get("tool_calls") or []
+        if not tcs or calls >= cap:
+            return msg.get("content") or ""
+        messages.append({"role": "assistant",
+                         "content": msg.get("content") or "",
+                         "tool_calls": tcs})
+        for tc in tcs:
+            if calls >= cap:
+                break
+            calls += 1
+            fn = tc.get("function") or {}
+            name = str(fn.get("name") or "")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = await builder_tools.dispatch(ctx, name, args)
+            await _msg(db, bs, "assistant",
+                       f"{name}({json.dumps(args, ensure_ascii=False)[:240]})",
+                       kind="tool", meta={"result": result[:600]})
+            messages.append({"role": "tool",
+                             "tool_call_id": str(tc.get("id") or ""),
+                             "name": name,
+                             "content": result[:_TOOL_RESULT_MAX]})
+
+
+async def _history(db: AsyncSession, bs: BuilderSession) -> list[dict]:
+    rows = (await db.execute(
+        select(BuilderMessage)
+        .where(BuilderMessage.session_id == bs.id,
+                   BuilderMessage.kind.in_(["chat", "question", "draft"]))
+        .order_by(BuilderMessage.id.desc())
+        .limit(_CHAT_HISTORY))).scalars().all()
+    return [{"role": m.role, "content": m.content}
+            for m in reversed(rows)]
+
+
+# ------------------------------------------------------------------- chat
+
+async def create(db: AsyncSession, title: str = "") -> BuilderSession:
+    bs = BuilderSession(title=(title or "untitled build")[:200])
+    db.add(bs)
+    await db.commit()
+    await _msg(db, bs, "system", "builder session created", kind="status")
+    return bs
+
+
+async def get_or_404(db: AsyncSession, bs_id: int) -> BuilderSession | None:
+    return await db.get(BuilderSession, bs_id)
+
+
+async def chat(db: AsyncSession, bs_id: int, text: str,
+               attachments: list[dict] | None = None) -> BuilderMessage:
+    bs = await db.get(BuilderSession, bs_id)
+    if not bs:
+        raise SessionError("builder session not found")
+    if bs.status == "verifying":
+        raise SessionError("verification is running — wait for it to finish")
+    for a in attachments or []:
+        name = re.sub(r"[^a-zA-Z0-9._-]", "_", str(a.get("name", "file"))[:80])
+        body = str(a.get("content", ""))[:32_000]
+        text += f"\n\n--- uploaded file: {name} ---\n{body}\n--- end {name} ---"
+    await _msg(db, bs, "user", text)
+    if bs.title in ("", "untitled build"):
+        bs.title = text.strip().splitlines()[0][:80] or "untitled build"
+        await db.commit()
+
+    messages = [{"role": "system", "content": BUILDER_SYSTEM}]
+    messages += await _history(db, bs)
+    if bs.draft:
+        messages.append({"role": "system", "content":
+                         "Current draft files on disk: "
+                         + ", ".join(sorted(bs.draft))})
+    ctx = builder_tools.ToolCtx(
+        db=db,
+        web_enabled=bool(await settings_svc.get_setting(
+            db, "builder.web_enabled", True)))
+    cap = int(await settings_svc.get_setting(
+        db, "builder.tool_call_cap", 10) or 10)
+    tools = builder_tools.tools_for_phase("chat", has_verify=False)
+    try:
+        reply = await _tool_loop(db, bs, ctx, messages, tools, cap)
+    except Exception as e:
+        # an unreachable/misbehaving LLM is an honest error, not a 500
+        return await _msg(
+            db, bs, "assistant",
+            f"[builder] LLM call failed: {type(e).__name__}: {e} — "
+            "check llm.base_url/llm.model in Settings.",
+            kind="error")
+
+    files = _extract_files(reply, _DRAFT_RE)
+    kind = "chat"
+    if files is not None:
+        kind = "draft"
+        errors, qid = await _materialize(db, bs, files)
+        if errors:
+            # one auto-repair round: feed the validator output back
+            await _log(db, bs, "validate", f"draft rejected: {errors[0]}")
+            messages.append({"role": "assistant", "content": reply})
+            messages.append({"role": "user", "content":
+                             "Validation failed — fix and re-emit the WHOLE "
+                             "draft block:\n- " + "\n- ".join(errors[:12])})
+            reply = await _tool_loop(db, bs, ctx, messages, tools, cap)
+            files = _extract_files(reply, _DRAFT_RE)
+            if files is not None:
+                errors, qid = await _materialize(db, bs, files)
+            if files is None or errors:
+                return await _msg(
+                    db, bs, "assistant",
+                    reply + "\n\n[builder] draft still invalid:\n- "
+                    + "\n- ".join(errors or ["no draft block"]),
+                    kind="error")
+        bs.status = "materialized"
+        bs.quest_id = qid
+        bs.draft = files
+        bs.iterations = 0
+        await db.commit()
+        await _log(db, bs, "draft", f"materialized quest '{qid}'")
+    return await _msg(db, bs, "assistant", reply, kind=kind)
+
+
+def _extract_files(text: str, pattern: re.Pattern) -> dict | None:
+    m = pattern.search(text or "")
+    if not m:
+        return None
+    try:
+        payload = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return {"__parse_error__": "draft block is not valid JSON"}
+    files = payload.get("files")
+    return files if isinstance(files, dict) else \
+        {"__parse_error__": "draft block has no 'files' object"}
+
+
+# ------------------------------------------------------------- materialize
+
+async def _materialize(db: AsyncSession, bs: BuilderSession,
+                       files: dict) -> tuple[list[str], str | None]:
+    """Write draft files under generated_packs/<qid>, validate, sync.
+    Returns (errors, quest_id)."""
+    if "__parse_error__" in files:
+        return [files["__parse_error__"]], None
+    raw_yaml = files.get("quest.yaml")
+    if not isinstance(raw_yaml, str) or not raw_yaml.strip():
+        return ["quest.yaml missing from draft"], None
+    try:
+        meta = (yaml.safe_load(raw_yaml) or {}).get("meta") or {}
+    except yaml.YAMLError as e:
+        return [f"quest.yaml invalid YAML: {e}"], None
+    qid = str(meta.get("id") or "")
+    errors: list[str] = []
+    if not _SAFE_QID.match(qid):
+        errors.append(f"meta.id '{qid}' must be kebab-case [a-z0-9-]")
+    if meta.get("track") not in (None, "custom"):
+        errors.append("meta.track must be 'custom' for generated quests")
+    else:
+        files["quest.yaml"] = _force_track(raw_yaml)
+    if meta.get("exam"):
+        errors.append("generated quests cannot be exams")
+
+    clean: dict[str, str] = {}
+    for p, content in files.items():
+        rel = str(p).strip().lstrip("/")
+        parts = rel.split("/")
+        if (not rel or ".." in parts or not _SAFE_PATH.match(rel)
+                or rel.startswith("/")):
+            errors.append(f"unsafe file path '{p}'")
+            continue
+        clean[rel] = "" if content is None else str(content)
+    if errors:
+        return errors, qid or None
+
+    existing = await db.get(Quest, qid)
+    if existing and not existing.generated:
+        return [f"id '{qid}' collides with a curated quest — pick another"], \
+            qid
+
+    # discover_quests expects <root>/<track>/<quest> — generated packs all
+    # sit in the custom lane
+    root = Path(get_config().generated_packs_dir) / "custom" / qid
+    try:
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        for rel, content in clean.items():
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(content)
+    except OSError as e:
+        return [f"cannot write pack dir {root}: {e} — check "
+                "PENTRAIN_GENERATED_PACKS_DIR is writable"], qid
+
+    spec, verrs = packs_svc.validate_quest_dir(root)
+    if verrs:
+        return verrs, qid
+    if spec is not None:
+        verrs = packs_svc.check_role_refs(
+            spec, _roles_dir())
+        if verrs:
+            return verrs, qid
+    await packs_svc.sync_packs(db, get_config().content_dir,
+                               extra_dirs=[get_config().generated_packs_dir])
+    return [], qid
+
+
+def _roles_dir() -> Path:
+    cfg_dir = Path(get_config().roles_dir)
+    if cfg_dir.is_dir():
+        return cfg_dir
+    return Path(__file__).resolve().parents[3] / "content" / "ansible-roles"
+
+
+def _force_track(raw_yaml: str) -> str:
+    """Rewrite meta.track → custom (LLM often copies the exemplar's track)."""
+    try:
+        doc = yaml.safe_load(raw_yaml) or {}
+        (doc.setdefault("meta", {}))["track"] = "custom"
+        return yaml.safe_dump(doc, sort_keys=False)
+    except yaml.YAMLError:
+        return raw_yaml
+
+
+# ------------------------------------------------------------------ verify
+
+async def start_verify(db: AsyncSession, bs_id: int) -> BuilderMessage:
+    bs = await db.get(BuilderSession, bs_id)
+    if not bs:
+        raise SessionError("builder session not found")
+    if bs.id in _verify_tasks and not _verify_tasks[bs.id].done():
+        raise SessionError("verification already running")
+    if not bs.quest_id or bs.status not in (
+            "materialized", "verified", "verified-partial", "failed",
+            "interrupted"):
+        raise SessionError("no materialized quest to verify — draft first")
+
+    engine = await get_engine(db)
+    if engine.mode == "mock":
+        await _log(db, bs, "verify",
+                   "verification SKIPPED — mock engine, no real range. "
+                   "Quest stays 'materialized', not 'verified'.")
+        return await _msg(db, bs, "assistant",
+                          "verification skipped — engine is in mock mode; "
+                          "a real solve cannot be claimed. The quest is "
+                          "materialized and valid but NOT verified.",
+                          kind="status")
+
+    bs.status = "verifying"
+    bs.iterations = 0
+    await db.commit()
+    await _log(db, bs, "verify", "verification started (L4 + subagents)")
+    _verify_tasks[bs.id] = asyncio.create_task(_verify_loop(bs.id))
+    return await _msg(db, bs, "assistant",
+                      "verification started — deploying the quest and letting "
+                      "the coach solve it at autonomy 4 with subagents. "
+                      "I'll watch the run and patch if needed.",
+                      kind="status")
+
+
+async def _verify_loop(bs_id: int) -> None:
+    async with session_factory()() as db:
+        bs = await db.get(BuilderSession, bs_id)
+        try:
+            max_iters = int(await settings_svc.get_setting(
+                db, "builder.max_verify_iters", 3) or 3)
+            timeout_s = int(await settings_svc.get_setting(
+                db, "builder.verify_timeout_s", 5400) or 5400)
+            for it in range(1, max_iters + 1):
+                bs = await db.get(BuilderSession, bs_id)
+                bs.iterations = it
+                await db.commit()
+                await _log(db, bs, "verify", f"iteration {it}/{max_iters}")
+                try:
+                    prev = (await db.get(Session, bs.verify_session_id)
+                            if bs.verify_session_id else None)
+                    if prev and prev.state not in (
+                            SessionState.ABORTED.value,
+                            SessionState.ABORTING.value,
+                            SessionState.FAILED.value):
+                        # subsequent iterations: hard-reset so the PATCHED
+                        # spec deploys (soft reset = stale snapshot)
+                        await sessions_svc.reset(db, prev.id, hard=True)
+                        s = prev
+                    else:
+                        s = await sessions_svc.create_session(
+                            db, bs.quest_id, autonomy_level=4,
+                            subagents_enabled=True)
+                        bs.verify_session_id = s.id
+                        await db.commit()
+                except Exception as e:
+                    await _finish(db, bs, "failed",
+                                  f"cannot start verify session: {e}")
+                    return
+                outcome, detail = await _await_solve(db, bs, s.id, timeout_s)
+                await _log(db, bs, "verify",
+                           f"iteration {it} outcome: {outcome} — {detail[:300]}")
+                if outcome == "solved":
+                    try:
+                        await sessions_svc.reset(db, s.id, hard=False)
+                    except Exception as e:
+                        await _log(db, bs, "verify",
+                                   f"soft reset failed: {e!r}")
+                    await _finish(db, bs, "verified",
+                                  f"coach solved it in {detail}. Session "
+                                  f"#{s.id} soft-reset and left open.")
+                    return
+                verdict = await _diagnose(db, bs, s, outcome, detail)
+                kind = str(verdict.get("kind") or "")
+                patch = verdict.get("patch") or {}
+                patch_files = patch.get("files") if isinstance(patch, dict) \
+                    else None
+                await _log(db, bs, "diagnose",
+                           f"{kind}: {verdict.get('rationale', '')[:400]}")
+                if kind == "coach_limitation" or not patch_files:
+                    await _finish(
+                        db, bs, "failed" if kind != "too_easy"
+                        else "verified-partial",
+                        f"{kind}: {verdict.get('rationale', '')}")
+                    return
+                # the verdict's patch only carries CHANGED files — overlay
+                # it on the current draft or the untouched pack files
+                # (briefing/coach_context/defense) get wiped on rewrite
+                merged = {**(bs.draft or {}), **patch_files}
+                errors, qid = await _materialize(db, bs, merged)
+                if errors:
+                    await _finish(db, bs, "failed",
+                                  "diagnose patch invalid: "
+                                  + "; ".join(errors[:4]))
+                    return
+                bs.quest_id = qid or bs.quest_id
+                bs.draft = merged
+                await db.commit()
+                # next loop iteration hard-resets the same session row
+            await _finish(db, bs, "verified-partial",
+                          f"exhausted {max_iters} verify iterations — quest "
+                          "improved each round but no clean solve")
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                await _finish(db, bs, "failed", f"verify crashed: {e!r}")
+        finally:
+            _verify_tasks.pop(bs_id, None)
+
+
+async def _await_solve(db: AsyncSession, bs: BuilderSession, sid: int,
+                       timeout_s: int) -> tuple[str, str]:
+    """Poll the verify session until terminal/stuck/timeout."""
+    deadline = time.monotonic() + timeout_s
+    stuck_s = int(await settings_svc.get_setting(
+        db, "builder.stuck_after_s", 1200) or 1200)
+    min_solve = int(await settings_svc.get_setting(
+        db, "builder.min_solve_s", 120) or 120)
+    t0 = time.monotonic()
+    last_n, last_progress = -1, time.monotonic()
+    while time.monotonic() < deadline:
+        await asyncio.sleep(15)
+        s = await db.get(Session, sid)
+        if s is None:
+            return "failed", "session row gone"
+        await db.refresh(s)
+        if s.state == SessionState.SOLVED.value:
+            secs = int(time.monotonic() - t0)
+            if s.started_at and s.ended_at:
+                secs = max(1, int((s.ended_at - s.started_at)
+                                  .total_seconds()))
+            if secs < min_solve:
+                return "too_easy", f"solved in {secs}s (< {min_solve}s floor)"
+            return "solved", f"{secs}s"
+        if s.state in (SessionState.ABORTED.value,
+                       SessionState.FAILED.value):
+            return "failed", s.error or s.state
+        if s.state == SessionState.READY.value:
+            # deploy finished — the coach only attaches on 'active'. Same
+            # for hard-reset redeploys; 409s mean someone beat us to it.
+            with contextlib.suppress(Exception):
+                await sessions_svc.activate(db, s.id)
+            continue
+        n = int((await db.execute(
+            select(func.count()).select_from(CoachAction)
+            .where(CoachAction.session_id == sid))).scalar() or 0)
+        if n != last_n:
+            last_n, last_progress = n, time.monotonic()
+        elif (s.state == SessionState.ACTIVE.value
+              and time.monotonic() - last_progress > stuck_s):
+            return "stuck", f"no coach progress for {stuck_s}s"
+    return "timeout", f"no solve within {timeout_s}s"
+
+
+async def _diagnose(db: AsyncSession, bs: BuilderSession, s: Session,
+                    outcome: str, detail: str) -> dict:
+    """Ask the LLM to classify the failure; it gets live verify tools."""
+    quest = await db.get(Quest, bs.quest_id)
+    actions = (await db.execute(
+        select(CoachAction).where(CoachAction.session_id == s.id)
+        .order_by(CoachAction.id.desc()).limit(40))).scalars().all()
+    tail = "\n".join(
+        f"{a.tool}({json.dumps(a.args or {})[:140]}) → "
+        f"{str(a.result or '')[:200]}"
+        for a in reversed(actions)) or "(no coach actions recorded)"
+    spec = yaml.safe_dump({
+        "quest.yaml": (bs.draft or {}).get("quest.yaml", ""),
+        "deploy_log_tail": (s.deploy_log or "")[-3000:],
+    }, sort_keys=False)
+    messages = [
+        {"role": "system", "content": DIAGNOSE_SYSTEM},
+        {"role": "user", "content":
+         f"Quest '{bs.quest_id}' (track {quest.track_slug if quest else '?'})\n"
+         f"Outcome: {outcome} — {detail}\n\n"
+         f"--- spec + deploy log ---\n{spec[:12000]}\n\n"
+         f"--- coach action tail ---\n{tail[:12000]}\n\n"
+         "Verdict?"}]
+    engine = await get_engine(db)
+    ctx = builder_tools.ToolCtx(
+        db=db, engine=engine, verify_session_id=s.id,
+        web_enabled=bool(await settings_svc.get_setting(
+            db, "builder.web_enabled", True)))
+    cap = int(await settings_svc.get_setting(
+        db, "builder.tool_call_cap", 10) or 10)
+    tools = builder_tools.tools_for_phase("verify", has_verify=True)
+    reply = await _tool_loop(db, bs, ctx, messages, tools, cap)
+    m = _VERDICT_RE.search(reply or "")
+    if not m:
+        return {"kind": "coach_limitation",
+                "rationale": "diagnosis produced no verdict block — "
+                             "treating as inconclusive/coach-side"}
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return {"kind": "coach_limitation",
+                "rationale": "verdict block was not valid JSON"}
+
+
+async def _finish(db: AsyncSession, bs: BuilderSession, status: str,
+                  note: str) -> None:
+    bs.status = status
+    await db.commit()
+    await _log(db, bs, "verify", f"FINAL {status}: {note[:400]}")
+    kind = "status" if status == "verified" else "error"
+    await _msg(db, bs, "assistant",
+               f"verification {status}: {note}", kind=kind)
+
+
+async def rescue_incomplete(db: AsyncSession) -> int:
+    """Crash-restart honesty: a 'verifying' row at boot means the poll loop
+    died with the process — mark interrupted, never silently 'verified'."""
+    rows = (await db.execute(
+        select(BuilderSession).where(
+            BuilderSession.status == "verifying"))).scalars().all()
+    for bs in rows:
+        bs.status = "interrupted"
+        bs.log = (bs.log or []) + [{
+            "ts": _utcnow(), "kind": "verify",
+            "msg": "verify loop lost with process restart — interrupted"}]
+    if rows:
+        await db.commit()
+    return len(rows)
+
+
+async def list_sessions(db: AsyncSession) -> list[BuilderSession]:
+    return (await db.execute(
+        select(BuilderSession).order_by(BuilderSession.id.desc())
+        .limit(50))).scalars().all()
+
+
+async def messages(db: AsyncSession, bs_id: int,
+                   after_id: int = 0) -> list[BuilderMessage]:
+    return (await db.execute(
+        select(BuilderMessage)
+        .where(BuilderMessage.session_id == bs_id,
+               BuilderMessage.id > after_id)
+        .order_by(BuilderMessage.id))).scalars().all()

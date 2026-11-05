@@ -1,6 +1,8 @@
 """Pydantic API schemas."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -44,6 +46,7 @@ class QuestOut(BaseModel):
     solved: bool = False
     best_score: int | None = None
     exam: bool = False
+    generated: bool = False
     # flag points + time_bonus_max — the XP-percent denominator on the
     # dashboard/leaderboard (client can't sum flags from the list view)
     max_score: int = 0
@@ -358,3 +361,32 @@ class EngineStatusOut(BaseModel):
     health: dict
     resources: dict
     node: dict | None = None
+
+
+class BuilderSessionCreateIn(BaseModel):
+    title: str = Field(default="", max_length=200)
+
+
+class BuilderChatIn(BaseModel):
+    text: str = Field(min_length=1, max_length=64_000)
+    attachments: list[dict] = Field(default_factory=list, max_length=8)
+
+
+class BuilderMessageOut(BaseModel):
+    id: int
+    role: str
+    kind: str
+    content: str
+    meta: dict
+    ts: datetime | None = None
+
+
+class BuilderSessionOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    quest_id: str | None
+    verify_session_id: int | None
+    iterations: int
+    log: list
+    created_at: datetime | None = None

@@ -74,6 +74,13 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.effort_deep": ("", False),            # stage 2 ("" = llm default)
     "coach.effort_worker": ("medium", False),    # subagent exec chains
     "coach.ablation": ("", False),               # eval-only: "ptg,roles,coverage,memory" disables subsystems
+    "builder.enabled": (True, False),            # AI quest builder tab + API
+    "builder.web_enabled": (True, False),        # research tools may reach the internet
+    "builder.tool_call_cap": (10, False),        # max tool calls per chat turn
+    "builder.verify_timeout_s": (5400, False),   # wall-clock per verify run
+    "builder.max_verify_iters": (3, False),      # diagnose→patch→retry cycles
+    "builder.min_solve_s": (120, False),         # faster = suspiciously easy
+    "builder.stuck_after_s": (1200, False),      # no coach progress = stuck
     "content.packs": (["bundled"], False),
     "data.telemetry_retention_days": (30, False),
     "security.admin_token_hash": ("", True),

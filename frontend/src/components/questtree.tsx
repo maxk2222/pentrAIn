@@ -3,7 +3,7 @@
 import { Link } from "react-router-dom";
 import {
   Bot, Bug, Building2, CheckCircle2, Cloud, Cpu, Crown, Globe, Home, Lock,
-  Radar, Search, Server, Shield, Target, Terminal, Wifi,
+  Radar, Search, Server, Shield, Target, Terminal, Wand2, Wifi,
 } from "lucide-react";
 import type { Quest, Track } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ const TRACK_ICONS: Record<string, React.ElementType> = {
   terminal: Terminal, wifi: Wifi, radar: Radar, building: Building2,
   search: Search, target: Target, shield: Shield, cpu: Cpu, globe: Globe,
   server: Server, home: Home, cloud: Cloud, bot: Bot, crown: Crown, bug: Bug,
+  wand: Wand2,
 };
 
 export function TrackSection({ track, quests, dim }: {
@@ -118,6 +119,7 @@ function QuestNode({ q, dim, exam }: {
           </span>
         )}
         {exam && <Badge variant="accent">exam</Badge>}
+        {q.generated && <Badge variant="default">AI</Badge>}
       </div>
     </Link>
   );
