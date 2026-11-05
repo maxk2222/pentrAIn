@@ -409,3 +409,8 @@ Per-quest findings appended below the ladder table.
   bash -x lesson stored by observer.
 ## Track: scr-t1 2/2 SOLVED (bash-recon, exam)
 2026-11-05 01:22
+
+## SOLVED: for-t1-break-in (s10, ~15min, 3 flags + 3 cps)
+- auth.log → bash_history → cron persistence → report via `ssh analyst@evidence01
+  "cat > report.txt" < file` (stdin-redirect channel — no local staging needed).
+2026-11-05 01:55
