@@ -17,13 +17,14 @@ import hashlib
 import ipaddress
 import json
 import re
+import shlex
 import time
 from dataclasses import dataclass, field
 
 import httpx
 import structlog
 
-from . import guides, percept, playbooks, ptg
+from . import guides, percept, playbooks, ptg, research
 from . import traj as _traj
 from .client import BackendClient
 from .config import get_config
@@ -80,6 +81,7 @@ from .prompts import (
     render_worker_prompt,
     system_prompt,
 )
+from .research import ResearchClient
 from .state import CheckpointMatcher, SessionState, normalize_plan
 from .tools import WORKER_ROLES, WORKER_TOOL_NAMES, tools_for_level, trim_history, wire_history, worker_tools
 from .websearch import WebSearch
@@ -143,6 +145,45 @@ def _iso_to_epoch(iso: str | None) -> float:
         return dt.datetime.fromisoformat(iso).timestamp()
     except (ValueError, AttributeError):
         return 0.0
+
+
+def _safe_int(v: object, default: int) -> int:
+    try:
+        return int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _render_searchsploit(out: str, code: int | None, q: str) -> str:
+    """searchsploit --json → compact rows. Honest degradation: a non-json
+    tail (apt hint, crash) still surfaces as the reply instead of vanishing."""
+    try:
+        data = json.loads(out)
+    except (json.JSONDecodeError, TypeError):
+        tail = out.strip()[-700:]
+        return (f"searchsploit exit={code} — output was not json "
+                f"(local index damaged?)\n{tail or '(no output)'}")
+    rows = data.get("RESULTS_EXPLOIT") or []
+    shell = data.get("RESULTS_SHELLCODE") or []
+    if not rows and not shell:
+        return (f"no exploit-db hits for '{q}' — rephrase (drop version, "
+                "vendor+product only) or search the web if online")
+    lines = []
+    for r in rows[:15]:
+        edb = r.get("EDB-ID") or "?"
+        verified = "*" if str(r.get("Verified")) == "1" else ""
+        lines.append(
+            f"EDB-{edb}{verified} | {str(r.get('Title') or '')[:90]} | "
+            f"{r.get('Type') or '?'}/{r.get('Platform') or '?'} | "
+            f"{r.get('Path') or ''}")
+    more = len(rows) - len(lines)
+    head = (f"{len(rows)} exploit(s){' +' + str(len(shell)) + ' shellcode' if shell else ''}"
+            f" for '{q}' (* = verified):\n")
+    return (head + "\n".join(lines)
+            + (f"\n…+{more} more — narrow with title_only or more terms"
+               if more > 0 else "")
+            + "\nread one: exec_in_kali cat <path> (or searchsploit -m "
+              "<id> to copy it into cwd)")
 
 
 class SessionCoach:
@@ -261,6 +302,7 @@ class SessionCoach:
         # key-free research — one shared client so the DDG debounce covers
         # parent + all workers (they'd otherwise stampede the endpoint)
         self._web = WebSearch()
+        self._research = ResearchClient()
         # deep-effort spend marker: last_progress_ts at which the one deep
         # turn of this no-progress window already ran — at L4, stuck>hint_s
         # makes stage-2 the default state, so every-turn-deep burned the
@@ -628,6 +670,10 @@ class SessionCoach:
             close = getattr(self.llm, "close", None)
             if close:
                 await close()
+        if self._research:
+            await self._research.aclose()
+        if self._web:
+            await self._web.aclose()
 
     async def apply_cfg(self, cfg: dict) -> None:
         """Live config refresh — settings changed in the UI must reach running
@@ -3228,41 +3274,97 @@ class SessionCoach:
                                   f"(exit={code}, {len(merged)} coverage "
                                   f"rows: {', '.join(merged[:10]) or '-'})\n"
                                   f"{tail}")
+        elif t == "search_exploitdb":
+            # offline exploit lookup — searchsploit's own CSV index on the
+            # Kali box, visible exec like playbooks (no scope check needed:
+            # it reads a local file, reaches no target). Honest needs-gate
+            # on the deploy-time tool probe.
+            if level < 4:
+                result = f"denied: autonomy level {level} < 4"
+            elif not (q := str(a.get("query") or a.get("content")
+                                 or "").strip()[:80]):
+                result = "error: empty query"
+            elif "searchsploit" not in set(
+                    (self.ctx.get("session_tools") or "").split()):
+                result = ("error: searchsploit not in KALI_TOOLS — the "
+                          "deploy probe did not find the exploitdb package; "
+                          "manual fallback: grep the csv or ask the "
+                          "operator to install it")
+            else:
+                t_flag = " -t" if a.get("title_only") else ""
+                cmd = (f"searchsploit --json --disable-color{t_flag} "
+                       f"-- {shlex.quote(q)}")
+                self._coach_cmds.append((cmd, time.time()))
+                try:
+                    res = await self.client.exec_in_kali(
+                        self.sid, cmd, window=playbooks.PLAYBOOK_WINDOW)
+                except (TimeoutError, httpx.HTTPError) as e:
+                    self._coach_cmds.pop()
+                    res = {"error": str(e)}
+                out = (res.get("out") or res.get("err")
+                       or res.get("error") or "")
+                code = res.get("exitcode")
+                self.state.add_command(time.time(), cmd, from_coach=True)
+                self.state.commands[-1].exit_code = code
+                asyncio.create_task(self.client.log_action(
+                    self.sid, "search_exploitdb",
+                    {"arg": q, "agent": window or "main"},
+                    {"exitcode": code}))
+                result = _render_searchsploit(out, code, q)
+        elif t == "search_technique":
+            if level < 4:
+                result = f"denied: autonomy level {level} < 4"
+            else:
+                result = await self._search_technique(
+                    str(a.get("query") or a.get("content") or ""),
+                    str(a.get("source") or "auto"), window)
         elif t in ("channel_open", "channel_send", "channel_read",
                    "channel_close"):
             if level < 4:
                 result = f"denied: autonomy level {level} < 4"
             else:
                 result = await self._channel_dispatch(t, a, window)
-        elif t in ("web_search", "web_fetch"):
+        elif t in ("web_search", "web_fetch", "query_vuln_db", "rss_feed"):
             # key-free research, gated on the session's kali_internet flag —
             # the same flag wires Kali's second NIC, so the gate doubles as
             # lab isolation (resync() refreshes ctx → mid-session toggles
             # propagate). Denial text teaches the alternative; CACHED:/
             # error: results stay honest so a retry reads as a retry.
             if not self.ctx.get("session", {}).get("kali_internet"):
-                result = ("denied: web — offline lab (kali_internet=false): "
-                          "no uplink this session. Use local tools "
-                          "(nmap/wordlists/guides) or ask the operator to "
-                          "enable internet on the session.")
+                alt = ("search_exploitdb/search_technique (they work "
+                       "offline)" if t in ("query_vuln_db", "rss_feed")
+                       else "local tools (nmap/wordlists/guides)")
+                result = (f"denied: web — offline lab (kali_internet=false): "
+                          f"no uplink this session. Use {alt} or ask the "
+                          "operator to enable internet on the session.")
             elif t == "web_search":
                 q = str(a.get("query") or a.get("content") or "")
                 result = await self._web.search(
-                    q, int(a.get("max_results") or 6))
-            else:
+                    q, _safe_int(a.get("max_results"), 6))
+            elif t == "web_fetch":
                 u = str(a.get("url") or a.get("content") or "")
                 result = await self._web.fetch(u)
+            elif t == "query_vuln_db":
+                result = await self._research.vuln(
+                    str(a.get("query") or a.get("content") or ""))
+            else:
+                result = await self._research.feed(
+                    str(a.get("feed") or a.get("query")
+                        or a.get("content") or ""),
+                    _safe_int(a.get("count"), 5))
             if not result.startswith(("denied:", "error:")):
                 # same recipe push exec output gets — a fetched page naming
                 # 'jwt'/'pivot' should pull the matching module once
-                arg = str(a.get("query") or a.get("url") or "")
+                arg = str(a.get("query") or a.get("url")
+                          or a.get("feed") or "")
                 result += self._guide_hint(f"{arg}\n{result[:3000]}", window)
                 if t == "web_fetch":
                     result += await self._scan_flags(
                         result, "web_fetch", window)
             asyncio.create_task(self.client.log_action(
                 self.sid, t,
-                {"arg": str(a.get("query") or a.get("url") or "")[:200],
+                {"arg": str(a.get("query") or a.get("url")
+                            or a.get("feed") or "")[:200],
                  "agent": window or "main"},
                 {"preview": result[:200],
                  "ok": not result.startswith(("denied:", "error:"))}))
@@ -3448,6 +3550,77 @@ class SessionCoach:
 
     _CHAN_NAME = re.compile(r"^[a-z0-9-]{1,16}$")
     _CHAN_MAX = 2
+
+    async def _search_technique(self, query: str, source: str,
+                                window: str | None) -> str:
+        """Layered technique lookup: vendored refs (always) → kali
+        /opt/research grep (offline if provisioned) → site-scoped web
+        search (internet-gated). First non-empty leg wins; 'auto' walks
+        all three."""
+        q = (query or "").strip()[:80]
+        src = (source or "auto").strip().lower()
+        online = bool(self.ctx.get("session", {}).get("kali_internet"))
+        if not q:
+            return "error: empty query"
+        sites = research.TECHNIQUE_SITES
+        if src == "auto":
+            legs = ["vendored", "kali", "hacktricks",
+                    "payloadsallthethings"]
+        elif src == "vendored" or src == "kali" or src in sites:
+            legs = [src]
+        else:
+            return (f"error: unknown source '{src}' — use auto, vendored, "
+                    f"kali, or one of {', '.join(sites)}")
+        last = f"no technique hits for '{q}'"
+        for leg in legs:
+            if leg == "vendored":
+                r = research.grep_refs(q)
+            elif leg == "kali":
+                terms = [shlex.quote(t) for t in q.split() if len(t) > 1][:4]
+                if not terms:
+                    r = "error: query too short for a kali grep"
+                    continue
+                n = len(terms)
+                cmd = (
+                    "hits=$(for t in " + " ".join(terms) + "; do "
+                    "grep -RilF \"$t\" /opt/research 2>/dev/null; done | "
+                    "sort | uniq -c | sort -rn | "
+                    f"awk '$1>={n}' | head -6); "
+                    "for f in $hits; do echo \"== $f\"; "
+                    f"grep -inF -m3 -C1 -- {terms[0]} \"$f\"; done")
+                try:
+                    res = await self.client.exec_in_kali(
+                        self.sid, cmd, window=playbooks.PLAYBOOK_WINDOW)
+                    out = (res.get("out") or "").strip()
+                except (TimeoutError, httpx.HTTPError) as e:
+                    out = ""
+                    r = f"error: kali grep failed — {type(e).__name__}"
+                else:
+                    r = (f"/opt/research hits for '{q}':\n{out[:1600]}"
+                         if out else "")
+                    if not out:
+                        r = (f"no /opt/research hits for '{q}' (kit not "
+                             "provisioned? — vendored refs and named "
+                             "site sources still work)")
+            else:
+                if not online:
+                    r = ("denied: web — offline lab (kali_internet=false): "
+                         "named site sources need the uplink; vendored/kali "
+                         "legs work offline")
+                else:
+                    r = await self._web.search(
+                        f"site:{sites[leg]} {q}", 6)
+            if r and not r.startswith(("error:", "denied:")):
+                last = r
+                break
+            if r:
+                last = r
+        asyncio.create_task(self.client.log_action(
+            self.sid, "search_technique",
+            {"arg": q[:120], "agent": window or "main"},
+            {"preview": last[:200],
+             "ok": not last.startswith(("error:", "denied:"))}))
+        return last
 
     async def _channel_dispatch(self, t: str, a: dict,
                                 window: str | None) -> str:

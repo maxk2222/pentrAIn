@@ -31,6 +31,7 @@ ALLOWED_ACTIONS = {
     "search_memory", "record_play", "play_outcome", "threat_model",
     "run_playbook",
     "channel_open", "channel_send", "channel_read", "channel_close",
+    "search_exploitdb", "query_vuln_db", "search_technique", "rss_feed",
 }
 
 

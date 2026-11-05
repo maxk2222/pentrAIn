@@ -807,7 +807,7 @@ async def test_wan_quest_auto_uplinks_and_stores_lease(db_with_packs):
 
 async def test_compile_topology_wan_and_kali_roles():
     """KaliSpec.wan rides in the stored topology; KaliSpec.roles merge after
-    the mandatory pentrain_kali_agent."""
+    the mandatory pentrain_kali_agent + pentrain_research_kit."""
     from app.services.sessions import compile_topology
     q = Quest(id="x", track_slug="home-lab", tier=1, title="x",
               topology={"kali": {"wan": True, "roles": ["pentrain_home_lab",
@@ -815,8 +815,8 @@ async def test_compile_topology_wan_and_kali_roles():
                         "vms": []})
     cfg = compile_topology(q)
     kali = cfg["ludus"][0]
-    assert kali["roles"] == ["pentrain_kali_agent", "pentrain_home_lab",
-                            {"name": "extra"}]
+    assert kali["roles"] == ["pentrain_kali_agent", "pentrain_research_kit",
+                            "pentrain_home_lab", {"name": "extra"}]
     assert len(cfg["ludus"]) == 1             # kali only — no targets
     assert q.topology["kali"]["wan"] is True  # survives model_dump storage
 
@@ -938,17 +938,34 @@ async def test_agent_metrics_aggregates_audit_trail(db_with_packs):
                        + timedelta(seconds=30)),
         LlmUsage(session_id=s.id, model="m", kind="reflect",
                  prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        # research calls: one ok row per invocation; an offline denial
+        # pairs the ok row with a denied row — one call, not two
+        CoachAction(session_id=s.id, tool="query_vuln_db",
+                    args={"arg": "CVE-2024-3094"}, result={"ok": True},
+                    status="ok"),
+        CoachAction(session_id=s.id, tool="web_search",
+                    args={"arg": "x"}, result={"ok": False},
+                    status="ok"),
+        CoachAction(session_id=s.id, tool="web_search",
+                    args={"query": "x"},
+                    result={"reason": "offline lab"}, status="denied"),
+        CoachAction(session_id=s.id, tool="search_technique",
+                    args={"arg": "kerberoast"}, result={"ok": True},
+                    status="ok"),
     ])
     await db.commit()
 
     m = await coach_bridge.agent_metrics(db, s.id)
-    assert m["actions_total"] == 4
+    assert m["actions_total"] == 8
     assert m["tool_counts"]["exec_in_kali"] == 3
     assert m["tool_counts"]["type_in_pane"] == 1
-    assert m["denied"]["total"] == 1
+    assert m["denied"]["total"] == 2
     assert m["hallucination"]["foreign_ip_denials"] == 1
     assert m["hallucination"]["rejected_flag_submits"] == 1
     assert m["flags"]["accepted"] == 1
+    res = m["research"]
+    assert res["vuln_db"] == 1 and res["technique"] == 1
+    assert res["web_search"] == 1 and res["denied"] == 1
     assert m["flags"]["first_flag_key"] == "flag-1"
     assert m["flags"]["time_to_first_flag_s"] is not None
     assert m["llm"]["total_tokens"] == 15

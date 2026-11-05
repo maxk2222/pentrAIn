@@ -149,13 +149,13 @@ def lookup(query: str, cap: int = 1900) -> str:
     if not load_modules():
         return "error: knowledge base empty"
     if not q:
-        return ("error: empty query — known guides:\n" + index(1500))
+        return ("error: empty query — known guides:\n" + index(2600))
     m, cands = _resolve(q)
     if m:
         return f"# {m.title}\n\n{m.body}"[:cap]
     if not cands:
         return (f"error: unknown guide {query!r} — known guides:\n"
-                + index(1500))
+                + index(2600))
     # ambiguous — name the candidates rather than guessing
     named = " | ".join(f"{m.id} — {m.title}" for m in cands[:4])
     return (f"multiple guides match {query!r}: {named} — "

@@ -83,9 +83,12 @@ def test_free_toolset_drops_flag_tools():
     assert "submit_flag" not in names
     assert "check_flag" not in names
     assert "mark_checkpoint" not in names
-    # the rest of the L4 surface stays
+    # the rest of the L4 surface stays — incl. the research tools (the
+    # free lab is exactly where exploitdb/technique/rss lookups matter)
     for t in ("exec_in_kali", "type_in_pane", "run_playbook",
-              "search_memory", "channel_open", "update_plan"):
+              "search_memory", "channel_open", "update_plan",
+              "search_exploitdb", "query_vuln_db", "search_technique",
+              "rss_feed"):
         assert t in names
     # and without free everything is present
     names2 = {t["function"]["name"]

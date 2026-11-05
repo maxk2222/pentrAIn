@@ -1,0 +1,40 @@
+---
+# pentrain_research_kit — full offline technique references on the Kali VM.
+#
+# Attached by default to every kali (sessions.py appends it next to
+# pentrain_kali_agent): shallow-clones the big technique wikis into
+# /opt/research so the coach's `search_technique source=kali` can grep
+# deep sources even mid-lab. Every task is best-effort — a lab without
+# WAN must NOT brick deploy; the vendored refs on the coach host are the
+# always-available baseline.
+- name: research tooling (best-effort)
+  ansible.builtin.apt:
+    name:
+      - exploitdb          # searchsploit + the offline exploit index
+      - git
+      - ripgrep            # rg — fast multi-term greps over /opt/research
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+  failed_when: false       # no WAN → apt fails, refs simply stay vendored
+
+- name: /opt/research dir
+  ansible.builtin.file:
+    path: /opt/research
+    state: directory
+    mode: "0755"
+
+- name: technique wikis (shallow, best-effort — no WAN → skipped silently)
+  ansible.builtin.git:
+    repo: "{{ item.repo }}"
+    dest: "/opt/research/{{ item.dest }}"
+    depth: 1
+    update: false
+  loop:
+    - repo: https://github.com/swisskyrepo/PayloadsAllTheThings.git
+      dest: PayloadsAllTheThings
+    - repo: https://github.com/HackTricks-wiki/hacktricks.git
+      dest: hacktricks
+    - repo: https://github.com/GTFOBins/GTFOBins.github.io.git
+      dest: gtfobins
+  failed_when: false       # clone needs WAN — offline labs just skip it

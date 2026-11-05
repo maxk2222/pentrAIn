@@ -56,7 +56,28 @@ never even *see* an action it isn't allowed:
 | `update_plan` | all + workers | Replaces the agent's own ≤10-step roadmap (`todo`/`doing`/`done`) — persisted, survives restarts; each worker keeps its own plan, the parent's shows as `OPERATOR_PLAN` in worker prompts |
 | `capture_screen` | 1+ | Screenshot of the Kali desktop → vision model (when `llm.vision_model` is set) |
 | `spawn_agent` etc. | 4 + `Sub` | Parallel workers — next section |
+| `search_exploitdb` | 4 + workers | Local Exploit-DB index via `searchsploit --json` — **works offline**; returns EDB ids + `/usr/share/exploitdb/` paths |
+| `query_vuln_db` | 3+ | NVD keyword/CVE lookup + CISA KEV flag — internet-gated, honest on rate limits |
+| `search_technique` | 4 + workers | Technique refs, layered: vendored excerpts (always) → `/opt/research` grep on Kali → site-scoped search (hacktricks/PATT/owasp/gtfobins/lolbas) |
+| `rss_feed` | 3+ | Curated exploit/vuln feeds (exploitdb, packetstorm, cisa-alerts, github-advisories…) — `list` shows the map |
 | `none` | all | Stay silent, keep a private working note |
+
+### Research tools — offline first
+
+The coach separates **lab-offline research** from **internet research**:
+
+- Offline (every session): `search_exploitdb` wraps `searchsploit` on Kali
+  (visible exec, needs the `exploitdb` package — probed at deploy), and
+  `search_technique` greps vendored technique excerpts
+  (`coach/coach/knowledge/refs/` — refreshed via
+  `scripts/sync_tech_refs.py`) plus `/opt/research` full clones when the
+  `pentrain_research_kit` role provisioned them.
+- Internet (`kali_internet` sessions — free lab, engagements, home lab):
+  `query_vuln_db` (NVD + CISA KEV, anonymous-tier debounced), `rss_feed`
+  (curated exploit/vuln feeds), and the site-scoped leg of
+  `search_technique` — same deny gate as `web_search`/`web_fetch`.
+- `knowledge/modules/research-sources.md` carries the canonical-URL index
+  and the pick-the-right-tool rules.
 
 ### Streaming + reasoning
 
@@ -86,8 +107,10 @@ flowchart LR
 Worker contract:
 
 - Own LLM context, own tmux window (`w1`…`w3`), own action prefix `[wN]`.
-- **Exec-only** toolset: `exec_in_kali`, `type_in_pane`, `wait`, `none` — no
-  chat, no flags, no checkpoints, **no recursive spawns**.
+- **Exec-only** toolset: `exec_in_kali`, `type_in_pane`, `wait`, `none`,
+  plus read-only research (`web_search`/`web_fetch` when the session has
+  internet, `search_exploitdb`, `search_technique`) — no chat, no flags,
+  no checkpoints, **no recursive spawns**.
 - Share the parent's scope, read/write guards and action budget.
 - Caps: `coach.max_workers` (default **3**), `coach.worker_turn_cap` (10 LLM
   turns), `coach.worker_time_cap_s` (300 s wall clock);

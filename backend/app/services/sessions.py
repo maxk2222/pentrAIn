@@ -59,6 +59,7 @@ KALI_TOOL_PROBE = [
     "mysql", "mariadb", "psql", "redis-cli", "sqlite3",
     "rdesktop", "xfreerdp3", "evil-winrm",
     "curl", "wget", "jq", "python3", "msfconsole", "git",
+    "searchsploit",
     "tcpdump", "tshark", "aircrack-ng", "iw",
 ]
 
@@ -161,7 +162,8 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
         "ram_min_gb": kali.get("ram_min_gb") or 3,
         "cpus": kali.get("cpus", 4),
         "linux": True,
-        "roles": ["pentrain_kali_agent", *(kali.get("roles") or [])],
+        "roles": ["pentrain_kali_agent", "pentrain_research_kit",
+                  *(kali.get("roles") or [])],
     })
     for i, v in enumerate(topo.get("vms") or []):
         ram_gb = v.get("ram_gb", 4)

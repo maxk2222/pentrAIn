@@ -1144,6 +1144,11 @@ async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
     spawn_tasks: list[str] = []
     memory = {"search": 0, "recorded": 0, "feedback": 0}
     playbooks_used: dict[str, int] = {}
+    # per-call rows: coach logs an ok-row per invocation AND _dispatch adds
+    # a denied-row for 'denied:' results — skip the denied row so one call
+    # counts once, tracked separately in research["denied"]
+    research = {"exploitdb": 0, "vuln_db": 0, "technique": 0,
+                "rss": 0, "web_search": 0, "web_fetch": 0, "denied": 0}
     scope_denials = 0
     for a in actions:
         out = str((a.result or {}).get("out") or "")
@@ -1182,6 +1187,18 @@ async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
         elif a.tool == "run_playbook":
             pn = str((a.args or {}).get("name") or "?")
             playbooks_used[pn] = playbooks_used.get(pn, 0) + 1
+        elif a.tool == "search_exploitdb":
+            research["exploitdb" if a.status != "denied" else "denied"] += 1
+        elif a.tool == "query_vuln_db":
+            research["vuln_db" if a.status != "denied" else "denied"] += 1
+        elif a.tool == "search_technique":
+            research["technique" if a.status != "denied" else "denied"] += 1
+        elif a.tool == "rss_feed":
+            research["rss" if a.status != "denied" else "denied"] += 1
+        elif a.tool == "web_search":
+            research["web_search" if a.status != "denied" else "denied"] += 1
+        elif a.tool == "web_fetch":
+            research["web_fetch" if a.status != "denied" else "denied"] += 1
         if (a.status == "denied"
                 and re.search(r"scope|authorized|known target",
                               str((a.result or {}).get("reason")
@@ -1265,6 +1282,7 @@ async def agent_metrics(db: AsyncSession, session_id: int) -> dict | None:
             "worker_spawns": len(spawn_tasks),
             "recon_overlap_execs": overlap,
         },
+        "research": research,
         "memory": memory,
         "playbooks": playbooks_used,
     }

@@ -87,6 +87,51 @@ TOOLS: list[dict] = [
         "but pages are capped — fetch the one best hit, don't crawl.",
         {"url": _str("full http(s) URL, e.g. from web_search results")},
         ["url"]),
+    _fn("search_exploitdb",
+        "Search the local Exploit-DB index on Kali (searchsploit) — WORKS "
+        "OFFLINE, no internet needed. Use for 'is there a public exploit "
+        "for <product> <version>' before writing your own. Returns EDB "
+        "ids + local paths; read an exploit with exec_in_kali cat/cp of "
+        "its path (under /usr/share/exploitdb/). Needs searchsploit "
+        "installed — errors honestly when the probe did not find it.",
+        {"query": _str("product/service terms, e.g. 'vsftpd 2.3.4' or "
+                       "'apache 2.4.49'"),
+         "title_only": {"type": "boolean",
+                        "description": "match titles only (-t) — tighter "
+                                       "hits, fewer platform dupes"}},
+        ["query"]),
+    _fn("query_vuln_db",
+        "Structured vulnerability lookup — NVD + CISA KEV, ONLY when "
+        "INTERNET is enabled. Pass a CVE id for full detail (CVSS, CWE, "
+        "references) or product terms for a keyword search of CVE "
+        "descriptions. CVEs exploited in the wild are marked [KEV]. "
+        "Anonymous NVD tier rate-limits — retry once if told to wait.",
+        {"query": _str("CVE id ('CVE-2024-4577') or product terms "
+                       "('apache tomcat ajp')")}, ["query"]),
+    _fn("rss_feed",
+        "Pull latest items from a curated exploit/vuln feed — ONLY when "
+        "INTERNET is enabled. 'list' shows the feed map; a name pulls "
+        "fresh items (exploitdb/packetstorm = new public exploits, "
+        "cisa-alerts/github-advisories = new CVEs). Discovery tool for "
+        "'what is new' — then web_fetch the item link for the writeup.",
+        {"feed": _str("feed name or 'list'"),
+         "count": {"type": "integer", "minimum": 1, "maximum": 8}},
+        ["feed"]),
+    _fn("search_technique",
+        "Search pentest technique references — 'how do I attack X'. "
+        "source=vendored greps built-in ref excerpts (ALWAYS works, even "
+        "offline); source=kali greps /opt/research repos when provisioned; "
+        "named sources (hacktricks/payloadsallthethings/owasp/gtfobins/"
+        "lolbas) do a site-scoped web search — INTERNET required; "
+        "source=auto tries offline first, then online. Cheaper and sharper "
+        "than generic web_search for technique questions.",
+        {"query": _str("technique/topic, e.g. 'kerberoast', 'file upload "
+                       "bypass', 'suid privesc'"),
+         "source": {"type": "string",
+                    "enum": ["auto", "vendored", "kali", "hacktricks",
+                             "payloadsallthethings", "owasp", "gtfobins",
+                             "lolbas"]}},
+        ["query"]),
     _fn("none",
         "Stay silent; attach a private note kept as your working memory.",
         {"reason": _str("short private note")}, ["reason"]),
@@ -321,7 +366,8 @@ TOOLS: list[dict] = [
 # checkpoints or nested spawns; completion stays with the parent coach.
 WORKER_TOOL_NAMES = {"exec_in_kali", "type_in_pane", "wait", "none",
                      "update_plan", "lookup_guide", "record_lesson",
-                     "web_search", "web_fetch"}
+                     "web_search", "web_fetch",
+                     "search_exploitdb", "search_technique"}
 SUBAGENT_TOOL_NAMES = {"spawn_agent", "collect_agent", "agent_status",
                        "kill_agent"}
 
@@ -337,11 +383,12 @@ _LEVEL_TOOLS = {
         "update_plan", "lookup_guide", "record_lesson", "none"},
     3: {"send_chat", "offer_hint", "suggest_command", "mark_checkpoint",
         "capture_screen", "update_plan", "lookup_guide", "record_lesson",
-        "web_search", "web_fetch", "none"},
+        "web_search", "web_fetch", "query_vuln_db", "rss_feed", "none"},
     4: {"send_chat", "offer_hint", "exec_in_kali", "type_in_pane",
         "submit_flag", "check_flag", "mark_checkpoint", "capture_screen",
         "wait", "update_plan", "lookup_guide", "record_lesson",
-        "web_search", "web_fetch", "none",
+        "web_search", "web_fetch", "search_exploitdb",
+        "query_vuln_db", "rss_feed", "search_technique", "none",
         "record_coverage", "update_coverage", "list_coverage",
         "create_note", "list_notes", "record_finding", "build_report",
         "search_memory", "record_play", "play_outcome", "threat_model",

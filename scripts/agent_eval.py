@@ -236,6 +236,15 @@ def main() -> int:
                     f"{mem.get('feedback')} feedback")
             if am.get("playbooks"):
                 lines.append(f"- playbooks: {am['playbooks']}")
+            res = am.get("research") or {}
+            if any(res.values()):
+                lines.append(
+                    f"- research: {res.get('exploitdb')} exploitdb, "
+                    f"{res.get('vuln_db')} vuln-db, "
+                    f"{res.get('technique')} technique, "
+                    f"{res.get('rss')} rss, "
+                    f"{res.get('web_search')}/{res.get('web_fetch')} web"
+                    f"{', ' + str(res.get('denied')) + ' denied' if res.get('denied') else ''}")
     if usage:
         lines += ["", "## LLM usage (last 24h)", "",
                   "```json", json.dumps(usage, indent=2)[:2000], "```"]
