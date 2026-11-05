@@ -1,22 +1,31 @@
-# AI platform assessment — incident evidence
+# AI platform — incident evidence bundle
 
-## Evidence A: retrieved content
+## A — support assistant trace
 
-A support assistant returned a record from a different business unit. The
-retrieval worker log shows the record was passed to a summarization stage
-before response filtering.
+```
+req: user=analyst-22 unit=support
+retrieve: record=TT-2049 owner_unit=finance
+summarize: input includes TT-2049
+render: response delivered (record content referenced)
+```
 
-## Evidence B: tool governance
+## B — tool registry record
 
-A tool's permission changed in production without a recorded owner approval.
-The tool service did not re-check the requesting user's authorization.
+```
+tool=refund_issuer  permission changed prod (approval_event: none attached)
+tool-svc log: POST /refund issuer=chat-agent user_claim=support-staff
+            -> executed (no secondary check recorded)
+```
 
-## Evidence C: model artifact
+## C — validation worker record
 
-A shared validation worker loaded an artifact with no trusted publisher or
-recorded digest. The worker identity could read unrelated configuration.
+```json
+{"artifact": "run-184", "loader": "generic-object-loader",
+ "publisher": null, "integrity_field": null,
+ "worker_env": ["/etc/registry", "/srv/projects/*/config"]}
+```
 
-## Required report
+## Service doc (public API)
 
-Prioritize the findings, separate observed evidence from assumptions, and
-recommend containment, permanent controls and safe verification.
+`/refund` — issues a refund against a ticket. Restricted to billing-unit
+staff per the operator handbook.

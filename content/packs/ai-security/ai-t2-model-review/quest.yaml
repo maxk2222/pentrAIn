@@ -36,11 +36,11 @@ hints:
   - id: h2
     cost: 55
     stage: analysis
-    text: "Assess executable artifact loading, publisher identity, digest records and unrelated worker access."
+    text: "Assess executable artifact loading, publisher identity, integrity records and unrelated worker access."
   - id: h3
     cost: 80
     stage: post
-    text: "Recommend provenance verification, isolation, secret minimization and a safe validation workflow."
+    text: "Recommend provenance verification, worker confinement, secret minimization and a safe validation workflow."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

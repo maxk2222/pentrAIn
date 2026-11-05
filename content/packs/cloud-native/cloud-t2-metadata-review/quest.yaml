@@ -36,7 +36,7 @@ hints:
   - id: h2
     cost: 55
     stage: analysis
-    text: "Compare the worker's required destinations and storage scope with its actual identity and egress."
+    text: "Compare the worker's required destinations and storage scope with its actual service account and egress."
   - id: h3
     cost: 80
     stage: post

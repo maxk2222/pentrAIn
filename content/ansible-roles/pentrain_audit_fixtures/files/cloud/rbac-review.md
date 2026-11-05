@@ -1,4 +1,6 @@
-# Retail cluster — manifest review
+# Retail cluster — applied manifests (kubectl get -o yaml)
+
+## role-inventory-reader.yaml
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -12,9 +14,30 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ```
 
-The workload only needs to read ConfigMaps and list Deployments in the
-`inventory` namespace. The same service account is mounted in the public
-catalogue pod and the scheduled import job.
+## rolebinding-catalogue-sa.yaml
 
-Review questions: identify excess verbs/resources, excess API groups and
-whether the identity should be shared across both workloads.
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: inventory-reader-binding
+  namespace: inventory
+subjects:
+  - kind: ServiceAccount
+    name: shared-workload
+    namespace: default
+roleRef:
+  kind: Role
+  name: inventory-reader
+```
+
+## Workloads bound to `shared-workload`
+
+- Deployment `public-catalogue` (namespace `storefront`)
+- CronJob `nightly-import` (namespace `inventory`)
+
+## Application spec (team wiki)
+
+`public-catalogue` reads ConfigMaps and lists Deployments in `inventory`.
+`nightly-import` reads ConfigMaps in `inventory`. Neither workload creates,
+updates or deletes cluster objects.

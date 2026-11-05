@@ -1,19 +1,35 @@
-# Meridian model registry — artifact review
+# Meridian model registry — deployment configuration
 
-## Registry behavior
+## registry.yaml
 
-- Contributors can upload model artifacts to a shared validation queue.
-- Validation workers load uploaded artifacts using a general-purpose object loader.
-- The registry records a filename but does not verify a publisher signature or content digest.
-- The worker has access to unrelated project configuration.
+```yaml
+ingest:
+  queue: shared-validation
+  loader: generic-object-loader      # torch.load / pickle.load fallback
+  checks: [filename-normalize]
+validation_worker:
+  service_account: registry-worker-sa
+  env_mounts: ["/etc/registry", "/srv/projects/*/config"]
+publisher_policy:
+  signature_required: false
+  source_attestation: none
+```
 
-## Evidence
+## Worker log extract
 
-- Artifact `run-184` has no trusted publisher identity.
-- The worker log records a load operation but no artifact digest.
-- A model card includes a service credential in an example configuration.
+```
+run-184 ingest: filename=final-model.pt -> queued
+run-184 load: opened with object-loader (no integrity field present)
+run-184 validate: PASSED (schema check only)
+```
 
-## Required controls
+## Artifact record `run-184`
 
-Use non-executable data formats where practical, verify artifact provenance,
-isolate validation workers and remove access to unrelated secrets.
+```json
+{"name": "final-model.pt", "uploader": "contrib-77", "size": 1841230,
+ "publisher": null, "digest": null, "signature": null}
+```
+
+## Model card excerpt
+
+Example config block ships `API_KEY=svc-live-9921` inline.

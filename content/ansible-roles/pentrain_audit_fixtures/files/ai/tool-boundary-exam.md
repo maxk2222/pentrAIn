@@ -1,21 +1,32 @@
-# Helio Support Agent — review bundle
+# Helio Support Agent — deployment configuration
 
-## Architecture
+## agent.yaml
 
-The public chat service, retrieval worker and ticket tools share one service
-identity. Retrieved ticket text is appended to the same prompt as operator
-policy. The `close_ticket` tool accepts a ticket identifier but performs no
-second authorization check.
+```yaml
+identity: shared-helio-svc     # used by chat-api, retrieval-worker, tools
+prompt_assembly:
+  - operator_policy
+  - retrieved_records
+  - user_message
+tools:
+  - name: get_ticket
+    args: [ticket_id]
+  - name: close_ticket
+    args: [ticket_id]
+    authz_hook: null
+  - name: escalate
+    args: [queue]
+```
 
-## Audit events
+## Event log (last 24h)
 
-- `EV-11`: retrieval worker returned a record owned by a different business unit.
-- `EV-12`: agent attempted `close_ticket`; the tool service accepted the request.
-- `EV-13`: no record of which retrieved source influenced the action.
+```
+EV-11 retrieval-worker: record=TT-2049 unit=finance requester_unit=support
+EV-12 tool: close_ticket(ticket_id=TT-2049) -> 200 OK
+EV-13 agent-log: response written; source fields: (not recorded)
+```
 
-## Acceptance requirements
+## API doc (help page)
 
-- Enforce tenant and user authorization at each data/tool boundary.
-- Keep retrieved text separate from policy and treat it as untrusted.
-- Preserve a source-to-action audit trail.
-- Limit tool identity to the minimum permitted operation.
+`close_ticket` — closes a support ticket. Intended for supervisors of the
+owning business unit.

@@ -1,15 +1,26 @@
-# Build monitor container — mount and permission review
+# Build monitor — deployment bundle (as deployed 2026-10-28)
 
-## Deployment record
+## docker-compose.yml (production)
 
-- The metrics sidecar receives access to the container runtime socket.
-- The sidecar runs with a broad host filesystem mount.
-- The service only needs to read application health metrics.
-- No ownership or expiry is recorded for the socket exception.
+```yaml
+services:
+  metrics-sidecar:
+    image: registry.local/metrics-sidecar:1.9.3
+    container_name: metrics-sidecar
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /:/host
+    environment:
+      SCRAPE_TARGETS: "app01:9100,app02:9100"
+      LOG_LEVEL: info
+```
 
-## Impact assessment task
+## Service description (team wiki)
 
-Review what authority the mounted control socket represents, whether the
-sidecar needs it, and how the host mount changes the boundary. Propose a
-least-privilege metrics design and a safe configuration test. Do not contact
-the runtime API or start a container.
+`metrics-sidecar` scrapes /metrics endpoints of the application containers
+every 15s and forwards them to the central dashboard. It does not start,
+stop or inspect containers as part of its function.
+
+## Incident record DEP-19 (extract)
+
+No exceptions were requested or approved for this deployment.

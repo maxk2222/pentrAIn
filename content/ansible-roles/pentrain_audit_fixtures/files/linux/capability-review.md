@@ -1,19 +1,32 @@
-# Batch processor — permission inventory
+# ops-tools audit — capability & service evidence
 
-## Approved baseline
+## getcap -r output
 
-The service account `batchsvc` may read files below `/srv/batch/input` and
-write results below `/srv/batch/output`. It does not need to change user IDs,
-inspect unrelated files or administer the host.
-
-## Collected inventory
-
-```text
-/usr/local/bin/batch-import cap_dac_read_search=ep
-/usr/local/bin/batch-runner cap_setuid,cap_sys_admin=ep
+```
+/usr/bin/backup-tool = cap_dac_override+ep
+/usr/bin/backupd     = cap_dac_override+ep
+/usr/bin/diag        = cap_sys_admin+ep
+/usr/sbin/log-viewer = cap_dac_read_search+ep
 ```
 
-The inventory was collected from an authorized lab image. Recommend the
-smallest permission set, an ownership change where appropriate and a
-verification procedure that confirms unrelated system files remain
-inaccessible.
+## Service unit `backupd.service`
+
+```ini
+[Service]
+User=backupd
+Group=backupd
+AmbientCapabilities=CAP_DAC_OVERRIDE CAP_SYS_ADMIN
+NoNewPrivileges=false
+ProtectSystem=off
+```
+
+## Cron entry
+
+```
+*/5 * * * * backupd /usr/bin/backupd --full
+```
+
+## Ops note (team wiki)
+
+The backup daemon reads files under `/etc`, `/var/lib`, and `/home` for
+the nightly archive. Diagnostics run on demand.

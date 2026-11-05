@@ -194,6 +194,31 @@ def check_ssh_auth(found) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+# Audit evidence files must be raw artifacts (manifests, logs, code,
+# configs). Assessment sections hand the learner the finished answer —
+# `cat` + paraphrase would solve the quest. Findings belong in the
+# learner's report; instructions belong in briefing/coach context.
+AUDIT_FORBIDDEN = (
+    "expected controls", "required outcome", "review task",
+    "expected findings", "recommended controls", "finding:",
+    "remediation required", "acceptance criteria",
+)
+
+
+def check_audit_fixtures() -> list[str]:
+    errors: list[str] = []
+    root = REPO / "content" / "ansible-roles" / "pentrain_audit_fixtures" / "files"
+    if not root.exists():
+        return errors
+    for f in sorted(root.rglob("*.md")):
+        low = f.read_text().lower()
+        for pat in AUDIT_FORBIDDEN:
+            if pat in low:
+                errors.append(f"{f.relative_to(root)}: evidence file contains "
+                              f"answer-bearing section {pat!r}")
+    return errors
+
+
 DRAFT_PATTERNS = ("verify before", "signoff", "wait —", "wait --", "TODO",
                   "FIXME", "XXX", "draft")
 
@@ -230,7 +255,8 @@ def check_cheatsheets(found) -> list[str]:
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else "content/packs")
     found, errors = discover_quests(root)
-    errors = errors + check_roles(found) + check_role_tasks() + check_draft_notes(found)
+    errors = (errors + check_roles(found) + check_role_tasks()
+              + check_draft_notes(found) + check_audit_fixtures())
     ssh_errs, ssh_warns = check_ssh_auth(found)
     errors += ssh_errs
     warnings = check_cheatsheets(found) + ssh_warns

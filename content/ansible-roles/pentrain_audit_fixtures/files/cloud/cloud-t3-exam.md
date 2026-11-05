@@ -1,22 +1,39 @@
-# Platform assurance exam — evidence bundle
+# Platform assurance — evidence bundle
 
-## Finding A: workload identity
+## A — applied RBAC
 
-A public catalogue workload and an administrative import job use the same
-identity. The role can modify objects outside the catalogue namespace.
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: catalogue-ops, namespace: inventory}
+rules:
+  - apiGroups: ["*", ""]
+    resources: ["*"]
+    verbs: ["*"]
+---
+subjects:
+  - kind: ServiceAccount
+    name: shared-workload   # bound by public-catalogue AND nightly-import
+```
 
-## Finding B: metadata exposure
+## B — flow log extract
 
-A preview worker has unrestricted outbound access and can reach the cloud
-metadata network. Its identity has access to unrelated storage.
+```
+preview-worker -> 169.254.169.254:80   HTTP 200
+preview-worker -> storage.archive-7    HTTPS 200
+```
 
-## Finding C: deployment chain
+`preview-worker` spec: renders thumbnails for `storefront` uploads.
+Egress policy: `0.0.0.0/0`. Mounted credential: `shared-reporting-sa`.
 
-The production reconciler is broadly scoped, accepts mutable image references
-and has no recorded artifact provenance. A policy exception has no owner or
-expiry.
+## C — reconciler release record REL-208
 
-## Required report
-
-Correlate the evidence, rank likely impact, propose immediate containment and
-permanent controls, and define non-destructive verification for each finding.
+```yaml
+image: registry.local/atlas/app:latest
+signature_check: (field absent)
+policy_exception:
+  rule: allow-unsigned
+  owner: (field absent)
+  expires: (field absent)
+reconciler_scope: all-namespaces
+```

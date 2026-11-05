@@ -1,15 +1,40 @@
-# Atlas deployment pipeline — review bundle
+# Atlas deployment pipeline — repository configuration
 
-## Pipeline policy
+## .atlas-ci.yaml (main branch)
 
-- Pull requests from forks use the same runner pool as protected-branch builds.
-- The runner identity can update production workloads and read all project secrets.
-- Image deployment uses the mutable tag `latest`.
-- Production reconciliation accepts unsigned images from the shared registry.
+```yaml
+pipelines:
+  pull-request:
+    runner: shared-prod-runners
+    env:
+      - DEPLOY_KEY=prod-registry-key
+      - KUBECONFIG=prod-cluster-config
+    steps:
+      - run: ./ci/build.sh
+      - run: ./ci/deploy-preview.sh
 
-## Expected control outcomes
+  tag-release:
+    runner: shared-prod-runners
+    steps:
+      - run: ./ci/publish.sh
+```
 
-- Untrusted changes must not receive production credentials.
-- Build and deploy identities must be separate and narrowly scoped.
-- Deploy an immutable, verified artifact reference.
-- Require review and record provenance before production reconciliation.
+## deploy/kustomization.yaml
+
+```yaml
+images:
+  - name: atlas/app
+    newTag: latest
+```
+
+## Registry policy (registry.local)
+
+- pull: anonymous
+- push: org members
+- signature verification on deploy: not enforced
+
+## Runner inventory
+
+| pool | nodes | credentials mounted |
+|---|---|---|
+| shared-prod-runners | 3 | prod-cluster-config, prod-registry-key |

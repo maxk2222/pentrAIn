@@ -1,25 +1,43 @@
-# Northstar knowledge service — security review bundle
+# Northstar knowledge service — system documentation
 
-## Design note
+## Retrieval pipeline (services/rag/config.yaml)
 
-The retrieval service stores documents with `tenant_id` and `classification`.
-The query endpoint currently retrieves the most relevant chunks first, then
-filters by tenant in the response formatter. The summarizer receives the
-unfiltered chunk list.
+```yaml
+pipeline:
+  - stage: retrieve
+    impl: vector_search
+    args: {top_k: 20}
+  - stage: summarize
+    impl: llm_summarizer
+    input: retrieved_chunks
+  - stage: render
+    impl: tenant_filter
+    args: {field: tenant_id, match: request.tenant}
+```
 
-Required outcome: a user must only receive documents authorized for their
-tenant and role. Retrieval results are untrusted data, not policy.
+## Document schema
 
-## Tool inventory
+`{doc_id, tenant_id, classification, body}` — documents carry tenant and
+role tags at index time.
 
-| Tool | Current permission | Intended permission |
-|---|---|---|
-| `search_docs` | all tenants | current tenant only |
-| `create_ticket` | any queue | user's assigned queue |
-| `export_summary` | arbitrary destination | disabled for ordinary users |
+## Service policy (operator handbook)
 
-## Evidence
+Users may only receive records whose tenant_id and classification match
+their session claims. Retrieved text is untrusted data.
 
-Audit trace `RAG-17`: request tenant `blue`, retrieved chunk tenant `amber`,
-formatter removed the chunk but the summarizer trace still includes its source
-identifier. No external request was made.
+## Query trace RAG-17
+
+```
+request: tenant=blue role=reader
+retrieve: chunks=[doc:7 tenant=amber, doc:11 tenant=blue, doc:4 tenant=amber]
+summarize: input=[7,11,4] -> summary refs sources 7,4
+render: visible=[11]  dropped=[7,4]
+```
+
+## Tool permissions (api/tokens.py extract)
+
+| tool | granted |
+|---|---|
+| search_docs | all tenants |
+| create_ticket | any queue |
+| export_summary | external destinations enabled |

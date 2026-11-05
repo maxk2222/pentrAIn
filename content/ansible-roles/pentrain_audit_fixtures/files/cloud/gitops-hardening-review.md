@@ -1,18 +1,40 @@
-# Atlas production reconciler — policy review
+# Atlas production reconciler — applied configuration
 
-## Reconciler configuration
+## reconciler-config.yaml
 
-- The reconciler identity can modify resources in every namespace.
-- Production accepts images by mutable tag; no digest is recorded in the release record.
-- Source branch protection is optional for repositories connected to production.
-- A policy exception has no owner or expiry date.
+```yaml
+apiVersion: atlas/v1
+kind: Reconciler
+metadata: {name: prod-reconciler}
+spec:
+  serviceAccount: cluster-admin-binding
+  watchNamespaces: ["*"]
+  source:
+    repo: git.corp/atlas/prod-manifests
+    branchProtection: optional
+  imagePolicy:
+    allowedTags: ["*"]
+    requireSignature: false
+```
 
-## Release evidence
+## Release record REL-208 (registry extract)
 
-Deployment `REL-208` has no signature-verification result. The deployment
-record does not link the running image to a reviewed source revision.
+```json
+{
+  "image": "registry.local/atlas/app",
+  "tag": "latest",
+  "deployed_at": "2026-10-14T09:12Z",
+  "source_revision": null,
+  "signature_verified": null,
+  "approved_by": null
+}
+```
 
-## Expected controls
+## Policy exceptions
 
-Scope reconciliation permissions, require reviewed protected changes, pin
-immutable artifacts, verify provenance and expire policy exceptions.
+```yaml
+- rule: allow-unsigned-images
+  granted_to: prod-reconciler
+  owner: null
+  expires: null
+```

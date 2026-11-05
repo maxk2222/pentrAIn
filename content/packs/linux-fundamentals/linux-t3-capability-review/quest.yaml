@@ -32,7 +32,7 @@ hints:
   - id: h1
     cost: 25
     stage: recon
-    text: "Read the authorized permission inventory and service account baseline."
+    text: "Read the authorized permission inventory and the documented service behavior."
   - id: h2
     cost: 50
     stage: analysis

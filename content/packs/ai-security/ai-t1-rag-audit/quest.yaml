@@ -40,7 +40,7 @@ hints:
   - id: h3
     cost: 75
     stage: post
-    text: "Write an evidence-backed report that names the cross-tenant data path, tool authorization gap and a server-side remediation."
+    text: "Write an evidence-backed report that names the cross-tenant data path, the missing permission checks on tools and a server-side remediation."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

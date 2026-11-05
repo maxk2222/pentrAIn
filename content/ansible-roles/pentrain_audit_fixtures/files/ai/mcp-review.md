@@ -1,20 +1,36 @@
-# Northstar developer assistant — MCP configuration review
+# Northstar developer assistant — MCP server configuration
 
-## Service inventory
+## mcp-servers.json
 
-- Tool server is shared by development and production assistants.
-- Tool discovery returns descriptions supplied by each registered integration.
-- The registration service does not record an approving owner for tool changes.
-- A repository-reading tool can access paths outside its declared workspace.
+```json
+{
+  "servers": {
+    "dev-assistant": {"tools_ns": "shared-tools"},
+    "prod-assistant": {"tools_ns": "shared-tools"}
+  },
+  "tool_registry": {
+    "repo_reader": {
+      "description": "reads repository files",
+      "declared_scope": "/srv/workspace",
+      "fs_root": "/srv"
+    },
+    "ticket_api": {
+      "description": "managed by integration team",
+      "schema_version": "unversioned"
+    }
+  },
+  "change_approval": {"required": false, "log": null}
+}
+```
 
-## Intended policy
+## Registry change log
 
-- Each tool has a named owner and a reviewed, versioned schema.
-- Read-only tools receive only their designated data source.
-- Tool outputs and descriptions are untrusted data, not policy.
-- Changes are approved, logged and attributable to a publisher.
+```
+MCP-22  tool=repo_reader  description updated (no approval event attached)
+MCP-21  tool=ticket_api   schema updated (approver: not recorded)
+```
 
-## Review evidence
+## Tool description (repo_reader, current)
 
-Change record `MCP-22` shows a tool description changed between two releases
-without a corresponding approval event. No production action is demonstrated.
+"Reads files under the workspace and returns their contents to the
+assistant for analysis."

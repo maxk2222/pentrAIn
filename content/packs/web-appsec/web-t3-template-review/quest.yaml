@@ -32,15 +32,15 @@ hints:
   - id: h1
     cost: 25
     stage: recon
-    text: "Review the local source excerpt and identify whether template text or data is controlled by the customer."
+    text: "Review the local source excerpt and identify whether template text or data is controlled by the caller."
   - id: h2
     cost: 50
     stage: analysis
-    text: "Compare the rendering behavior with the stated business need for approved invoice layouts."
+    text: "Compare the rendering behavior with the stated business need for fixed invoice layouts."
   - id: h3
     cost: 75
     stage: post
-    text: "Recommend fixed server-owned templates with customer values passed only as data, plus a regression test."
+    text: "Recommend fixed server-owned templates with caller values passed only as data, plus a regression test."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

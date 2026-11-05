@@ -27,7 +27,7 @@ flags:
     points: 300
     command:
       vm: kali
-      cmd: "test -s /tmp/pentrain-audit-reports/rbac-review.md && grep -qi 'verbs' /tmp/pentrain-audit-reports/rbac-review.md && grep -qi 'namespace' /tmp/pentrain-audit-reports/rbac-review.md"
+      cmd: "test -s /tmp/pentrain-audit-reports/rbac-review.md && grep -qi 'privilege' /tmp/pentrain-audit-reports/rbac-review.md && grep -qi 'namespace' /tmp/pentrain-audit-reports/rbac-review.md"
 hints:
   - id: h1
     cost: 25
@@ -40,7 +40,7 @@ hints:
   - id: h3
     cost: 75
     stage: post
-    text: "Report the excess permissions, recommend a namespace-scoped least-privilege role and explain how to verify it."
+    text: "Report the excess permissions, recommend a narrowly-scoped replacement role and explain how to verify it."
 coach:
   briefing_ref: coach_context.md
   checkpoints:

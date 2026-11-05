@@ -36,7 +36,7 @@ hints:
   - id: h2
     cost: 50
     stage: analysis
-    text: "Assess the authority represented by the runtime control socket and the host filesystem mount."
+    text: "Assess the authority represented by the runtime control channel and the host filesystem mount."
   - id: h3
     cost: 75
     stage: post

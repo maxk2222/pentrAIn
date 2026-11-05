@@ -1,19 +1,29 @@
-# Retail cloud review — combined evidence
+# Retail cloud — combined evidence bundle
 
-## Workload identity
+## IAM policy `catalogue-reader` (as attached)
 
-The `catalogue-reader` identity can list and modify resources across multiple
-namespaces. The application only needs read access to a namespaced inventory
-view.
+```json
+{
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["storage:*", "compute:*"],
+    "Resource": "*"
+  }]
+}
+```
 
-## Metadata and storage
+- bound workloads: `catalogue-frontend`, `import-job`
+- function spec: `catalogue-frontend` serves the namespaced `inventory`
+  view; `import-job` reads uploaded CSVs in `inventory/uploads`.
 
-A preview worker can reach the metadata network and shares credentials with
-the reporting service. Storage audit records show access outside the worker's
-assigned project.
+## Egress and metadata
 
-## Required report
+`preview-worker` egress rules: `0.0.0.0/0`, including `169.254.0.0/16`.
+The workload mounts the same credential file as `reporting-api`.
 
-Prioritize the identity and network findings. Recommend a least-privilege
-workload identity, scoped egress and synthetic verification for both allowed
-and denied access.
+## Storage audit extract
+
+```
+preview-worker  GET  objects/juniper-archive/report-2026-Q2.csv
+preview-worker  GET  objects/juniper-backup/snapshot-manifest.json
+```

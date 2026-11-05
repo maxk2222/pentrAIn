@@ -1,18 +1,33 @@
-# FinSight analytics agent — boundary review
+# FinSight analytics agent — architecture bundle
 
-## Architecture summary
+## services.yaml
 
-- The planner, query service and report writer share one service identity.
-- The query service can read every table in the reporting database.
-- A policy check is performed in the user interface but not by the data service.
-- The agent's action log stores the final answer but not the source records or authorization decision.
+```yaml
+components:
+  planner:        {service_account: finsight-core-sa}
+  query-service:  {service_account: finsight-core-sa}
+  report-writer:  {service_account: finsight-core-sa}
+db_grants:
+  finsight-core-sa:
+    - db: reporting
+      tables: ["*"]
+      mode: read-write
+policy_enforcement:
+  location: ui-layer          # data-service trusts caller claims
+audit_log:
+  fields: [request_id, answer_text]
+```
 
-## Expected access
+## Access policy (compliance doc)
 
-Analysts may query the published `quarterly_summary` view for their assigned
-business unit. They may not access raw customer records or change source data.
+Analysts may read the published `quarterly_summary` view for their
+assigned business unit. Raw customer tables and write access are out of
+scope for this role.
 
-## Review objective
+## Session trace F-88
 
-Document how identity, data access, policy enforcement and audit evidence
-should be separated. Do not run queries or interact with a live agent.
+```
+planner -> query-service: SELECT * FROM customer_records WHERE unit='west'
+query-service: 12,441 rows returned
+report-writer: report finalized (source rows not logged)
+```
