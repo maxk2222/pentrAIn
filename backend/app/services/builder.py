@@ -94,6 +94,10 @@ async def _llm(db: AsyncSession, messages: list[dict],
         "messages": messages[-60:],
         "temperature": float(await settings_svc.get_setting(
             db, "llm.temperature", 0.4) or 0.4),
+        # full-pack drafts run ~6-9k tokens — without an explicit cap
+        # the server default (often 4k) truncates mid-JSON → parse errors
+        "max_tokens": int(await settings_svc.get_setting(
+            db, "builder.max_tokens", 12288) or 12288),
         "stream": False,
     }
     if tools:
@@ -220,23 +224,27 @@ async def chat(db: AsyncSession, bs_id: int, text: str,
     if files is not None:
         kind = "draft"
         errors, qid = await _materialize(db, bs, files)
-        if errors:
-            # one auto-repair round: feed the validator output back
-            await _log(db, bs, "validate", f"draft rejected: {errors[0]}")
+        # up to two auto-repair rounds: feed validator/parse failures
+        # back — a truncated JSON block is cheap to re-emit
+        for attempt in range(2):
+            if not errors:
+                break
+            await _log(db, bs, "validate",
+                       f"draft rejected ({attempt + 1}/2): {errors[0]}")
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "user", "content":
                              "Validation failed — fix and re-emit the WHOLE "
                              "draft block:\n- " + "\n- ".join(errors[:12])})
             reply = await _tool_loop(db, bs, ctx, messages, tools, cap)
             files = _extract_files(reply, _DRAFT_RE)
-            if files is not None:
-                errors, qid = await _materialize(db, bs, files)
-            if files is None or errors:
-                return await _msg(
-                    db, bs, "assistant",
-                    reply + "\n\n[builder] draft still invalid:\n- "
-                    + "\n- ".join(errors or ["no draft block"]),
-                    kind="error")
+            errors, qid = (await _materialize(db, bs, files)
+                           if files is not None
+                           else (["no draft block"], qid))
+        if errors:
+            return await _msg(
+                db, bs, "assistant",
+                reply + "\n\n[builder] draft still invalid:\n- "
+                + "\n- ".join(errors), kind="error")
         bs.status = "materialized"
         bs.quest_id = qid
         bs.draft = files

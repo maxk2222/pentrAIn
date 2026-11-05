@@ -29,10 +29,13 @@ Compose, Kubernetes manifests, Proxmox notes, app source, firewall rules).
    "briefing.md": "...",
    "coach_context.md": "...",
    "defense.md": "...",
-   "cheatsheet.md": "...",
-   "flags/user.txt": "FLAG{...}"
+   "cheatsheet.md": "..."
 }}
 ```
+
+  quest.yaml, briefing.md, coach_context.md, defense.md and
+  cheatsheet.md are MANDATORY — the validator rejects drafts missing
+  any of them. No extra files unless the spec needs them.
 
 4. ITERATE. If validation errors come back, fix the draft and re-emit the
    WHOLE block (full files, not diffs). After verification runs you get a
@@ -60,9 +63,10 @@ Compose, Kubernetes manifests, Proxmox notes, app source, firewall rules).
         - "systemctl enable --now myservice"
   This is where pasted Docker/k8s/Proxmox configs GO LIVE. Order matters;
   keep execs idempotent-ish and under a few minutes each.
-- flags: declare real flags the coach must find — file flags get injected
-  under flags/*.txt into the VM at {path}; service flags use the
-  service+template mechanism you'll see in exemplar quest.yaml files.
+- flags: declare them in quest.yaml's flags: list like the exemplars —
+  kind:file + file_path means the platform plants a per-session
+  `pentrAIn{...}` flag at that path on the VM (never write flag content
+  into the pack — flags are dynamic). kind:command runs a check cmd.
   Every flag needs a believable placement inside the scenario.
 - scoring/hints/topology/coach sections: copy structure from an exemplar.
 - briefing.md = what the trainee sees (story + objective, NOT the steps).
