@@ -451,6 +451,38 @@ async def test_command_flag_detail_names_failed_condition(db_with_packs):
     await _abort_done(db, s.id)
 
 
+async def test_command_flag_detail_all_fail_names_first_and_vm(db_with_packs):
+    """s11: the report-flag check ran on pcap01 while the file only existed
+    on kali — ALL && segments failed (test -f + greps on an absent file).
+    The detail must still name the first failing condition and say WHERE
+    the check ran, or the trainee writes the file to the wrong host
+    forever."""
+    from app.services import engine as engine_svc
+    db = db_with_packs
+    s = await sessions_svc.create_session(db, "linux-t1-first-foothold")
+    s = await _wait_state(s.id, "ready")
+    await sessions_svc.activate(db, s.id)
+    s.target_vmids = {"pcap01": 104}
+    await db.commit()
+    engine = await engine_svc.get_engine(db)
+    flag = Flag(quest_id=s.quest_id, key="rep", name="r", kind="command",
+                points=10, command_spec={
+                    "vm": "pcap01",
+                    "cmd": "test -f /r.txt && grep -q a /r.txt && grep -q b /r.txt"})
+    db.add(flag)
+    await db.commit()
+
+    async def fail_all(vmid, cmd, **kw):
+        return {"out": "", "err": "", "exitcode": 1}
+
+    engine.pve.agent_exec_sh = fail_all
+    res = await flags_svc.check_and_record_flag(db, engine, s, "rep")
+    assert not res["correct"]
+    assert "condition 1 of 3 failed" in res["detail"]
+    assert "pcap01" in res["detail"]
+    await _abort_done(db, s.id)
+
+
 async def test_soft_reset_regenerates_secrets(db_with_packs):
     db = db_with_packs
     s = await sessions_svc.create_session(db, "linux-t1-first-foothold")

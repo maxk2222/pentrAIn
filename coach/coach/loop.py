@@ -2178,12 +2178,21 @@ class SessionCoach:
                                       <= ff.write_check_seq))):
                             await log.ainfo("rewrite denied", session=self.sid,
                                             path=path, writes=n, cmd=cmd[:120])
+                            # scripts are exercised by running them; reports
+                            # and other deliverables are "exercised" by the
+                            # flag check — telling the model to `python3 -u`
+                            # a .txt produces a SyntaxError detour (s11).
+                            verify = ("RUN it (python3 -u "
+                                      f"{path})" if ff.kind == "script"
+                                      else "VERIFY it — re-run the flag "
+                                           f"check (check_flag) or `cat "
+                                           f"{path}` to confirm content")
                             return spoke, (
                                 f"denied: {path} was already written {n}x and "
-                                f"the current version was never executed — "
-                                f"RUN it (python3 -u {path}). Another "
-                                f"rewrite is only useful after new evidence: "
-                                f"a run, a failed check, or a crash.")
+                                f"the current version was never exercised — "
+                                f"{verify}. Another rewrite is only useful "
+                                f"after new evidence: a run, a failed check, "
+                                f"or a crash.")
                     # read-loop guard: re-reading the same file produces
                     # identical output — settled facts the model keeps
                     # re-deriving (seen live: 6x `cat nmap.txt | grep …`

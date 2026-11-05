@@ -172,6 +172,13 @@ async def check_and_record_flag(db: AsyncSession, engine, session: Session, flag
     detail = None
     if not ok:
         detail = await _command_flag_detail(engine, session, flag)
+        # where the check ran — hostnames are visible via range DNS anyway,
+        # and "the grader reads pcap01's fs, not kali's" is the exact fact
+        # a vanished-write loop needs (s11: report written 5x on kali).
+        vm = (flag.command_spec or {}).get("vm")
+        if vm and vm != "kali":
+            loc = f"check ran on {vm}"
+            detail = f"{detail} — {loc}" if detail else loc
     if ok:
         expected = (await db.execute(
             select(ExpectedFlag).where(
@@ -220,8 +227,13 @@ async def _command_flag_detail(engine, session: Session, flag: Flag) -> str | No
                 failed.append(i + 1)
         except Exception:
             failed.append(i + 1)
-    if not failed or len(failed) == len(parts):
+    if not failed:
         return None
+    if len(failed) == len(parts):
+        # all failed — the FIRST condition is the root cause (e.g. test -f
+        # when the file simply isn't there). Naming it still points the
+        # trainee at the real gap instead of "check failed" silence.
+        return f"condition 1 of {len(parts)} failed (all conditions failed)"
     nums = ",".join(str(n) for n in failed)
     return f"condition {nums} of {len(parts)} failed"
 

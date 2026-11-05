@@ -1070,7 +1070,7 @@ async def test_rewrite_guard_denies_third_write_without_failed_run():
         await coach._dispatch({"type": "exec_in_kali", "command": w})
     n_execs = len([a for a in c.chats if a.get("kind") == "action_report"])
     _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
-    assert r.startswith("denied:") and "never executed" in r
+    assert r.startswith("denied:") and "never exercised" in r
     # nothing was typed → no new action_report
     assert len([a for a in c.chats if a.get("kind") == "action_report"]) == n_execs
     # run it, fail → rewrite allowed again
@@ -1151,7 +1151,7 @@ async def test_rewrite_unlocked_by_run_or_failed_check():
     assert not r.startswith("denied:")
     # ...and a never-run new version is denied again
     _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
-    assert r.startswith("denied:") and "never executed" in r
+    assert r.startswith("denied:") and "never exercised" in r
     # a failed check also counts as fresh evidence → unlocks
     coach.facts.checkfail_seq += 1
     _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
