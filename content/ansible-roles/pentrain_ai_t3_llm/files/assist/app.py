@@ -228,5 +228,14 @@ def doc(name):
 
 @app.get("/")
 def index():
-    return {"service": "AskOps v2", "usage": "POST /api/chat {message}",
+    return {"service": "AskOps v2",
+            "usage": "POST /api/chat {message}",
+            "endpoints": {"docs": "GET /api/docs/ (list), GET /api/docs/<name>",
+                          "chat": "POST /api/chat {message}",
+                          "health": "GET /healthz"},
             "mode": "llm" if LLM_URL else "emulated"}
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
