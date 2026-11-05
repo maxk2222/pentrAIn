@@ -193,7 +193,10 @@ async def _history(db: AsyncSession, bs: BuilderSession) -> list[dict]:
             out.append({"role": "assistant", "content":
                         f"[tool call] {m.content[:200]}\n→ {res}"})
         else:
-            out.append({"role": m.role, "content": m.content})
+            # bound each turn's content — draft blocks are ~8k chars and
+            # two of them in history alone can exceed the loaded ctx
+            out.append({"role": m.role,
+                        "content": m.content[:4000]})
     return out[-_CHAT_HISTORY:]
 
 
