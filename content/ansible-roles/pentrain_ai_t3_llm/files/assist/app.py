@@ -215,6 +215,12 @@ def chat():
     return {"reply": _llm(text) or _answer(text)}
 
 
+@app.get("/api/docs/")
+@app.get("/api/docs")
+def doc_index():
+    return {"docs": sorted(DOCS)}
+
+
 @app.get("/api/docs/<name>")
 def doc(name):
     return {"doc": DOCS.get(name, "(no such doc)")}
