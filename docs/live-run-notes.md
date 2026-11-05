@@ -443,3 +443,7 @@ Timeline of the stuck loop and the fixes it produced:
   persistence paths.
 ## Track: for-t1 3/3 SOLVED (break-in, wiretap, exam)
 2026-11-05 09:35
+
+## SOLVED: web-t1-dvwa (s13, ~15min, 2 flags + 3 cps)
+- default dvwa creds → lfi → php webshell upload → curl verify.
+2026-11-05 10:05
