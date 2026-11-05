@@ -2146,7 +2146,31 @@ class SessionCoach:
                         # e.g. root cron) can't be "RUN" by us — demanding
                         # `python3 -u <path>` for a cron script is a dead end
                         external = any(path in c for c in self.facts.caps)
-                        if (not external and n >= 2
+                        # vanished-file guard first: writes that never
+                        # materialized (read reported absent after an
+                        # exit-0 write) need the dir/host fixed, not a
+                        # "never executed" lecture — mkdir+write and remote
+                        # pushes (different file_key) stay allowed.
+                        if (not external and ff and ff.missing
+                                and not facts_mod.file_host(cmd)
+                                and "mkdir" not in cmd):
+                            await log.ainfo(
+                                "write denied — file vanished",
+                                session=self.sid, path=path,
+                                writes=n, cmd=cmd[:120])
+                            return spoke, (
+                                f"denied: previous writes to {path} "
+                                "never materialized — a later read "
+                                "reported the file missing on THIS "
+                                "host. Fix the cause, not the content: "
+                                f"`ls -ld {path.rsplit('/', 1)[0] or '/'}`"
+                                " (parent dir likely absent — mkdir it), "
+                                "or the flag check reads a REMOTE vm's "
+                                "fs — push the file there (ssh user@host "
+                                "'cat > path' < local). Another local "
+                                "rewrite lands nowhere.")
+                        elif (not external and not (ff and ff.missing)
+                                and n >= 2
                                 and (last is None or last == 0)
                                 and (ff is None or
                                      (ff.runs <= ff.write_run_seq
@@ -2501,7 +2525,17 @@ class SessionCoach:
                         ff = self.facts.files.get(
                             facts_mod.file_key(cmd, path))
                         n = ff.writes if ff else 0
-                        if n >= 2:
+                        if n >= 2 and ff.missing:
+                            result += (
+                                f"\nNOTE: {n} writes to {path} never "
+                                "materialized — a read reported it missing. "
+                                f"Verify NOW: `ls -l {path}`. Absent → the "
+                                "parent dir doesn't exist on THIS host "
+                                "(`ls -ld "
+                                f"{path.rsplit('/', 1)[0] or '/'}`, mkdir "
+                                "it), or the flag check wants the file on "
+                                "a REMOTE vm — push it via ssh/scp.")
+                        elif n >= 2:
                             result += (f"\nNOTE: {path} has now been written "
                                        f"{n} times — the file exists, more "
                                        f"rewrites do not advance the quest. "

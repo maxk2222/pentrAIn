@@ -199,6 +199,12 @@ class FileFact:
     # write->run->inspect->rewrite is THE deliverable loop)
     write_run_seq: int = 0
     last_exit: int | None = None
+    # a read/stat after a "successful" write reported the file ABSENT —
+    # exit-0 writes can still land nowhere (masking `echo ok`, missing
+    # parent dir, wrong host). Rewrites then loop until the real cause —
+    # wrong dir or wrong VM — is addressed (s11: report.txt 3x "written"
+    # on kali while /home/analyst existed only on pcap01).
+    missing: bool = False
 
 
 # read-commands — also matched after a quote/;|& boundary so ssh-wrapped
@@ -207,6 +213,11 @@ READ_CMD = re.compile(
     r"(?:^|['\";|&]\s*)(?:sudo\s+)?(?:cat|less|more|head|tail|grep|egrep|"
     r"fgrep|awk|sed|cut|sort|uniq|wc|strings|file|ls|ll|xxd|od|diff)\b")
 _ABS_PATH = re.compile(r"(?<![\w.:/-])/(?:[\w.+-]+/)*[\w.+-]+")
+# fs tools reporting an absent path — marks FileFact.missing so the next
+# rewrite learns the file never materialized instead of counting writes
+_MISSING_RE = re.compile(
+    r"no such file or directory|cannot stat|cannot access|"
+    r"not a directory", re.IGNORECASE)
 # a path only counts as read when it sits in the SAME segment as the read
 # command — `cd /tmp && find x | head` reads nothing (s46: /tmp was counted)
 _SEG_SPLIT = re.compile(r"\|\||&&|[|;&]")
@@ -410,13 +421,27 @@ class FactsDB:
                     self.mutation_seq += 1
                     if code is not None:
                         f.last_exit = code
-                if (rt := read_target(cmd)) and code == 0:
-                    # only successful reads settle a file — a failed wrapper
-                    # (ssh -J auth hang, sudo denial, missing interpreter)
-                    # returns prompt/error text, not content; counting it
-                    # locks the path out at 'already read 3x' (s72: db.txt
-                    # denied though never actually read)
-                    self._count_read(cmd, rt)
+                if rt := read_target(cmd):
+                    if code == 0:
+                        # only successful reads settle a file — a failed wrapper
+                        # (ssh -J auth hang, sudo denial, missing interpreter)
+                        # returns prompt/error text, not content; counting it
+                        # locks the path out at 'already read 3x' (s72: db.txt
+                        # denied though never actually read)
+                        f = self._count_read(cmd, rt)
+                        if f.missing:
+                            f.missing = False
+                            self.mutation_seq += 1
+                    elif code is not None and _MISSING_RE.search(out or ""):
+                        # an absent-path error on a file we "wrote" proves
+                        # the write never materialized — flag it so the next
+                        # rewrite fixes dir/host instead of retyping content
+                        key = file_key(cmd, rt)
+                        f = self.files.setdefault(
+                            key, FileFact(path=key, kind=_kind(rt)))
+                        if not f.missing:
+                            f.missing = True
+                            self.mutation_seq += 1
             parsed = parse_output(cmd, strip_ansi(out or ""))
             self.apply_delta(parsed)
             # a routing-capable tunnel changes kali's vantage — drop stale

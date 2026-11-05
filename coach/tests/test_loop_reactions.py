@@ -1084,6 +1084,56 @@ async def test_rewrite_guard_denies_third_write_without_failed_run():
     assert not r.startswith("denied:")
 
 
+async def test_vanished_write_denies_with_dir_host_hint():
+    """s11 live: 3 writes to /home/analyst/report.txt "succeeded" (exit 0 —
+    the model's own trailing echo masked the failed redirect; the parent
+    dir didn't exist on kali) while the flag check ran on pcap01. The next
+    local rewrite must be denied with the dir/host hint; mkdir+write and
+    a remote ssh push stay allowed."""
+    coach, c = _coach()
+    coach.state.autonomy_level = 4
+    w = "cat > /home/analyst/report.txt << 'EOF'\nreport\nEOF"
+    for _ in range(3):
+        await coach._dispatch({"type": "exec_in_kali", "command": w})
+    # a later read proves the file never materialized
+    async def _absent(sid, cmd, window=None):
+        return {"out": "cat: /home/analyst/report.txt: No such file or "
+                       "directory", "exitcode": 1, "visible": True}
+    c.exec_in_kali = _absent
+    await coach._dispatch(
+        {"type": "exec_in_kali", "command": "cat /home/analyst/report.txt"})
+    assert coach.facts.files["/home/analyst/report.txt"].missing is True
+    # plain local rewrite → denied with the materialization hint
+    _v, r = await coach._dispatch({"type": "exec_in_kali", "command": w})
+    assert r.startswith("denied:") and "materialized" in r
+    assert "REMOTE" in r and "mkdir" in r
+    # mkdir+write addresses the cause → allowed through
+    _v, r = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "mkdir -p /home/analyst && "
+                    "cat > /home/analyst/report.txt << 'EOF'\nx\nEOF"})
+    assert not r.startswith("denied:")
+    # a remote push keys the path @host — unaffected by the local flag
+    _v, r = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "ssh analyst@10.1.10.29 'cat > /home/analyst/report.txt'"})
+    assert not r.startswith("denied:")
+
+
+async def test_vanished_write_clears_on_successful_read():
+    """Once a read actually sees the file, `missing` resets — the normal
+    rewrite guard applies again."""
+    from coach.facts import FactsDB
+    f = FactsDB()
+    w = "cat > /tmp/r.txt << 'EOF'\nx\nEOF"
+    f.observe_output(w, "", 0)
+    f.observe_output("cat /tmp/r.txt",
+                     "cat: /tmp/r.txt: No such file or directory", 1)
+    assert f.files["/tmp/r.txt"].missing is True
+    f.observe_output("cat /tmp/r.txt", "content\n", 0)
+    assert f.files["/tmp/r.txt"].missing is False
+
+
 async def test_rewrite_unlocked_by_run_or_failed_check():
     """s54 live: report.sh ran clean but its output was wrong — the guard
     must allow write->run->inspect->rewrite. Only a version never
