@@ -105,10 +105,15 @@ async def _llm(db: AsyncSession, messages: list[dict],
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     t0 = time.monotonic()
     async with httpx.AsyncClient(
-            timeout=httpx.Timeout(300.0, connect=15.0)) as c:
+            # a full-pack draft is ~6-8k tokens — on a loaded local model
+            # that's 10+ minutes of generation, well past a default 300s
+            timeout=httpx.Timeout(900.0, connect=15.0)) as c:
         r = await c.post(f"{base_url}/chat/completions",
                          json=payload, headers=headers)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # keep the server's reason — template/schema errors are
+            # otherwise invisible ("400 Bad Request" tells you nothing)
+            raise SessionError(f"LLM {r.status_code}: {r.text[:300]}")
         data = r.json()
     usage = data.get("usage") or {}
     db.add(LlmUsage(
@@ -197,7 +202,13 @@ async def _history(db: AsyncSession, bs: BuilderSession) -> list[dict]:
             # two of them in history alone can exceed the loaded ctx
             out.append({"role": m.role,
                         "content": m.content[:4000]})
-    return out[-_CHAT_HISTORY:]
+    out = out[-_CHAT_HISTORY:]
+    # chat templates (qwen/jinja) require the first non-system message to
+    # be a user turn — mid-conversation windows can start on an assistant
+    # tool line → "No user query found in messages" (400)
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return out
 
 
 # ------------------------------------------------------------------- chat
