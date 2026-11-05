@@ -176,14 +176,25 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
 
 
 async def _history(db: AsyncSession, bs: BuilderSession) -> list[dict]:
+    """Conversation history — tool calls are folded into compact memory
+    lines so the model remembers what it already read instead of
+    re-exploring the catalog every turn (burning the whole call budget)."""
     rows = (await db.execute(
         select(BuilderMessage)
         .where(BuilderMessage.session_id == bs.id,
-                   BuilderMessage.kind.in_(["chat", "question", "draft"]))
+               BuilderMessage.kind.in_(
+                   ["chat", "question", "draft", "tool"]))
         .order_by(BuilderMessage.id.desc())
-        .limit(_CHAT_HISTORY))).scalars().all()
-    return [{"role": m.role, "content": m.content}
-            for m in reversed(rows)]
+        .limit(_CHAT_HISTORY * 2))).scalars().all()
+    out: list[dict] = []
+    for m in reversed(rows):
+        if m.kind == "tool":
+            res = str((m.meta or {}).get("result") or "")[:500]
+            out.append({"role": "assistant", "content":
+                        f"[tool call] {m.content[:200]}\n→ {res}"})
+        else:
+            out.append({"role": m.role, "content": m.content})
+    return out[-_CHAT_HISTORY:]
 
 
 # ------------------------------------------------------------------- chat
@@ -240,6 +251,15 @@ async def chat(db: AsyncSession, bs_id: int, text: str,
             kind="error")
 
     files = _extract_files(reply, _DRAFT_RE)
+    if files is None and not (reply or "").strip():
+        # blank model turn (budget-exhausted/whitespace) — say so instead
+        # of posting an empty bubble
+        return await _msg(
+            db, bs, "assistant",
+            "[builder] the model returned an empty response (usually a "
+            "sign it ran out of tool budget mid-exploration). Try again — "
+            "it remembers the tool results from this turn.",
+            kind="error")
     kind = "chat"
     if files is not None:
         kind = "draft"

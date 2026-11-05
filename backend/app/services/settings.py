@@ -76,7 +76,7 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "coach.ablation": ("", False),               # eval-only: "ptg,roles,coverage,memory" disables subsystems
     "builder.enabled": (True, False),            # AI quest builder tab + API
     "builder.web_enabled": (True, False),        # research tools may reach the internet
-    "builder.tool_call_cap": (10, False),        # max tool calls per chat turn
+    "builder.tool_call_cap": (16, False),        # max tool calls per chat turn (exemplar study takes ~10)
     "builder.max_tokens": (12288, False),        # draft blocks need room — server default often truncates mid-JSON
     "builder.verify_timeout_s": (5400, False),   # wall-clock per verify run
     "builder.max_verify_iters": (3, False),      # diagnose→patch→retry cycles
