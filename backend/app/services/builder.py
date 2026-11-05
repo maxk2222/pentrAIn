@@ -327,11 +327,15 @@ async def _materialize(db: AsyncSession, bs: BuilderSession,
 
     spec, verrs = packs_svc.validate_quest_dir(root)
     if verrs:
+        # clean up — a rejected pack left on disk would otherwise sneak
+        # into the library on the next boot-time rescan
+        shutil.rmtree(root, ignore_errors=True)
         return verrs, qid
     if spec is not None:
         verrs = packs_svc.check_role_refs(
             spec, _roles_dir())
         if verrs:
+            shutil.rmtree(root, ignore_errors=True)
             return verrs, qid
     await packs_svc.sync_packs(db, get_config().content_dir,
                                extra_dirs=[get_config().generated_packs_dir])

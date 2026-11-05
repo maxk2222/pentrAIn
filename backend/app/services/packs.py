@@ -317,7 +317,14 @@ async def sync_packs(db: AsyncSession, content_dir: str | Path,
                 errors.append(f"{qdir.name}: generated quest shadows curated "
                               "id — keeping curated")
                 continue
-            found.append((qdir, spec))
+            # generated packs must be STRICTLY valid — the builder promises
+            # "materialized = valid"; a rejected draft must never reach the
+            # library via a later boot-time rescan
+            spec2, verrs = validate_quest_dir(qdir)
+            if verrs:
+                errors.extend(verrs)
+                continue
+            found.append((qdir, spec2 or spec))
         errors.extend(g_errors)
     seen_tracks: set[str] = set()
     seen_quests: set[str] = set()
