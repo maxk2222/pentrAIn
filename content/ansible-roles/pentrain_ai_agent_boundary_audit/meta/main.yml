@@ -1,0 +1,9 @@
+galaxy_info:
+  author: pentrAIn
+  description: pentrAIn range role pentrain_ai_agent_boundary_audit
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [all]
+dependencies: []

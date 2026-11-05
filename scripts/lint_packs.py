@@ -61,6 +61,7 @@ def check_role_tasks() -> list[str]:
       creates their parent
     - every `notify:` must have a matching handler
     - roles creating password-login users must enable PasswordAuthentication
+    - meta/main.yml — Ludus refuses role registration without galaxy_info
     """
     import yaml as _yaml
 
@@ -70,6 +71,9 @@ def check_role_tasks() -> list[str]:
         tasks = rdir / "tasks" / "main.yml"
         if not tasks.exists():
             continue
+        if rdir.name.startswith("_") is False and not (rdir / "meta" / "main.yml").exists():
+            errors.append(f"{rdir.name}: missing meta/main.yml — "
+                          "ludus role registration refuses it")
         text = tasks.read_text()
         try:
             task_list = _yaml.safe_load(text) or []
