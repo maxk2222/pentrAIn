@@ -403,3 +403,9 @@ Per-quest findings appended below the ladder table.
   attackers-report flags. Observer lessons: copy remote logs local first;
   parse auth.log for brute-force sources.
 2026-11-05 00:35
+
+## SOLVED: scr-t1-exam (s9, ~30min, 2 flags + 3 cps)
+- report.sh script (fetch+count+report) verified by flag service; jq-lesson +
+  bash -x lesson stored by observer.
+## Track: scr-t1 2/2 SOLVED (bash-recon, exam)
+2026-11-05 01:22
