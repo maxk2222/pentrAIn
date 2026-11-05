@@ -454,3 +454,26 @@ Timeline of the stuck loop and the fixes it produced:
 - NOTE: git-dump via wget leaves broken HEAD sometimes; agent rebuilt it.
 ## USER DIRECTIVE: queue order = cloud-t1 → ai-t1 → exp-t1 (then rest)
 2026-11-05 11:05
+
+## INFRA BUGFIX: role registration deadlock (s15-s19 all FAILED pre-check)
+- All 27 new audit/cloud/ai/exp roles existed only on DISK under
+  /opt/ludus/resources/global-roles (early rsync) — Ludus validates role
+  names against its galaxy registry, not the dir. `ludus ansible role
+  add` then deadlocked: "already exists" (dir present) but "doesn't
+  appear to contain a role" (no meta/main.yml shipped).
+- FIX: generated meta/main.yml for all 27 (galaxy_info shape), deleted
+  the stale meta-less dirs from global-roles, re-ran
+  `ludus ansible role add -d /opt/pentrain/ansible-roles/<r> -g` →
+  registry 87 → 114. lint_packs.py now fails on missing meta.
+- ops.md documented the add-step all along; the mass-import skipped it.
+
+## FEATURE: session-scoped LLM proxy (c15cd60)
+- POST /api/llm-proxy/{telemetry_token}/chat → forwards to the CURRENT
+  llm.base_url/llm.model per request (model swap needs no redeploy).
+- topology vms[].inference: finalize writes /etc/pentrain-llm.env +
+  systemctl try-restart <svc>; re-injected after soft reset (token
+  rotates). Guests ride the existing testing-allow api_host route.
+- AskOps now real-LLM capable (system-prompt guards key, file_report
+  tool executes server-side → deterministic markers; rule engine kept
+  as offline fallback). ai-llm-injection opts app01 in.
+2026-11-05 11:30
