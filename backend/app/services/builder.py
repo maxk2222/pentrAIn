@@ -125,13 +125,33 @@ async def _llm(db: AsyncSession, messages: list[dict],
 async def _tool_loop(db: AsyncSession, bs: BuilderSession,
                      ctx: builder_tools.ToolCtx, messages: list[dict],
                      tools: list[dict], cap: int) -> str:
-    """LLM ↔ tool ping-pong until a plain answer arrives (or cap hits)."""
+    """LLM ↔ tool ping-pong until a plain answer arrives (or cap hits).
+
+    When the call cap is hit mid-exploration the model's last message is
+    usually tool_calls-only — returning its (empty) content would post a
+    blank reply. Close out with stub results and force one text answer."""
     calls = 0
     while True:
         msg = await _llm(db, messages, tools=tools)
         tcs = msg.get("tool_calls") or []
         if not tcs or calls >= cap:
-            return msg.get("content") or ""
+            content = msg.get("content") or ""
+            if content or calls < cap or not tcs:
+                return content
+            messages.append({"role": "assistant",
+                             "content": "", "tool_calls": tcs})
+            for tc in tcs:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": str(tc.get("id") or ""),
+                    "name": str((tc.get("function") or {})
+                                .get("name") or ""),
+                    "content": "(tool budget for this turn exhausted)"})
+            messages.append({"role": "user", "content":
+                             "Tool budget for this turn is exhausted — "
+                             "reply now with what you have (emit the "
+                             "draft block if it was due)."})
+            return (await _llm(db, messages)).get("content") or ""
         messages.append({"role": "assistant",
                          "content": msg.get("content") or "",
                          "tool_calls": tcs})
