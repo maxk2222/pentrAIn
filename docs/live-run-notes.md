@@ -397,3 +397,9 @@ Per-quest findings appended below the ladder table.
 
 ## Track status: net-t1 3/3 SOLVED (services, open-shares, exam)
 2026-11-05 01:10
+
+## SOLVED: scr-t1-bash-recon (s8, ~15min, 2 flags + 3 cps)
+- Scripted log parsing (auth.log 'Failed password' extraction) → recon-script +
+  attackers-report flags. Observer lessons: copy remote logs local first;
+  parse auth.log for brute-force sources.
+2026-11-05 00:35
