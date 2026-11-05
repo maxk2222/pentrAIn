@@ -434,3 +434,12 @@ Timeline of the stuck loop and the fixes it produced:
   a wrong-host trap when a same-named dir is plausible on kali. The agent
   recovered via deny-hint + check-vm detail — the infra now teaches it.
 2026-11-05 08:58
+
+## SOLVED: for-t1-exam (s12, ~20min, 4 flags + 2 cps)
+- pcap → nightops ssh → stash + persistence + remote report push
+  (`ssh analyst@archive01 'cat > report'`) — the remote-deliverable
+  pattern now used unprompted (post-fix knowledge held).
+- Observer: tshark-filter fallback via strings; root flags hide in
+  persistence paths.
+## Track: for-t1 3/3 SOLVED (break-in, wiretap, exam)
+2026-11-05 09:35
