@@ -1,0 +1,176 @@
+[
+  {
+    "text": "After 2-3 scans show zero open ports on a host, stop scanning it directly. It's likely behind another network segment requiring pivoting (SSH tunnel/proxy) through a reachable adjacent host.",
+    "tags": ["nmap", "zero open ports", "unreachable", "pivot", "ssh tunnel"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "When exec_in_kali denies reading a file as 'settled' (read 3x), use sha256sum or stat to check freshness instead of re-reading content.",
+    "tags": ["exec_in_kali", "denied", "settled", "sha256sum", "stat"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "Home-lab quests often require filling out a report template. Check for it early, verify it's not empty, and fill it before final submission.",
+    "tags": ["home-lab", "template", "report"],
+    "applies": "global",
+    "confidence": 0.7
+  },
+  {
+    "text": "Avoid heredocs with special characters for file writes via exec channel — they trigger 'Wide character' QEMU agent errors. Use simple echo/printf commands or base64 encoding instead.",
+    "tags": ["file-write", "heredoc", "wide-character", "qemu-agent", "echo"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "When nmap shows no open ports, try direct service probes (curl http://host) first. Some hosts filter nmap's SYN scans but respond to actual HTTP/SMB requests.",
+    "tags": ["nmap", "open ports", "curl", "filtered"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "Spawn parallel workers to enumerate services on different host groups simultaneously in large segments. Monitor status; individual worker failures shouldn't block overall progress.",
+    "tags": ["nmap", "parallel", "workers", "enumeration"],
+    "applies": "global",
+    "confidence": 0.7
+  },
+  {
+    "text": "Read SSH banners and MOTD carefully before guessing credentials — beginner targets often include valid usernames/passwords or hints in the login banner text.",
+    "tags": ["ssh", "banner", "motd", "credentials", "login"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "When SSH login fails with common users (root, nobody, admin), re-check the service banner — it often specifies valid accounts rather than requiring brute force.",
+    "tags": ["ssh", "login", "user", "banner", "credentials"],
+    "applies": "global",
+    "confidence": 0.75
+  },
+  {
+    "text": "If HTTP directory listing is enabled, enumerate exposed files for credentials or configuration. Look for names like 'credentials.txt', 'config.php', or 'backup.zip' that reveal initial access vectors.",
+    "tags": ["http", "directory-listing", "credentials", "enumeration"],
+    "applies": "global",
+    "confidence": 0.85
+  },
+  {
+    "text": "Exposed text files on beginner targets frequently contain temporary or default credentials marked with 'TODO' or 'temporary'. Read these immediately for quick SSH login without brute forcing.",
+    "tags": ["ssh", "credentials", "todo", "temporary"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "SUID python3 shell via os.execl('/bin/sh') often hangs waiting for TTY. Use os.setuid(0); os.system('sh -i') or spawn shell via subprocess instead for reliable root shells.",
+    "tags": ["suid", "python3", "root-shell", "hang"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "When HTTP directory listing or gobuster fails, try common backup paths like /backup/, /old/, /tmp/ directly with curl. These often contain sensitive files or flags on beginner targets.",
+    "tags": ["http", "backup", "path", "curl", "enumerate"],
+    "applies": "global",
+    "confidence": 0.7
+  },
+  {
+    "text": "MySQL connections may fail with TLS errors if the server doesn't support SSL. Use --ssl-mode=DISABLED or -o ssl_mode=PREFERRED to connect without encryption.",
+    "tags": ["mysql", "tls", "ssl", "error", "connect"],
+    "applies": "global",
+    "confidence": 0.7
+  },
+  {
+    "text": "Enumerate SMB shares anonymously first (smbclient -L //host/ -N) to discover share names. Restricted shares like 'finance' or 'hr' often appear in listings even when unreadable without credentials.",
+    "tags": ["smbclient", "samba", "shares", "enumeration"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "Read all text files in public SMB shares before abandoning restricted share access - runbooks, configs, and READMEs frequently contain service account credentials for other shares.",
+    "tags": ["smbclient", "credentials", "runbook", "shares"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "When nmap shows port 21 open, try anonymous FTP login immediately and check pub/ directory - beginner targets often place flags or credential files there without requiring authentication.",
+    "tags": ["ftp", "anonymous", "port-21", "pub", "nmap"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "After anonymous SMB share enumeration, attempt to read each listed share - departmental shares like 'it' are often world-readable and contain credential files for SSH access.",
+    "tags": ["smbclient", "anonymous", "share-enumeration", "credentials", "ssh"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "Copy remote logs to local /tmp/ before parsing with grep/awk/sort. Avoids repeated SSH calls and enables efficient multi-pass analysis of large log files.",
+    "tags": ["ssh", "grep", "awk", "sort", "auth.log"],
+    "applies": "global",
+    "confidence": 0.85
+  },
+  {
+    "text": "Parse /var/log/auth.log for 'Failed password' entries to identify SSH brute-force targets. Extract usernames with awk to find accounts under attack or valid users being tried.",
+    "tags": ["ssh", "auth.log", "grep", "awk", "brute-force", "failed"],
+    "applies": "global",
+    "confidence": 0.9
+  },
+  {
+    "text": "When extracting values from JSON API responses in bash, use jq instead of tr/grep/cut string manipulation. jq handles arrays and nested objects reliably.",
+    "tags": ["jq", "json", "curl", "api", "parsing"],
+    "applies": "global",
+    "confidence": 0.9
+  },
+  {
+    "text": "When a bash script exits with error but produces no output, run it with 'bash -x' to trace execution. This reveals where variables become empty or commands fail silently.",
+    "tags": ["bash", "debugging", "script", "exit", "trace"],
+    "applies": "global",
+    "confidence": 0.9
+  },
+  {
+    "text": "Check .bash_history of compromised users to reconstruct attacker actions. History reveals download URLs, stash directories, and persistence setup commands.",
+    "tags": ["bash_history", "forensics", "compromised", "attacker"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "List /etc/cron.d/ with ls -la to find hidden dotfile crontabs. Attackers use names like .sysupdate for persistence that regular ls misses.",
+    "tags": ["cron", "persistence", "hidden", "dotfile"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "When tshark protocol filters fail on pcap analysis, use `strings capture.pcap | grep -iE 'pass|user|login'` to extract credentials and text notes directly from the capture without protocol parsing.",
+    "tags": ["pcap", "tshark", "strings", "forensics"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "Root flags aren't always in /root/ - check unusual persistence locations mentioned in attacker notes like /var/tmp/.apt-cache/, /var/lib/.fonts-cache/, or other hidden directories.",
+    "tags": ["root-flag", "persistence", "forensics"],
+    "applies": "global",
+    "confidence": 0.7
+  },
+  {
+    "text": "When submitting forms to CSRF-protected apps, extract the hidden user_token from each page's HTML before POSTing. Use grep -oP to pull the token from the form field.",
+    "tags": ["csrf", "user_token", "html-form", "grep", "curl"],
+    "applies": "global",
+    "confidence": 0.85
+  },
+  {
+    "text": "Local file inclusion path traversal often requires more directory levels than expected. If ../../../../ fails, try ../../../../../ (5 levels). Web root depth varies by installation.",
+    "tags": ["lfi", "path-traversal", "include", "curl", "flags"],
+    "applies": "global",
+    "confidence": 0.85
+  },
+  {
+    "text": "When downloading exposed .git directories, wget -r often produces flat/malformed structure. Use git clone http://host/.git/ or download HEAD, refs/, objects/ individually to reconstruct the repo.",
+    "tags": [".git", "wget", "clone", "git-exposed", "web-appsec"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "After multiple re-reads of the same directory with no new info, stop and try a fundamentally different approach rather than repeating the same failed command.",
+    "tags": ["re-read", "loop", "stuck", "repetition"],
+    "applies": "global",
+    "confidence": 0.7
+  }
+]

@@ -71,6 +71,9 @@ class Topology(BaseModel):
     # (POST /sessions/{id}/scope), never from the pack itself — the coach
     # must deny everything until an operator locks a whitelist
     engagement: bool = False
+    # free-lab packs: open Kali + internet, no objectives and no ROE —
+    # the coach drops foreign-ip/host guards (VM-kill deny patterns stay)
+    free: bool = False
 
 
 class FlagSpec(BaseModel):
@@ -149,6 +152,7 @@ TRACK_TITLES = {
     "ai-security": ("AI Security", "Prompt injection, data exfiltration and tool misuse against LLM-backed apps.", "bot", 84),
     "exploits": ("Exploit & Vulnerability Analysis", "Safely analyze vulnerable-code patterns, binary hardening, CI/CD trust and CVE exposure.", "bug", 86),
     "capstone": ("Capstone", "Full engagement simulations — multi-tier networks, chained objectives, zero walkthroughs.", "crown", 90),
+    "lab": ("Free Lab", "Open Kali environment — no objectives, no scope, full internet.", "flask", 95),
 }
 
 

@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Activity, LayoutDashboard, Library, LogOut, Settings, Terminal, Trophy,
+  Activity, FlaskConical, LayoutDashboard, Library, LogOut, Settings,
+  Terminal, Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { setToken } from "@/lib/api";
@@ -11,6 +12,7 @@ import { Badge } from "@/components/ui";
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/library", label: "Quest Library", icon: Library },
+  { to: "/free", label: "Free Lab", icon: FlaskConical },
   { to: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { to: "/stats", label: "Stats", icon: Activity },
   { to: "/settings", label: "Settings", icon: Settings },

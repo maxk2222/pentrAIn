@@ -300,9 +300,19 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             + " | assets=" + str(_tm.get("assets") or "?"))]
           if (_tm := st.threat_model) else []),
         # deterministic next-step suggestion (mini-PTG) — one concrete
-        # action from open work, so long-horizon runs don't lose the thread
-        *([obj_txt] if (obj_txt := (objective_render(ctx, facts, st)
-                                   if facts else "")) else []),
+        # action from open work, so long-horizon runs don't lose the thread.
+        # FREE LAB replaces it: there are no objectives at all — the
+        # operator's direction IS the objective
+        *([("FREE MODE — open Kali environment, no objectives, no scope. "
+            "Follow the operator's direction; every target they name is "
+            "reachable. Memory/playbooks/channels work as usual; "
+            "record_play still feeds long-term memory.")]
+          if (ctx.get("session") or {}).get("free_mode") else []),
+        *([obj_txt] if (obj_txt := (
+            objective_render(ctx, facts, st)
+            if facts
+            and not (ctx.get("session") or {}).get("free_mode") else ""))
+          else []),
         # PTG fallback: no deterministic objective but the task graph has
         # ready work — point at the first unblocked task so the plan's
         # deps actually drive order (blind/engagement runs have no

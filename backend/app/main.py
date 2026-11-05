@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
@@ -39,6 +40,15 @@ async def lifespan(app: FastAPI):
             await log.ainfo("packs synced", **res)
         except Exception as e:
             await log.awarning("pack sync failed", error=str(e))
+        # repo-shipped field notes → coach_lessons (idempotent seed)
+        try:
+            from .services import coach_bridge as cb_svc
+            n = await cb_svc.seed_lessons(
+                db, Path(cfg.content_dir).parent / "knowledge" / "lessons.json")
+            if n:
+                await log.ainfo("lessons seeded", count=n)
+        except Exception as e:
+            await log.awarning("lesson seed failed", error=str(e))
     # reattach deploy/reset watchers orphaned by the previous process —
     # ludus deploys server-side, so the range usually just kept going
     from .services import sessions as sessions_svc

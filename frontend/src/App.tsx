@@ -8,6 +8,7 @@ import { DashboardPage } from "@/pages/Dashboard";
 import { LibraryPage } from "@/pages/Library";
 import { QuestDetailPage } from "@/pages/QuestDetail";
 import { SessionPage } from "@/pages/Session";
+import { FreeLabPage } from "@/pages/FreeLab";
 import { LeaderboardPage } from "@/pages/Leaderboard";
 import { StatsPage } from "@/pages/Stats";
 import { SettingsPage } from "@/pages/Settings";
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/library" element={<LibraryPage />} />
         <Route path="/quests/:questId" element={<QuestDetailPage />} />
         <Route path="/session/:sessionId" element={<SessionPage />} />
+        <Route path="/free" element={<FreeLabPage />} />
         <Route path="/leaderboard" element={<LeaderboardPage />} />
         <Route path="/stats" element={<StatsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

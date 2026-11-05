@@ -216,6 +216,10 @@ class SessionCoach:
         # engagement scope (ctx["scope"]) — populated in start(); locked
         # means every IP/host literal must sit inside the whitelist
         self._scope_locked = False
+        # free-lab mode (topology.free on the quest) — open Kali, no ROE:
+        # foreign-ip/host guards short-circuit; flag/checkpoint tools are
+        # not offered. VM-kill deny patterns stay backend-side regardless.
+        self._free = False
         self._scope_required = False   # locked but EMPTY — deny everything
         self._scope_hosts: set[str] = set()
         self._scope_ports: set[int] = set()
@@ -308,6 +312,8 @@ class SessionCoach:
         # authorized nets, and nothing learned from tool output widens it.
         # Unlocked (default): the historical range behavior — target /24s +
         # pivot-safe ips_seen relaxation.
+        self._free = bool(
+            self.ctx.get("session", {}).get("free_mode"))
         scope_obj = self.ctx.get("scope") or {}
         self._scope_locked = bool(scope_obj.get("locked"))
         # 'required' = engagement pack with no whitelist declared yet —
@@ -1162,7 +1168,8 @@ class SessionCoach:
                 # (drained between calls) narrows/widens the toolset at once
                 tools = (tools_for_level(
                     self.state.autonomy_level,
-                    subagents=self.state.subagents_enabled)
+                    subagents=self.state.subagents_enabled,
+                    free=self._free)
                     if tools_active else None)
                 if tools and self._ablate:
                     # eval ablation — hide the ablated subsystem's tools
@@ -1495,6 +1502,8 @@ class SessionCoach:
         # unlocked: no baseline — can't judge foreign. LOCKED with an empty
         # whitelist denies everything (a 'required' scope object means the
         # operator hasn't declared targets yet)
+        if self._free:
+            return None        # free lab — no ROE, every literal reachable
         if not self._allowed_nets and not self._scope_locked:
             return None
         for lit in self._IP_RE.findall(cmd):
@@ -1537,6 +1546,8 @@ class SessionCoach:
         classic-gTLD tokens must be authorized — hostnames are checked
         against scope.hosts (subdomains included), IP authorities against
         the nets, and a URL's explicit port against scope.ports when set."""
+        if self._free:
+            return None        # free lab — hostnames are never foreign
         def _check(host: str, port: int | None) -> str | None:
             host = host.strip()
             try:

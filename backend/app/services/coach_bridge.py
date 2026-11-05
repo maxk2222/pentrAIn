@@ -12,6 +12,7 @@ import re
 import secrets
 import shlex
 import time
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -264,6 +265,9 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
             "subagents_enabled": bool(session.subagents_enabled),
             "kali_vmid": session.kali_vmid,
             "kali_internet": bool(session.kali_internet),
+            # free-lab mode — open Kali, no objectives: coach drops the
+            # foreign-ip/host guards (VM-kill deny patterns still apply)
+            "free_mode": bool((quest.topology or {}).get("free")),
             "started_at": session.started_at.isoformat() if session.started_at else None,
             "ready_at": session.ready_at.isoformat() if session.ready_at else None,
             "deploy_tail": (session.deploy_log or "")[-600:],
@@ -380,6 +384,38 @@ async def record_lesson(db: AsyncSession, session_id: int | None,
     await db.commit()
     await db.refresh(row)
     return row
+
+
+async def seed_lessons(db: AsyncSession, path) -> int:
+    """Repo-shipped field notes → coach_lessons on a fresh install. Runs at
+    boot; record_lesson's sanitizer + Jaccard dedupe make it idempotent —
+    rows the observer already re-derived merge into the existing note.
+    Malformed file → warn, never block startup."""
+    import json as _json
+    try:
+        raw = _json.loads(await asyncio.to_thread(Path(path).read_text))
+    except Exception:
+        return 0
+    if not isinstance(raw, list):
+        return 0
+    seeded = 0
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("text"):
+            continue
+        row = await record_lesson(
+            db, None, item["text"], item.get("tags") or [],
+            item.get("applies") or "global",
+            item.get("confidence") or 0.5,
+            {"seeded": True})
+        # merged rows (Jaccard hit on an existing observer note) keep their
+        # provenance — only rows actually created by this seed get 'seed'
+        if row is not None:
+            if row.evidence.get("seeded") and row.source != "seed":
+                row.source = "seed"
+            seeded += 1
+    if seeded:
+        await db.commit()
+    return seeded
 
 
 async def lesson_hit(db: AsyncSession, lesson_id: int) -> None:

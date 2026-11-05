@@ -12,6 +12,12 @@ from .deps import get_current_user
 router = APIRouter(prefix="/api", tags=["library"], dependencies=[Depends(get_current_user)])
 
 
+def _is_free(q: Quest) -> bool:
+    """Free-lab sentinel quests (topology.free) — reachable via the Free
+    Lab tab, hidden from the quest library lists."""
+    return bool((q.topology or {}).get("free"))
+
+
 def _quest_out(q: Quest, *, locked=False, reason="", solved=False, best=None,
                flag_points: int = 0) -> QuestOut:
     return QuestOut(
@@ -27,8 +33,12 @@ async def list_tracks(db: AsyncSession = Depends(get_db)):
     tracks = (await db.execute(select(Track).order_by(Track.order))).scalars().all()
     out: list[TrackOut] = []
     for t in tracks:
-        quests = (await db.execute(
-            select(Quest).where(Quest.track_slug == t.slug, Quest.active.is_(True)))).scalars().all()
+        all_q = (await db.execute(
+            select(Quest).where(Quest.track_slug == t.slug,
+                                Quest.active.is_(True)))).scalars().all()
+        if all_q and all(_is_free(q) for q in all_q):
+            continue            # track exists only for hidden free quests
+        quests = [q for q in all_q if not _is_free(q)]
         solved_ids = await sessions_svc.solved_quest_ids(db)
         solved = sum(1 for q in quests if q.id in solved_ids)
         out.append(TrackOut(slug=t.slug, title=t.title, description=t.description,
@@ -43,8 +53,9 @@ async def list_quests(track: str | None = None, db: AsyncSession = Depends(get_d
     q = select(Quest).where(Quest.active.is_(True))
     if track:
         q = q.where(Quest.track_slug == track)
-    quests = (await db.execute(
+    quests = [x for x in (await db.execute(
         q.order_by(Quest.track_slug, Quest.tier, Quest.exam))).scalars().all()
+              if not _is_free(x)]
     solved_ids = await sessions_svc.solved_quest_ids(db)
     best = {q: s for q, s in (await db.execute(
         select(Attempt.quest_id, func.max(Attempt.score)).group_by(Attempt.quest_id))).all()}

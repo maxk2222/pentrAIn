@@ -350,10 +350,15 @@ _LEVEL_TOOLS = {
 }
 
 
-def tools_for_level(level: int, *, subagents: bool = False) -> list[dict]:
+def tools_for_level(level: int, *, subagents: bool = False,
+                    free: bool = False) -> list[dict]:
     allowed = set(_LEVEL_TOOLS.get(level, _LEVEL_TOOLS[1]))
     if level >= 4 and subagents:
         allowed |= SUBAGENT_TOOL_NAMES
+    if free:
+        # free lab — nothing to submit or tick off; offering the tools
+        # anyway only invites hallucinated flag submits
+        allowed -= {"submit_flag", "check_flag", "mark_checkpoint"}
     return [t for t in TOOLS if t["function"]["name"] in allowed]
 
 

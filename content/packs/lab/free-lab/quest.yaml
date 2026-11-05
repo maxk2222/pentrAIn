@@ -1,0 +1,36 @@
+apiVersion: pentrain/v1
+kind: Quest
+meta:
+  id: free-lab
+  track: lab
+  tier: 1
+  title: "Free Lab"
+  version: 1
+display:
+  tagline: "Open Kali environment with full internet — no objectives, no scope, no walkthrough."
+requirements:
+  min_ram_gb: 6
+  min_vcpus: 4
+  min_disk_gb: 40
+  est_deploy_min: 5
+topology:
+  kali:
+    template: kali-x64-desktop-template
+    ram_gb: 6
+    cpus: 4
+    wan: true                          # egress nic — free lab has real internet
+    roles: [pentrain_home_lab]
+  vms: []                              # no range — the open environment IS the lab
+  free: true                           # coach drops foreign-ip/host guards; no objectives
+flags: []
+hints: []
+coach:
+  briefing_ref: coach_context.md
+  checkpoints: []
+  escalation: { observe_grace_s: 180, nudge_s: 480, hint_s: 900 }
+scoring:
+  base: 0
+  time_bonus_max: 0
+  par_s: 0
+  hint_cost: 0
+  takeover_cost: 0
