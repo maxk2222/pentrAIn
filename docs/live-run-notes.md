@@ -496,3 +496,29 @@ Timeline of the stuck loop and the fixes it produced:
   loads at boot via seed_lessons(); scripts/export_lessons.py dumps a
   live db back to the file. Re-export after the full run.
 2026-11-05 11:45
+
+## AUDIT-QUEST REDESIGN (90e19b3) — evidence != answers
+- s20 (cloud-t1-container-review) SOLVED but trivially: the fixture file
+  literally stated the findings ("receives runtime socket access",
+  "needs least-privilege controls") and the flag grepped those same
+  words. cat + paraphrase = solve. Confirmed systemic across all 23
+  pentrain_audit_fixtures files.
+- Rewrite rule: evidence = raw artifacts only (compose YAML, kubectl
+  output, source, flow logs, registry records). No "expected controls",
+  "required outcome", "review task", "finding:" sections — those moved
+  to briefing/coach context. Flag greps now require >=1 derived term
+  absent from the artifact (e.g. rbac: 'privilege' is a conclusion, the
+  YAML only shows verbs). Hints reworded where they leaked flag words
+  (11 quests). lint_packs.py gained check_audit_fixtures() gate.
+- s21 redeployed as first true test: agent must read docker-compose
+  mounts, reason about authority vs stated need, write report.
+- s21 verify: SOLVED — agent read raw compose mounts (docker.sock + /:/host),
+  derived "runtime boundary" + least-privilege itself, wrote report,
+  check_flag verified. Derivation confirmed (no 'socket'/'privilege'
+  word in artifact). s22 rbac-review: SOLVED same pattern — read
+  Role/RoleBinding YAML + workload specs, derived over-privilege
+  (flag needs 'privilege', absent from manifest). Design holds: audit
+  quests now measure analysis, not grep-the-answer.
+- Ops note: create sessions with autonomy_level=4 in the POST body —
+  live-toggle works but the reflect snapshot keeps autonomy=2 until the
+  next refresh (~30min backoff wasted). coach_mode alone doesn't set it.
