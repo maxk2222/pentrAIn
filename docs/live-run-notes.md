@@ -414,3 +414,23 @@ Per-quest findings appended below the ladder table.
 - auth.log → bash_history → cron persistence → report via `ssh analyst@evidence01
   "cat > report.txt" < file` (stdin-redirect channel — no local staging needed).
 2026-11-05 01:55
+
+## SOLVED: for-t1-wiretap (s11, hard case — multi-bug)
+
+Timeline of the stuck loop and the fixes it produced:
+- Agent wrote /home/analyst/report.txt on KALI 5-7x — every write returned
+  exit 0 (own echo masked the failed redirect; /home/analyst didn't exist).
+  check_flag only said "check failed" — all-fail && detail returned None.
+- FIX ab0bb0a (coach): FileFact.missing — a failed read after an exit-0
+  write marks the path vanished; rewrite guard then denies with the real
+  hint (mkdir parent, or push to REMOTE vm via ssh) instead of "RUN it".
+- FIX 8b7a42e (backend): check-fail detail — all-fail now reports
+  "condition 1 of N (all conditions failed)" (root cause named) AND the
+  check's vm ("check ran on pcap01"). Coach deny kind-aware: reports get
+  "re-run check_flag", not "python3 -u" (agent had literally exec'd prose).
+- Resolution path (live-verified): mkdir local dir → write → check_flag →
+  all-fail detail → scp report.txt analyst@pcap01 → verified.
+- LESSON for quest authors: "deliverable on a specific host" flags create
+  a wrong-host trap when a same-named dir is plausible on kali. The agent
+  recovered via deny-hint + check-vm detail — the infra now teaches it.
+2026-11-05 08:58
