@@ -477,3 +477,22 @@ Timeline of the stuck loop and the fixes it produced:
   tool executes server-side → deterministic markers; rule engine kept
   as offline fallback). ai-llm-injection opts app01 in.
 2026-11-05 11:30
+
+## OBSERVER-KNOWLEDGE AUDIT (s1-s14 evidence)
+- STORE side works: 30 lessons, ~all generalized + sanitized; 1 harmful
+  (id 24: "run report.txt with python3" — captured the OLD deny advice;
+  DISABLED via admin queue — kind-aware deny superseded it).
+- PUSH side works: 39 FIELD NOTE pushes over s10-14 (tag-matched onto
+  tool results, hit-tracked); s14's git-HEAD push directly caused solve.
+  Hits attribute (top: id8 ssh-banner 10x).
+- PULL side unused: lookup_guide=0 calls in 14 sessions despite GUIDE
+  pointers firing 9x — t1 content too easy to need recipes; expect
+  usage to rise on t2+. Watch whether to strengthen the pointer.
+- OBSERVER advisory: 0 drains in trajs (pending_observer_hints rarely
+  populated) — post_observer_hint path delivered s14's hint via message
+  replay instead. Advisory channel coverage thin vs tag-push; ok by
+  design (advisory is the expensive LLM path, notes push is free).
+- NEW: repo seed — content/knowledge/lessons.json (29 curated notes)
+  loads at boot via seed_lessons(); scripts/export_lessons.py dumps a
+  live db back to the file. Re-export after the full run.
+2026-11-05 11:45

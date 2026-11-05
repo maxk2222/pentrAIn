@@ -80,7 +80,11 @@ export function ObjectivesPanel({ sessionId, events }: { sessionId: number; even
           </div>
         ))}
         {!progress?.flags.length && (
-          <p className="text-sm text-muted">No flags defined for this quest.</p>
+          <p className="text-sm text-muted">
+            {progress?.total === 0
+              ? "Free lab — no objectives. The recent-activity feed below still tracks what the coach does."
+              : "No flags defined for this quest."}
+          </p>
         )}
       </div>
 
@@ -97,18 +101,22 @@ export function ObjectivesPanel({ sessionId, events }: { sessionId: number; even
         </div>
       </div>
 
-      <div className="flex gap-2 border-t border-border p-2">
-        <Input value={flag} onChange={(e) => setFlag(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), submitFlag())}
-          placeholder="pentrAIn{…}" className="font-mono" />
-        <Button variant="outline" size="icon" onClick={submitFlag} disabled={!flag.trim()}>
-          <Flag className="h-4 w-4" />
-        </Button>
-      </div>
-      {result && (
-        <div className={`px-3 pb-2 text-xs ${result.ok ? "text-success" : "text-danger"}`}>
-          {result.text}
-        </div>
+      {(progress?.total ?? 0) > 0 && (
+        <>
+          <div className="flex gap-2 border-t border-border p-2">
+            <Input value={flag} onChange={(e) => setFlag(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), submitFlag())}
+              placeholder="pentrAIn{…}" className="font-mono" />
+            <Button variant="outline" size="icon" onClick={submitFlag} disabled={!flag.trim()}>
+              <Flag className="h-4 w-4" />
+            </Button>
+          </div>
+          {result && (
+            <div className={`px-3 pb-2 text-xs ${result.ok ? "text-success" : "text-danger"}`}>
+              {result.text}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
