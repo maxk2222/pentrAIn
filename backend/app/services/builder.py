@@ -308,17 +308,28 @@ async def chat(db: AsyncSession, bs_id: int, text: str,
     return await _msg(db, bs, "assistant", reply, kind=kind)
 
 
+_ANY_BLOCK_RE = re.compile(r"```(?:json|draft|yaml)?\s*\n(.*?)```",
+                           re.DOTALL)
+
+
 def _extract_files(text: str, pattern: re.Pattern) -> dict | None:
+    """Pull the files object out of the reply. The canonical fence is
+    ```draft — but models happily emit ```json or an unlabeled block;
+    accept any fenced block that parses to {\"files\": {...}}."""
     m = pattern.search(text or "")
-    if not m:
+    blocks = [m.group(1)] if m else \
+        [b for b in _ANY_BLOCK_RE.findall(text or "")]
+    if not blocks:
         return None
-    try:
-        payload = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return {"__parse_error__": "draft block is not valid JSON"}
-    files = payload.get("files")
-    return files if isinstance(files, dict) else \
-        {"__parse_error__": "draft block has no 'files' object"}
+    for body in blocks:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        files = payload.get("files")
+        if isinstance(files, dict):
+            return files
+    return {"__parse_error__": "no fenced block with a 'files' object"}
 
 
 # ------------------------------------------------------------- materialize
