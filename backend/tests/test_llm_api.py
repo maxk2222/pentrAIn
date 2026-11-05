@@ -184,6 +184,79 @@ def test_engine_metrics_mock(client):
     assert out["ok"] is False and "mock" in out["reason"]
 
 
+def _mk_session(state: str, tok: str) -> None:
+    """Insert a session row into the app's own db for proxy-auth tests."""
+    import asyncio
+
+    from app.db import session_factory
+    from app.models.domain import Session
+
+    async def go():
+        async with session_factory()() as s:
+            s.add(Session(quest_id="ai-llm-injection", state=state,
+                          telemetry_token=tok))
+            await s.commit()
+
+    asyncio.run(go())
+
+
+@pytest.fixture()
+def fake_proxy(monkeypatch):
+    import app.api.routes_llm as routes_llm
+    _FakeClient.seen = []
+    monkeypatch.setattr(routes_llm.httpx, "AsyncClient", _FakeClient)
+    yield _FakeClient
+    _FakeClient.handler = None
+
+
+def test_llm_proxy_forwards_with_configured_model(client, fake_proxy, llm_settings):
+    _mk_session("active", "tok-live")
+    client.patch("/api/settings", json={"updates": {"llm.model": "cfg-0"}})
+    seen_body = {}
+
+    def handler(m, u, h, j):
+        seen_body.update(j)
+        return _FakeResp({"choices": [{"message": {"content": "hi"}}]})
+
+    fake_proxy.handler = handler
+    r = client.post("/api/llm-proxy/tok-live/chat", json={
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+        "max_tokens": 99999,
+    })
+    assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "hi"
+    _method, url, _headers, _ = fake_proxy.seen[0]
+    assert url == "http://fake-llm:11434/v1/chat/completions"
+    # model comes from settings — never from the caller
+    client.patch("/api/settings", json={"updates": {"llm.model": "cfg-model"}})
+    client.post("/api/llm-proxy/tok-live/chat", json={
+        "messages": [{"role": "user", "content": "again"}]})
+    assert fake_proxy.seen[1][3]["model"] == "cfg-model"
+    assert seen_body["max_tokens"] == 4000  # capped
+
+
+def test_llm_proxy_token_gating(client, fake_proxy, llm_settings):
+    _mk_session("active", "tok-a")
+    _mk_session("solved", "tok-dead")
+    client.patch("/api/settings", json={"updates": {"llm.model": "m"}})
+    fake_proxy.handler = lambda m, u, h, j: _FakeResp({"choices": []})
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    assert client.post("/api/llm-proxy/nope/chat", json=body).status_code == 403
+    assert client.post("/api/llm-proxy/tok-dead/chat",
+                       json=body).status_code == 403
+    assert client.post("/api/llm-proxy/tok-a/chat",
+                       json=body).status_code == 200
+
+
+def test_llm_proxy_upstream_error(client, fake_proxy, llm_settings):
+    _mk_session("ready", "tok-err")
+    client.patch("/api/settings", json={"updates": {"llm.model": "m"}})
+    fake_proxy.handler = lambda m, u, h, j: _FakeResp({"error": "down"}, 500)
+    r = client.post("/api/llm-proxy/tok-err/chat",
+                    json={"messages": [{"role": "user", "content": "x"}]})
+    assert r.status_code == 502 and "500" in r.json()["detail"]
+
+
 def test_llm_usage_roundtrip(client):
     from app.config import get_config
     tok = get_config().coach_service_token

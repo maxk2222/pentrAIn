@@ -541,6 +541,36 @@ async def _watch_range(db: AsyncSession, engine, session: Session,
     raise SessionError("deploy timed out")
 
 
+async def _inject_llm_envs(db: AsyncSession, engine, session: Session,
+                           quest: Quest) -> None:
+    """Write /etc/pentrain-llm.env on every inference-enabled VM and restart
+    its declared unit. Runs at finalize AND after soft reset — reset
+    regenerates telemetry_token, so a stale URL would 403."""
+    api_ip, api_port = _api_ip_port(
+        await settings_svc.get_setting(db, "platform.api_url", ""))
+    for v in (quest.topology or {}).get("vms") or []:
+        if not v.get("inference") or not api_ip:
+            continue
+        vmid = (session.target_vmids or {}).get(v["name"])
+        if not vmid or not getattr(engine, "pve", None):
+            continue
+        try:
+            await engine.pve.agent_file_write(
+                vmid, "/etc/pentrain-llm.env",
+                f"PENTRAIN_LLM_URL=http://{api_ip}:{api_port}"
+                f"/api/llm-proxy/{session.telemetry_token}\n")
+            svc = v["inference"].get("service") \
+                if isinstance(v["inference"], dict) else None
+            if svc:
+                await engine.pve.agent_exec_sh(
+                    vmid, f"systemctl try-restart {svc}", timeout_s=20)
+            await _append_log(db, session,
+                              f"[pentrain] llm-proxy env -> {v['name']}")
+        except Exception as e:
+            await _append_log(db, session,
+                              f"[pentrain] llm-proxy env {v['name']} warn: {e!r}")
+
+
 async def _finalize(db: AsyncSession, engine, session: Session,
                     quest: Quest, st) -> None:
     """RUNNING range → ready session. Idempotent — the resume path may re-run
@@ -606,6 +636,11 @@ async def _finalize(db: AsyncSession, engine, session: Session,
     await flags_svc.create_expected_flags(db, session, quest_flags)
     for line in await flags_svc.inject_flags(db, engine, session, quest_flags):
         await _append_log(db, session, f"[pentrain] {line}")
+
+    # inference-enabled quest VMs get a session-scoped LLM proxy URL via an
+    # env file + service restart. Guests reach /api/llm-proxy over the same
+    # testing-allow route as telemetry — no range egress to the LLM host.
+    await _inject_llm_envs(db, engine, session, quest)
 
     # kali wan uplink — BEFORE the snapshot so soft reset keeps the net1
     # config. Non-fatal: a missing DHCP lease must not sink the deploy.
@@ -854,6 +889,7 @@ async def _reset(session_id: int, hard: bool) -> None:
             await flags_svc.create_expected_flags(db, session, quest_flags)
             for line in await flags_svc.inject_flags(db, engine, session, quest_flags):
                 await _append_log(db, session, f"[pentrain] {line}")
+            await _inject_llm_envs(db, engine, session, quest)
             await _set_state(db, session, SessionState.READY)
         except Exception as e:
             await log.aexception("reset failed", session_id=session_id)

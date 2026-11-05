@@ -1,5 +1,8 @@
 ---
-# ai-security "AskOps" — deterministic LLM-attack lab in one container.
+# ai-security "AskOps" — LLM-attack lab in one container.
+# Runs under systemd so the platform can inject PENTRAIN_LLM_URL (the
+# session-scoped proxy endpoint) AFTER ansible, at deploy finalize:
+#   env lands in /etc/pentrain-llm.env → systemctl try-restart askops.
 - name: app sources
   ansible.builtin.copy:
     src: assist/
@@ -11,10 +14,31 @@
   register: b1
   changed_when: b1.rc == 0
 
-- name: run assist (:80)
-  ansible.builtin.command: >-
-    docker run -d --name assist --restart unless-stopped
-    -p 80:80 pentrain/askops
-  register: c1
-  changed_when: c1.rc == 0
-  failed_when: c1.rc != 0 and 'Conflict' not in (c1.stderr | default(''))
+- name: askops unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/askops.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AskOps assist container
+      After=docker.service network-online.target
+      Requires=docker.service
+
+      [Service]
+      Type=simple
+      EnvironmentFile=-/etc/pentrain-llm.env
+      ExecStartPre=-/usr/bin/docker rm -f assist
+      ExecStart=/usr/bin/docker run --rm --name assist -p 80:80 -e PENTRAIN_LLM_URL=${PENTRAIN_LLM_URL} pentrain/askops
+      ExecStop=/usr/bin/docker stop assist
+      Restart=always
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: enable + start askops
+  ansible.builtin.systemd:
+    name: askops
+    daemon_reload: true
+    enabled: true
+    state: started

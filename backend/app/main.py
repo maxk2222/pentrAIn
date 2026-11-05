@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.routes_admin import coach_router
 from .api.routes_admin import router as admin_router
 from .api.routes_library import router as library_router
+from .api.routes_llm import router as llm_router
 from .api.routes_sessions import router as sessions_router
 from .api.routes_streams import chat_router
 from .api.routes_streams import router as streams_router
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(coach_router)
     app.include_router(streams_router)
+    app.include_router(llm_router)
 
     @app.get("/api/health")
     async def health():

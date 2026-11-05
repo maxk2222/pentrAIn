@@ -25,6 +25,8 @@ topology:
       cpus: 2
       vlan: 10
       ip_last_octet: 27
+      inference:
+        service: askops
       roles: [pentrain_docker_host, pentrain_ai_t3_llm]
 flags:
   - id: prompt-leak

@@ -46,6 +46,9 @@ class VmSpec(BaseModel):
     disk_gb: int | None = None
     vlan: int = 10
     ip_last_octet: int | None = None
+    # platform LLM access — finalize injects PENTRAIN_LLM_URL (session-
+    # scoped proxy) and restarts the named systemd unit, if given
+    inference: dict | bool | None = None
     linux: bool = True
     windows: dict | None = None
     domain: dict | None = None
