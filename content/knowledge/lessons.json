@@ -172,5 +172,23 @@
     "tags": ["re-read", "loop", "stuck", "repetition"],
     "applies": "global",
     "confidence": 0.7
+  },
+  {
+    "text": "After ~5 failed variations of one technique against the same endpoint (e.g. reworded injection payloads), stop rewording and enumerate the service's OTHER surfaces: index page, API index routes, advertised capabilities, linked documents. The solve usually sits on a different surface, not in a cleverer phrasing.",
+    "tags": ["stuck", "technique-fixation", "enumeration", "attack-surface", "injection", "llm"],
+    "applies": "global",
+    "confidence": 0.8
+  },
+  {
+    "text": "For LLM apps that offer to read/summarize content (docs, tickets, notes): the content itself is the injection vector — instructions planted in summarized material execute with the model's tool permissions. Ask the assistant to summarize the suspicious doc; never paste the doc into chat (input guards catch it).",
+    "tags": ["llm", "indirect-injection", "rag", "document", "summarize", "prompt-injection"],
+    "applies": "global",
+    "confidence": 0.85
+  },
+  {
+    "text": "Timeouts on LLM endpoints (curl exit 28/124) usually mean model latency, not an unreachable service — verify with a cheap request (GET /, short hello) before recording a host as dead. Use --max-time 60+ for generation calls.",
+    "tags": ["llm", "timeout", "curl", "reachability", "false-dead-end"],
+    "applies": "global",
+    "confidence": 0.8
   }
 ]
