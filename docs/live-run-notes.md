@@ -522,3 +522,14 @@ Timeline of the stuck loop and the fixes it produced:
 - Ops note: create sessions with autonomy_level=4 in the POST body —
   live-toggle works but the reflect snapshot keeps autonomy=2 until the
   next refresh (~30min backoff wasted). coach_mode alone doesn't set it.
+
+## CLOUD TRACK COMPLETE (s21-s29) — post-redesign results
+- s21 container-review, s22 rbac, s23 gitops, s26 metadata, s27 t2-exam,
+  s28 t3-gitops, s29 t3-exam — all SOLVED with raw-artifact evidence.
+  s24 cloud-k8s-escape SOLVED (real exploit chain: pod rce -> sa token
+  -> node flag). s25 t1-exam SOLVED after 4/4 gate.
+- Solves take ~2-8min in takeover: agent reads the artifact, derives
+  the conclusion term that is NOT in the file, writes the report.
+  t3-exam took longest (3-part combined bundle) — good sign.
+- Research tools (004a8b0) deployed mid-run; kali on s24+ carried
+  pentrain_research_kit (best-effort offline refs).
