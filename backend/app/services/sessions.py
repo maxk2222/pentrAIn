@@ -596,6 +596,13 @@ async def _inject_llm_envs(db: AsyncSession, engine, session: Session,
     regenerates telemetry_token, so a stale URL would 403."""
     api_ip, api_port = _api_ip_port(
         await settings_svc.get_setting(db, "platform.api_url", ""))
+    if api_ip and any(api_ip.startswith(p) for p in
+                      ("192.0.2.", "198.51.100.", "203.0.113.")):
+        # RFC5737 TEST-NET placeholders reach nothing — almost always a
+        # settings accident; loud log so deploy diagnosis catches it
+        await _append_log(db, session,
+                          f"[pentrain] WARN: platform.api_url resolves to "
+                          f"TEST-NET {api_ip} — llm envs will be unreachable")
     for v in (quest.topology or {}).get("vms") or []:
         if not v.get("inference") or not api_ip:
             continue
