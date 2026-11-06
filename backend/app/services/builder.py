@@ -310,12 +310,19 @@ async def chat(db: AsyncSession, bs_id: int, text: str,
 
 _ANY_BLOCK_RE = re.compile(r"```(?:json|draft|yaml)?\s*\n(.*?)```",
                            re.DOTALL)
+_FILE_BLOCK_RE = re.compile(
+    r"```file:([A-Za-z0-9._/-]+)\s*\n(.*?)```", re.DOTALL)
 
 
 def _extract_files(text: str, pattern: re.Pattern) -> dict | None:
-    """Pull the files object out of the reply. The canonical fence is
-    ```draft — but models happily emit ```json or an unlabeled block;
-    accept any fenced block that parses to {\"files\": {...}}."""
+    """Pull pack files out of the reply. Preferred transport is one
+    ```file:<path> fenced block per file — file contents stay verbatim,
+    no JSON escaping of YAML/markdown (which models mangle reliably).
+    Legacy fallback: a ```draft/```json block containing {"files":…}."""
+    named = _FILE_BLOCK_RE.findall(text or "")
+    if named:
+        return {path.strip(): body.lstrip("\n")
+                for path, body in named}
     m = pattern.search(text or "")
     blocks = [m.group(1)] if m else \
         [b for b in _ANY_BLOCK_RE.findall(text or "")]
@@ -509,9 +516,7 @@ async def _verify_loop(bs_id: int) -> None:
                     return
                 verdict = await _diagnose(db, bs, s, outcome, detail)
                 kind = str(verdict.get("kind") or "")
-                patch = verdict.get("patch") or {}
-                patch_files = patch.get("files") if isinstance(patch, dict) \
-                    else None
+                patch_files = verdict.get("patch_files")
                 await _log(db, bs, "diagnose",
                            f"{kind}: {verdict.get('rationale', '')[:400]}")
                 if kind == "coach_limitation" or not patch_files:
@@ -626,10 +631,21 @@ async def _diagnose(db: AsyncSession, bs: BuilderSession, s: Session,
                 "rationale": "diagnosis produced no verdict block — "
                              "treating as inconclusive/coach-side"}
     try:
-        return json.loads(m.group(1))
+        verdict = json.loads(m.group(1))
     except json.JSONDecodeError:
         return {"kind": "coach_limitation",
                 "rationale": "verdict block was not valid JSON"}
+    # patch files ride as ```file:<path> blocks in the same reply —
+    # or (legacy) embedded in the verdict's patch.files object
+    patch_files = _extract_files(reply, _DRAFT_RE) or {}
+    if "__parse_error__" in patch_files:
+        patch_files = {}
+    patch = verdict.get("patch")
+    if not patch_files and isinstance(patch, dict) \
+            and isinstance(patch.get("files"), dict):
+        patch_files = patch["files"]
+    verdict["patch_files"] = patch_files
+    return verdict
 
 
 async def _finish(db: AsyncSession, bs: BuilderSession, status: str,

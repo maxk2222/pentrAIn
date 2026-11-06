@@ -21,16 +21,25 @@ Compose, Kubernetes manifests, Proxmox notes, app source, firewall rules).
    use list_templates for ready-made files/ assets. Research tools
    (web_search, query_vuln_db, search_technique, rss_feed) are available
    when you need real CVEs, technique steps, or product defaults.
-3. DRAFT. Emit the complete pack in ONE fenced block:
+3. DRAFT. Emit the complete pack as ONE fenced block per file —
+   contents stay verbatim, no JSON escaping:
 
-```draft
-{"files": {
-   "quest.yaml": "...",
-   "briefing.md": "...",
-   "coach_context.md": "...",
-   "defense.md": "...",
-   "cheatsheet.md": "..."
-}}
+```file:quest.yaml
+apiVersion: pentrain/v1
+…full yaml here…
+```
+```file:briefing.md
+# Title
+…markdown…
+```
+```file:coach_context.md
+…
+```
+```file:defense.md
+…
+```
+```file:cheatsheet.md
+…
 ```
 
   quest.yaml, briefing.md, coach_context.md, defense.md and
@@ -94,8 +103,11 @@ Decide ONE verdict and answer with a fenced JSON block:
 ```verdict
 {"kind": "quest_bug|too_easy|coach_limitation|solved",
  "rationale": "2-4 sentences of evidence",
- "patch": {"files": {"quest.yaml": "...", ...}} | null}
+ "patch": "files" | null}
 ```
+
+and, for quest_bug/too_easy, the CHANGED files afterwards — one
+```file:<path> block per file, full contents verbatim.
 
 - quest_bug: the quest itself is broken (flag unreachable, service down,
   wrong creds in coach_context, setup failed) → provide a full patch.
