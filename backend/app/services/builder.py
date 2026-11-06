@@ -138,6 +138,23 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
     blank reply. Close out with stub results and force one text answer."""
     calls = 0
     seen: dict[str, int] = {}
+
+    async def _force_reply(tcs: list[dict], why: str) -> str:
+        messages.append({"role": "assistant",
+                         "content": "", "tool_calls": tcs})
+        for tc in tcs:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": str(tc.get("id") or ""),
+                "name": str((tc.get("function") or {})
+                            .get("name") or ""),
+                "content": f"({why})"})
+        messages.append({"role": "user", "content":
+                         f"{why} — reply now with what you have. "
+                         + (force_hint or
+                            "Emit the draft block if it was due.")})
+        return (await _llm(db, messages)).get("content") or ""
+
     while True:
         msg = await _llm(db, messages, tools=tools)
         tcs = msg.get("tool_calls") or []
@@ -145,24 +162,12 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
             content = msg.get("content") or ""
             if content or calls < cap or not tcs:
                 return content
-            messages.append({"role": "assistant",
-                             "content": "", "tool_calls": tcs})
-            for tc in tcs:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": str(tc.get("id") or ""),
-                    "name": str((tc.get("function") or {})
-                                .get("name") or ""),
-                    "content": "(tool budget for this turn exhausted)"})
-            messages.append({"role": "user", "content":
-                             "Tool budget for this turn is exhausted — "
-                             "reply now with what you have. "
-                             + (force_hint or
-                                "Emit the draft block if it was due.")})
-            return (await _llm(db, messages)).get("content") or ""
+            return await _force_reply(
+                tcs, "Tool budget for this turn is exhausted")
         messages.append({"role": "assistant",
                          "content": msg.get("content") or "",
                          "tool_calls": tcs})
+        stuck = False
         for tc in tcs:
             if calls >= cap:
                 break
@@ -181,6 +186,10 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
             if seen[key] > 1:
                 result = (f"already returned above — identical {name} call "
                           "ignored; proceed with what you have")
+                # still repeating after several stubs → fixated; force
+                # the answer early instead of burning the whole budget
+                if seen[key] >= 4:
+                    stuck = True
             else:
                 result = await builder_tools.dispatch(ctx, name, args)
             await _msg(db, bs, "assistant",
@@ -190,6 +199,10 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
                              "tool_call_id": str(tc.get("id") or ""),
                              "name": name,
                              "content": result[:_TOOL_RESULT_MAX]})
+        if stuck:
+            return await _force_reply(
+                [], "You keep repeating the same tool call — its result "
+                    "is already in context")
 
 
 async def _history(db: AsyncSession, bs: BuilderSession) -> list[dict]:
@@ -673,13 +686,14 @@ async def _diagnose(db: AsyncSession, bs: BuilderSession,
     # only for the file blocks (cheap: ~1 LLM call, no tool roundtrip)
     if verdict.get("kind") in ("quest_bug", "too_easy") \
             and not patch_files:
-        retry = await _llm(db, [
+        retry = (await _llm(db, [
             *messages,
             {"role": "assistant", "content": reply},
             {"role": "user", "content":
              "Verdict noted. Now emit ONLY the patch: one ```file:<path> "
-             "block per changed file, full contents verbatim."}])
-        patch_files = _extract_files(retry or "", _DRAFT_RE) or {}
+             "block per changed file, full contents verbatim."}])) \
+            .get("content") or ""
+        patch_files = _extract_files(retry, _DRAFT_RE) or {}
         if "__parse_error__" in patch_files:
             patch_files = {}
     verdict["patch_files"] = patch_files
