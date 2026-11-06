@@ -2302,8 +2302,11 @@ async def test_guide_trigger_hint_fires_once_per_module():
     _, res = await coach._dispatch(
         {"type": "exec_in_kali",
          "command": "curl -s http://web01/.git/"}, proactive=True)
-    assert "GUIDE: module 'git-leak'" in res
+    assert "GUIDE — module 'git-leak'" in res
     assert 'lookup_guide("git-leak")' in res
+    # the recipe body rides the push — a weak model should not have to
+    # spend a turn on lookup_guide to get the answer (s44)
+    assert "git-dumper" in res or ".git" in res.split("GUIDE", 1)[1]
     _, res2 = await coach._dispatch(
         {"type": "exec_in_kali",
          "command": "curl -s http://web01/.git/logs/"}, proactive=True)
