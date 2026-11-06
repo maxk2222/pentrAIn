@@ -159,7 +159,8 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
         "vlan": 10,
         "ip_last_octet": 5,
         "ram_gb": kali.get("ram_gb", 6),
-        "ram_min_gb": kali.get("ram_min_gb") or 3,
+        "ram_min_gb": kali.get("ram_min_gb")
+                      or max(1, kali.get("ram_gb", 6) // 2),
         "cpus": kali.get("cpus", 4),
         "linux": True,
         "roles": ["pentrain_kali_agent", "pentrain_research_kit",
@@ -205,6 +206,12 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
     router = {"template": "debian-12-x64-server-template",
               "ram_gb": 2, "ram_min_gb": 1,
               **(topo.get("router") or {})}
+    # balloon floor must stay strictly below the memory cap or PVE rejects
+    # the options update — clamp lopsided specs (incl. generated quests)
+    for spec in (*vms, router):
+        lo, hi = spec.get("ram_min_gb"), spec.get("ram_gb")
+        if lo and hi and lo >= hi:
+            spec["ram_min_gb"] = max(1, hi // 2)
     cfg: dict = {"ludus": vms, "router": router}
     # platform control plane: the range must reach the app VM's address on
     # the ludus "public" bridge (telemetry + terminal channel dial it).
@@ -248,7 +255,8 @@ def _range_footprint(quest: Quest) -> dict:
     """
     topo = quest.topology or {}
     kali = topo.get("kali") or {}
-    floor = (kali.get("ram_min_gb") or 3) + 1  # router ram_min
+    floor = (kali.get("ram_min_gb")
+             or max(1, kali.get("ram_gb", 6) // 2)) + 1  # router ram_min
     nominal = kali.get("ram_gb", 6) + 2
     vcpus = kali.get("cpus", 4) + 1
     for v in topo.get("vms") or []:
