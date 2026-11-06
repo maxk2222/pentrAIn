@@ -1802,9 +1802,16 @@ class SessionCoach:
             asyncio.create_task(log.ainfo(
                 "guide hinted", module=mid, window=window or "main",
                 session=self.sid))
-            return (f"\nGUIDE: module '{mid}' covers this situation — "
-                    f"lookup_guide(\"{mid}\") pulls the recipe "
-                    "(verbatim commands).")
+            # inline the recipe, don't just point at it — a weak model
+            # keeps grinding instead of spending a turn on lookup_guide
+            # (s44: web-app hinted on the 302 login, model ignored the
+            # pointer for 15+ turns). Once-per-window dedup bounds the
+            # token cost; lookup_guide still gives the full body.
+            body = guides.load_modules().get(mid)
+            recipe = (body.body[:1800] if body else "")
+            return (f"\nGUIDE — module '{mid}' covers this situation.\n"
+                    f"{recipe}\n"
+                    f"(full text: lookup_guide(\"{mid}\"))")
         return ""
 
     def _drain_observer_hints(self, result: str, a: dict,
