@@ -1126,19 +1126,36 @@ async def _provision_agent(db: AsyncSession, engine, session: Session,
         if not vmid:
             continue
         try:
-            # chunked write — QGA file-write payloads are base64'd, ~2MB binary
+            # chunked write — QGA file-write payloads are base64'd, ~2MB
+            # binary; small chunks + retries because the PVE HTTPS hop
+            # intermittently ReadErrors on larger payloads
             await engine.pve.agent_exec_sh(
                 vmid, "rm -f /tmp/pentrain-agent", timeout_s=10)
-            CHUNK = 200_000
+            # 32KB raw ≈ 42.7K b64 chars — PVE file-write caps `content`
+            # at 61440, and smaller chunks survive its flaky HTTPS hop
+            CHUNK = 32_000
             for off in range(0, len(blob), CHUNK):
-                await engine.pve.agent_file_write(
-                    vmid, f"/tmp/pentrain-agent.{off}", blob[off:off + CHUNK])
+                # zero-padded names — a bare glob sorts 128000 before
+                # 200000 and `cat` would scramble the binary (SEGV on boot)
+                part = f"/tmp/pentrain-agent.{off:08d}"
+                for attempt in range(4):
+                    try:
+                        await engine.pve.agent_file_write(
+                            vmid, part, blob[off:off + CHUNK])
+                        break
+                    except Exception:
+                        if attempt == 3:
+                            raise
+                        await asyncio.sleep(1 + attempt)
             await engine.pve.agent_write_file(
                 vmid, "/etc/systemd/system/pentrain-agent.service", _AGENT_UNIT)
+            import hashlib
+            want = hashlib.sha256(blob).hexdigest()
             res = await engine.pve.agent_exec_sh(
                 vmid,
                 "cat /tmp/pentrain-agent.* > /tmp/pentrain-agent "
                 "&& rm -f /tmp/pentrain-agent.* "
+                f"&& [ \"$(sha256sum /tmp/pentrain-agent | cut -d' ' -f1)\" = {want} ] "
                 "&& install -m755 /tmp/pentrain-agent /usr/local/bin/pentrain-agent "
                 "&& systemctl daemon-reload "
                 "&& systemctl enable --now pentrain-agent "
