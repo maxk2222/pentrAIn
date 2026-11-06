@@ -129,7 +129,8 @@ async def _llm(db: AsyncSession, messages: list[dict],
 
 async def _tool_loop(db: AsyncSession, bs: BuilderSession,
                      ctx: builder_tools.ToolCtx, messages: list[dict],
-                     tools: list[dict], cap: int) -> str:
+                     tools: list[dict], cap: int,
+                     force_hint: str | None = None) -> str:
     """LLM ↔ tool ping-pong until a plain answer arrives (or cap hits).
 
     When the call cap is hit mid-exploration the model's last message is
@@ -155,8 +156,9 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
                     "content": "(tool budget for this turn exhausted)"})
             messages.append({"role": "user", "content":
                              "Tool budget for this turn is exhausted — "
-                             "reply now with what you have (emit the "
-                             "draft block if it was due)."})
+                             "reply now with what you have. "
+                             + (force_hint or
+                                "Emit the draft block if it was due.")})
             return (await _llm(db, messages)).get("content") or ""
         messages.append({"role": "assistant",
                          "content": msg.get("content") or "",
@@ -644,7 +646,10 @@ async def _diagnose(db: AsyncSession, bs: BuilderSession,
         db, "builder.tool_call_cap", 10) or 10)
     tools = builder_tools.tools_for_phase("verify",
                                           has_verify=s is not None)
-    reply = await _tool_loop(db, bs, ctx, messages, tools, cap)
+    reply = await _tool_loop(
+        db, bs, ctx, messages, tools, cap,
+        force_hint="Emit the ```verdict block and, for quest_bug/"
+                   "too_easy, the ```file:<path> patch blocks.")
     m = _VERDICT_RE.search(reply or "")
     if not m:
         return {"kind": "coach_limitation",
@@ -664,6 +669,19 @@ async def _diagnose(db: AsyncSession, bs: BuilderSession,
     if not patch_files and isinstance(patch, dict) \
             and isinstance(patch.get("files"), dict):
         patch_files = patch["files"]
+    # verdict demands a patch but none came — one tool-free retry asking
+    # only for the file blocks (cheap: ~1 LLM call, no tool roundtrip)
+    if verdict.get("kind") in ("quest_bug", "too_easy") \
+            and not patch_files:
+        retry = await _llm(db, [
+            *messages,
+            {"role": "assistant", "content": reply},
+            {"role": "user", "content":
+             "Verdict noted. Now emit ONLY the patch: one ```file:<path> "
+             "block per changed file, full contents verbatim."}])
+        patch_files = _extract_files(retry or "", _DRAFT_RE) or {}
+        if "__parse_error__" in patch_files:
+            patch_files = {}
     verdict["patch_files"] = patch_files
     return verdict
 
