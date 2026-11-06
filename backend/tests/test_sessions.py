@@ -573,6 +573,7 @@ async def test_resume_deploying_running_finalizes(db_with_packs):
     s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
     db.add(s)
     await db.commit()
+    sessions_svc._claim(s.id)
     await sessions_svc._resume(s.id)
     await db.refresh(s)
     assert s.state == "ready" and s.kali_vmid is not None
@@ -584,6 +585,7 @@ async def test_resume_deploying_absent_redeploys(db_with_packs):
     s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
     db.add(s)
     await db.commit()
+    sessions_svc._claim(s.id)
     await sessions_svc._resume(s.id)
     s = await _wait_state(s.id, "ready")
     assert s.kali_vmid is not None
@@ -595,6 +597,7 @@ async def test_resume_deploying_failed_marks_failed(db_with_packs):
     s = Session(quest_id="linux-t1-first-foothold", state="deploying", range_id="MO")
     db.add(s)
     await db.commit()
+    sessions_svc._claim(s.id)
     await sessions_svc._resume(s.id)
     await db.refresh(s)
     assert s.state == "failed" and "while backend was down" in (s.error or "")
@@ -605,6 +608,7 @@ async def test_resume_queued_deploys(db_with_packs):
     s = Session(quest_id="linux-t1-first-foothold", state="queued")
     db.add(s)
     await db.commit()
+    sessions_svc._claim(s.id)
     await sessions_svc._resume(s.id)
     s = await _wait_state(s.id, "ready")
     assert s.kali_vmid is not None
@@ -617,6 +621,7 @@ async def test_resume_resetting_running_hard_resets(db_with_packs):
     s = Session(quest_id="linux-t1-first-foothold", state="resetting", range_id="MO")
     db.add(s)
     await db.commit()
+    sessions_svc._claim(s.id)
     await sessions_svc._resume(s.id)
     s = await _wait_state(s.id, "ready")
     assert s.kali_vmid is not None
@@ -642,6 +647,7 @@ async def test_watch_range_tolerates_transient_errors(db_with_packs, monkeypatch
         return await real_status(range_id)
 
     monkeypatch.setattr(p, "status", flaky)
+    sessions_svc._claim(s.id)
     st = await sessions_svc._watch_range(db, engine, s)
     assert st.state.value == "running" and calls["n"] == 4
 
@@ -670,6 +676,7 @@ async def test_watch_range_fails_fast_on_absent(db_with_packs, monkeypatch):
 
     monkeypatch.setattr(p, "status", gone)
     monkeypatch.setattr(sessions_svc, "POLL_S", 0)
+    sessions_svc._claim(s.id)
     with pytest.raises(sessions_svc.SessionError, match="disappeared mid-deploy"):
         await sessions_svc._watch_range(db, engine, s)
 
@@ -687,6 +694,7 @@ async def test_deploy_waits_for_inflight_abort(db_with_packs, monkeypatch):
 
     monkeypatch.setattr(sessions_svc, "POLL_S", 0.05)
     task = asyncio.create_task(sessions_svc._deploy(s.id))
+    sessions_svc._tasks[s.id] = task
     await asyncio.sleep(0.2)
     # deploy is parked on the abort-wait — no new range pushed yet
     assert not task.done()

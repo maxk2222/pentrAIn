@@ -70,8 +70,33 @@ _create_lock = asyncio.Lock()  # serializes active-check + insert
 POLL_S = 10          # status poll interval during deploy (patched in tests)
 
 
+def _own(sid: int) -> bool:
+    """True while the running task is the tracked lifecycle task for sid.
+
+    reset/resume/abort paths displace each other by overwriting _tasks[sid];
+    the displaced coroutine must not keep mutating session state (s42: a
+    restart-resume _deploy raced a verify-triggered hard reset — the loser's
+    _finalize committed kali_vmid=None over the winner's). Lifecycle tasks
+    check this at stage boundaries; callers must only pop _tasks[sid] when
+    they still own it."""
+    return _tasks.get(sid) is asyncio.current_task()
+
+
+def _claim(sid: int) -> None:
+    """Mark the running task as sid's lifecycle owner — for tests and inline
+    callers that invoke _deploy/_reset/_resume directly instead of going
+    through the public spawn paths (which register _tasks[sid] themselves)."""
+    _tasks[sid] = asyncio.current_task()
+
+
 class SessionError(RuntimeError):
     pass
+
+
+class _Displaced(Exception):
+    """Internal — a lifecycle task hit an ownership checkpoint after a newer
+    task displaced it. Must NOT mark the session failed: the new owner is
+    managing state now."""
 
 
 # ---------------- helpers ----------------
@@ -443,6 +468,8 @@ async def create_session(db: AsyncSession, quest_id: str,
 
 async def _deploy(session_id: int) -> None:
     try:
+        if not _own(session_id):
+            return  # displaced by a newer reset/abort — don't double-deploy
         async with session_factory()() as db:
             session = await db.get(Session, session_id)
             if not session:
@@ -465,6 +492,8 @@ async def _deploy(session_id: int) -> None:
 
                 st = await _watch_range(db, engine, session)
                 await _finalize(db, engine, session, quest, st)
+            except _Displaced:
+                return  # newer owner manages this session now
             except Exception as e:
                 await log.aexception("deploy failed", session_id=session_id)
                 # str() of transport exceptions (httpx.ReadTimeout) is EMPTY —
@@ -474,7 +503,8 @@ async def _deploy(session_id: int) -> None:
                     await _append_log(db, session, f"[pentrain] deploy failed: {detail}")
                 await _set_state(db, session, SessionState.FAILED, error=detail)
     finally:
-        _tasks.pop(session_id, None)
+        if _own(session_id):
+            _tasks.pop(session_id, None)
 
 
 async def _wait_for_aborts(db: AsyncSession, sid: int) -> bool:
@@ -523,6 +553,8 @@ async def _watch_range(db: AsyncSession, engine, session: Session,
     consec_errors = 0
     consec_absent = 0
     for _ in range(45 * 6):
+        if not _own(session.id):
+            raise _Displaced()  # a newer lifecycle task owns this session
         try:
             st = await engine.provider.status(session.range_id or None)
         except Exception as e:
@@ -643,6 +675,8 @@ async def _finalize(db: AsyncSession, engine, session: Session,
                     quest: Quest, st) -> None:
     """RUNNING range → ready session. Idempotent — the resume path may re-run
     telemetry/flags/snapshot on a range that already passed through here."""
+    if not _own(session.id):
+        return  # displaced — a newer lifecycle task owns this session now
     await db.commit()
     kali = next((v for v in st.vms if v.role == "kali" or "kali" in v.name.lower()), None)
     session.kali_vmid = kali.vmid if kali else None
@@ -789,6 +823,9 @@ async def _resume(session_id: int) -> None:
                     await log.awarning("resume status probe failed — leaving state",
                                        session_id=session_id, error=str(e))
                     return
+                if not _own(session_id):
+                    return  # displaced while probing — a newer lifecycle
+                            # task owns the session now
                 await _append_log(
                     db, session,
                     f"[pentrain] backend restarted — resuming (range {st.state.value})")
@@ -814,11 +851,14 @@ async def _resume(session_id: int) -> None:
                                             seen_log_seed=st.log_tail or "")
                 if st.state == RangeState.RUNNING:
                     await _finalize(db, engine, session, quest, st)
+            except _Displaced:
+                return  # newer owner manages this session now
             except Exception as e:
                 await log.aexception("resume failed", session_id=session_id)
                 await _set_state(db, session, SessionState.FAILED, error=str(e))
     finally:
-        _tasks.pop(session_id, None)
+        if _own(session_id):
+            _tasks.pop(session_id, None)
 
 
 async def activate(db: AsyncSession, session_id: int) -> Session:
@@ -890,6 +930,8 @@ async def reset(db: AsyncSession, session_id: int, *, hard: bool = False) -> Ses
 
 
 async def _reset(session_id: int, hard: bool) -> None:
+    if not _own(session_id):
+        return  # displaced by a newer lifecycle task
     async with session_factory()() as db:
         session = await db.get(Session, session_id)
         quest = await db.get(Quest, session.quest_id) if session else None
@@ -898,6 +940,8 @@ async def _reset(session_id: int, hard: bool) -> None:
             if hard:
                 await _append_log(db, session, "[pentrain] hard reset: destroy + redeploy")
                 await engine.provider.destroy_range(session.range_id)
+                if not _own(session_id):
+                    return  # displaced during teardown — don't double-deploy
                 await _set_state(db, session, SessionState.QUEUED)
                 _tasks[session_id] = asyncio.create_task(_deploy(session_id))
                 return
@@ -944,6 +988,9 @@ async def _reset(session_id: int, hard: bool) -> None:
             # corrupt the next attempt's assistance+intervention scoring.
             # The Attempt row and observer CoachLessons deliberately survive:
             # one is the run's record, the other cross-run knowledge.
+            if not _own(session_id):
+                return  # displaced mid-rollback — the new owner wipes
+                        # per-attempt state itself
             for model in (FlagSubmission, HintUse, AssistUse, CoachAction,
                           CoachMessage, TelemetryEvent, CoachSessionState,
                           QuestCheckpoint):
@@ -964,6 +1011,8 @@ async def _reset(session_id: int, hard: bool) -> None:
             for line in await flags_svc.inject_flags(db, engine, session, quest_flags):
                 await _append_log(db, session, f"[pentrain] {line}")
             await _inject_llm_envs(db, engine, session, quest)
+            if not _own(session_id):
+                return  # displaced — don't flip a state the new owner manages
             await _set_state(db, session, SessionState.READY)
         except Exception as e:
             await log.aexception("reset failed", session_id=session_id)
@@ -1156,7 +1205,8 @@ async def _abort(session_id: int) -> None:
             await _set_state(db, session, SessionState.ABORTED,
                              ended_at=datetime.now(UTC).replace(tzinfo=None))
     finally:
-        _tasks.pop(session_id, None)
+        if _own(session_id):
+            _tasks.pop(session_id, None)
 
 
 async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: int,

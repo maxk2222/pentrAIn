@@ -3335,8 +3335,11 @@ class SessionCoach:
                        "offline)" if t in ("query_vuln_db", "rss_feed")
                        else "local tools (nmap/wordlists/guides)")
                 result = (f"denied: web — offline lab (kali_internet=false): "
-                          f"no uplink this session. Use {alt} or ask the "
-                          "operator to enable internet on the session.")
+                          f"no uplink this session. web_fetch runs from the "
+                          "coach host and cannot reach range targets either "
+                          "— fetch in-lab pages with exec_in_kali curl/wget "
+                          f"instead. Use {alt} or ask the operator to "
+                          "enable internet on the session.")
             elif t == "web_search":
                 q = str(a.get("query") or a.get("content") or "")
                 result = await self._web.search(

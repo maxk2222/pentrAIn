@@ -163,6 +163,7 @@ async def test_soft_reset_reapplies_internet_flag(db, monkeypatch):
                     kali_internet=flag)
         db.add(s)
         await db.commit()
+        sessions_svc._claim(s.id)
         await sessions_svc._reset(s.id, hard=False)
         assert want in calls
         await db.delete(s)
@@ -431,5 +432,6 @@ async def test_soft_reset_reapplies_testing_allow(db, monkeypatch):
     s = Session(quest_id="q", state="ready", range_id=rid)
     db.add(s)
     await db.commit()
+    sessions_svc._claim(s.id)
     await sessions_svc._reset(s.id, hard=False)
     assert calls and calls[-1] == ["192.0.2.10/32"]
