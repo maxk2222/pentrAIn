@@ -30,7 +30,7 @@ def target_names_for(quest) -> list[str]:
         n = v.get("name")
         if not n:
             continue
-        octet = v.get("ip_last_octet", 20 + i)
+        octet = v.get("ip_last_octet") or 20 + i
         pins += [f"pentrain-{n}:{octet}", f"{n}:{octet}"]
     return pins
 

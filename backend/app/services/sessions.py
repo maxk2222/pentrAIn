@@ -172,7 +172,7 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
             "hostname": f"{{{{ range_id }}}}-{v['name'].upper()[:14]}",
             "template": v["template"],
             "vlan": v.get("vlan", 10),
-            "ip_last_octet": v.get("ip_last_octet", 20 + i),
+            "ip_last_octet": v.get("ip_last_octet") or 20 + i,
             "ram_gb": ram_gb,
             "ram_min_gb": v.get("ram_min_gb") or max(1, ram_gb // 2),
             "cpus": v.get("cpus", 2),
@@ -982,7 +982,7 @@ def _range_hosts_script(quest: Quest | None) -> str | None:
         name = v.get("name")
         if not name:
             continue
-        octet = v.get("ip_last_octet", 20 + i)
+        octet = v.get("ip_last_octet") or 20 + i
         pins += [f"{name}:{octet}", f"pentrain-{name}:{octet}"]
     names = " ".join(pins)
     # pure ASCII only — guest-file-write dies on wide chars inside pvedaemon
