@@ -434,9 +434,46 @@ async def _materialize(db: AsyncSession, bs: BuilderSession,
         if verrs:
             shutil.rmtree(root, ignore_errors=True)
             return verrs, qid
+        verrs = _surface_errors(spec)
+        if verrs:
+            shutil.rmtree(root, ignore_errors=True)
+            return verrs, qid
     await packs_svc.sync_packs(db, get_config().content_dir,
                                extra_dirs=[get_config().generated_packs_dir])
     return [], qid
+
+
+# roles that provide infrastructure only — a flag target running nothing
+# else has literally nothing to attack (bare docker engine is NOT a vuln)
+_INFRA_ROLES = {"pentrain_target_agent", "pentrain_kali_agent",
+                "pentrain_research_kit", "pentrain_docker_host"}
+
+
+def _surface_errors(spec) -> list[str]:
+    """Flag targets need a reachable attack surface: a service role or
+    setup.exec/setup.files. Infra-only VMs leave the coach brute-forcing
+    ssh on a box with no vuln (observed live: 40+ wasted turns)."""
+    vms = {v.name: v for v in spec.topology.vms}
+    out: list[str] = []
+    targets: set[str] = set()
+    for f in spec.flags:
+        if f.kind == "file" and f.vm:
+            targets.add(f.vm)
+        elif f.kind == "command" and (f.command or {}).get("vm"):
+            targets.add(str(f.command["vm"]))
+    for name in targets - {"kali"}:
+        v = vms.get(name)
+        if v is None:
+            continue
+        has_setup = bool(v.setup and (v.setup.exec or v.setup.files))
+        svc_roles = [r for r in (v.roles or []) if r not in _INFRA_ROLES]
+        if not has_setup and not svc_roles:
+            out.append(
+                f"vm '{name}' carries a flag but has no attack surface — "
+                f"only infra roles ({', '.join(v.roles or ['none'])}); "
+                "add a service role (list_roles/read_role) or "
+                "setup.exec/setup.files that starts the vulnerable app")
+    return out
 
 
 def _roles_dir() -> Path:

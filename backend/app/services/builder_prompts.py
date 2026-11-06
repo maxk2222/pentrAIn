@@ -60,6 +60,11 @@ apiVersion: pentrain/v1
   Only use
   roles from list_roles — you CANNOT create new ansible roles (the PVE
   host is unreachable from here).
+- Every flag-carrying VM needs a REACHABLE attack surface: a service
+  role (dvwa, web app, k8s, etc.) or setup.exec/setup.files that starts
+  the vulnerable service. Infra roles alone (pentrain_target_agent,
+  pentrain_docker_host) expose NOTHING to exploit — a quest whose app VM
+  runs only docker-engine has no SQLi/web surface and cannot be solved.
 - To customize a VM beyond existing roles use the per-vm `setup:` block —
   it runs on the deployed VM via qemu-guest-agent BEFORE flags/snapshot:
     setup:
