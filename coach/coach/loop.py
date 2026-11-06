@@ -1809,6 +1809,17 @@ class SessionCoach:
             # token cost; lookup_guide still gives the full body.
             body = guides.load_modules().get(mid)
             recipe = (body.body[:1800] if body else "")
+            if body:
+                # pin the module's key line into caps so it re-renders
+                # EVERY turn — the 27B applies a recipe for ~3 turns then
+                # forgets it (s44: used -L once, dropped the -b jar again)
+                key = next(
+                    (ln.strip().lstrip("-*# ").strip()
+                     for ln in body.body.splitlines()
+                     if ln.strip().startswith(("-", "*"))
+                     and len(ln.strip()) > 10), "")
+                if key:
+                    self.facts._merge_caps([f"{mid}: {key}"])
             return (f"\nGUIDE — module '{mid}' covers this situation.\n"
                     f"{recipe}\n"
                     f"(full text: lookup_guide(\"{mid}\"))")
