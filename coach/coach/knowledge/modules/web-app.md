@@ -1,9 +1,7 @@
 ---
 id: web-app
 title: Web-app sessions — cookie jar, CSRF, 302-success, LFI methodology
-triggers: [csrf, user_token, ?page=, php://filter, form:, login form,
-           login, signin, sign in, password=, Set-Cookie, PHPSESSID, 302,
-           session]
+triggers: [csrf, user_token, ?page=, php://filter, form:, login form, login, signin, sign in, password=, Set-Cookie, PHPSESSID, 302, session]
 ---
 
 ## Sessions & logins

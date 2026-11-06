@@ -54,3 +54,26 @@ def test_triggers_for_maps_observations():
     # deduped — a module fires once per call even with multiple keywords
     hits = guides.triggers_for(".git/ .git/logs/HEAD refs/heads/master")
     assert hits.count("git-leak") == 1
+
+
+def test_web_app_triggered_by_login_markers():
+    """s44: a login POST answered by an empty 302 body produced no output
+    to match — the trigger must fire on the command itself."""
+    cmd = ("curl -s -c /tmp/jar -d 'username=admin&password=x' "
+           "http://target/")
+    assert "web-app" in guides.triggers_for(cmd + "\n")
+    assert "web-app" in guides.triggers_for("HTTP/1.1 302 Found\nSet-Cookie: PHPSESSID=abc")
+    assert "web-app" in guides.triggers_for("GET /login HTTP/1.1")
+
+
+def test_module_triggers_parse_fully():
+    """The front-matter parser is line-based: a trigger list wrapped over
+    multiple lines silently drops every line after the first and leaves
+    a literal '[' on the first item. Guard the packaged modules."""
+    for m in guides.load_modules().values():
+        assert m.triggers, m.id
+        for t in m.triggers:
+            assert not t.startswith("["), (m.id, t)
+            assert not t.endswith("]"), (m.id, t)
+            assert not t.endswith(","), (m.id, t)
+    assert "password=" in guides.load_modules()["web-app"].triggers
