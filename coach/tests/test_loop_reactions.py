@@ -2702,6 +2702,39 @@ async def test_cookie_jar_note_on_redirect_without_send():
     assert "jar" not in res
 
 
+async def test_cookie_jar_note_single_label_host_drop():
+    """s55 live bug: on single-label LAN hosts (portal01) curl+libpsl
+    silently drops jar cookies on `-b <file>` — the request goes out with
+    no Cookie header and cross-command session chaining never works."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    # jar-read without same-command jar-write on single-label host → warn
+    _d, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -s -b /tmp/jar http://portal01/ | grep flag"},
+        proactive=True)
+    assert "NOTE:" in res and "PHPSESSID" in res
+    # dotted host → no warning (PSL-sane domains keep jar cookies)
+    coach2, _ = _coach()
+    coach2.state.autonomy_level = 4
+    coach2.ctx["session"]["autonomy_level"] = 4
+    _d, res = await coach2._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -s -b /tmp/jar http://portal.example.com/"},
+        proactive=True)
+    assert "NOTE:" not in res
+    # -c + -b in the same command → in-memory cookies carry, no warning
+    coach3, _ = _coach()
+    coach3.state.autonomy_level = 4
+    coach3.ctx["session"]["autonomy_level"] = 4
+    _d, res = await coach3._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -sL -c /tmp/jar -b /tmp/jar -d 'u=a' http://portal01/"},
+        proactive=True)
+    assert "NOTE:" not in res
+
+
 async def test_turn_effort_threads_to_llm_call():
     """adaptive effort: chat replies run 'low', routine proactive turns
     'medium', stage-2 escalations keep 'high' — otherwise a local model

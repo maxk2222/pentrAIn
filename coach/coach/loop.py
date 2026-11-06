@@ -1931,6 +1931,20 @@ class SessionCoach:
             return ("\nNOTE: -c writes the cookie jar but never sends it "
                     "— add -b <jar> on the SAME request so the session "
                     "actually travels.")
+        # s55 live bug: `-b <jarfile>` on a single-label LAN host (portal01,
+        # sqli01 — no dot) makes curl+libpsl silently drop the cookie, so a
+        # login chained across SEPARATE commands never reaches the server.
+        # In-process (-sL) and explicit `-b name=val` are unaffected.
+        jar_path = re.search(r"(?:^|\s)-[a-zA-Z]*b\s+(/[\w./-]+)", cmd)
+        host = re.search(r"https?://([A-Za-z0-9-]+)(?:[:/]|$)", cmd)
+        if (jar_path and not has_c and host and "." not in host.group(1)
+                and "jar-drop" not in noted):
+            noted.add("jar-drop")
+            return ("\nNOTE: -b " + jar_path.group(1) + " will NOT send the "
+                    "cookie — curl+libpsl drops jar cookies for single-label "
+                    "hosts like " + host.group(1) + ". Keep it in one "
+                    "process: curl -sL -c jar -b jar -d '…' URL — or send "
+                    "it explicitly: -b 'PHPSESSID=<sid>'.")
         return ""
 
     def _lookup_field_note(self, q: str, window: str | None) -> str | None:

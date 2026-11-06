@@ -6,9 +6,16 @@ triggers: [csrf, user_token, ?page=, php://filter, form:, login form, login, sig
 
 ## Sessions & logins
 
-- Session state lives in ONE cookie jar: `curl -c /tmp/jar -b /tmp/jar`
-  on EVERY request — a fresh `-c` file per attempt discards the login you
-  just did. Verify the login BEFORE exploiting: fetch a protected page
+- Single-label LAN hosts (portal01, sqli01 — no dot) BREAK `curl -b jar`
+  across processes: curl+libpsl silently drops jar cookies, the request
+  goes out with NO Cookie header and you re-derive a working login forever.
+  Either keep the whole flow in ONE process
+  (`curl -sL -c /tmp/jar -b /tmp/jar -d '…' URL` — in-memory cookies follow
+  the 302 fine), or skip the jar and send the cookie explicitly:
+  `curl -b "PHPSESSID=<sid>" URL`. Diagnostic: `curl -sv -b jar URL`
+  shows no `> Cookie:` line when the jar was dropped. Same-session
+  `-c jar` writes still work — only cross-process `-b jar` reads lose it.
+- Verify the login BEFORE exploiting: fetch a protected page
   (`/index.php`), a 302 back to login means the POST failed.
 - Login forms often carry a CSRF token — a silent auth failure (every
   response is a redirect/empty page despite correct creds) usually means a
