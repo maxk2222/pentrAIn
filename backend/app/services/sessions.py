@@ -152,16 +152,20 @@ def compile_topology(quest: Quest, kali_template: str | None = None) -> dict:
     topo = quest.topology or {}
     vms: list[dict] = []
     kali = topo.get("kali") or {}
+    # the kali worker is platform infrastructure, not quest content — a
+    # starved spec boots too slowly for the deploy-time QGA lookup
+    kali_ram = max(4, int(kali.get("ram_gb", 6) or 6))
+    kali_cpus = max(2, int(kali.get("cpus", 4) or 4))
     vms.append({
         "vm_name": "{{ range_id }}-kali",
         "hostname": "{{ range_id }}-KALI",
         "template": kali_template or kali.get("template", "kali-x64-desktop-template"),
         "vlan": 10,
         "ip_last_octet": 5,
-        "ram_gb": kali.get("ram_gb", 6),
-        "ram_min_gb": kali.get("ram_min_gb")
-                      or max(1, kali.get("ram_gb", 6) // 2),
-        "cpus": kali.get("cpus", 4),
+        "ram_gb": kali_ram,
+        "ram_min_gb": min(kali_ram - 1, int(kali.get("ram_min_gb")
+                          or kali_ram // 2)),
+        "cpus": kali_cpus,
         "linux": True,
         "roles": ["pentrain_kali_agent", "pentrain_research_kit",
                   *(kali.get("roles") or [])],
