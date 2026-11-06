@@ -1799,6 +1799,9 @@ class SessionCoach:
             if hkey in self._guides_hinted:
                 continue
             self._guides_hinted.add(hkey)
+            asyncio.create_task(log.ainfo(
+                "guide hinted", module=mid, window=window or "main",
+                session=self.sid))
             return (f"\nGUIDE: module '{mid}' covers this situation — "
                     f"lookup_guide(\"{mid}\") pulls the recipe "
                     "(verbatim commands).")

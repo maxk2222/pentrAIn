@@ -327,6 +327,14 @@ class ObserverService:
             return
         ctx = await self._ctx(w)
         quest = ctx.get("quest") or {}
+        flags = ctx.get("flags") or []
+        flag_line = ""
+        done = [f["key"] for f in flags if f.get("solved")]
+        open_ = [f["key"] for f in flags if not f.get("solved")]
+        if flags:
+            flag_line = (f"flags: {len(done)}/{len(flags)} solved "
+                         f"({', '.join(done) or 'none'} done; "
+                         f"{', '.join(open_) or 'none'} REMAINING)\n")
         msgs = [{"role": "system", "content": (
             "You observe an autonomous pentest coach that is STUCK — repeated "
             "denials or tool loops with no progress. Propose ONE concrete "
@@ -335,9 +343,10 @@ class ObserverService:
             "(never the flag answer), no invented paths or creds, plain "
             "text only (no markdown). The FACTS snapshot lists settled dead "
             "ends (missing:, denied:, filtered:, blocked:) — a tip that "
-            "repeats one is worse than no tip.")}, {"role": "user", "content": (
+            "repeats one is worse than no tip. The flags line is ground "
+            "truth: never call a quest solved while flags REMAIN open.")}, {"role": "user", "content": (
             f"quest: {quest.get('title','?')} track={quest.get('track','?')} "
-            f"tier={quest.get('tier','?')}\n\n"
+            f"tier={quest.get('tier','?')}\n{flag_line}\n"
             f"recent actions (newest last):\n{self._window_text(list(w.window))}"
             f"{self._facts_snapshot(w.sid)}")}]
         w.analyses += 1
@@ -350,6 +359,16 @@ class ObserverService:
             return
         text = self._sanitize(text, advisory=True)
         if len(text) < 20:
+            return
+        # ground-truth guard: a "already solved / nothing left" tip while
+        # flags are still open is actively harmful (s44: model inferred
+        # done from one accepted flag and told the coach to stop)
+        if (open_ and re.search(
+                r"already solved|quest.{0,15}solved|no further action|"
+                r"all flags|fully (solved|complete)|nothing left|"
+                r"already (captured|completed)", text, re.IGNORECASE)):
+            await log.awarning("observer advisory dropped: premature-solved",
+                               session=w.sid, text=text[:120])
             return
         await self.client.observer_hint(w.sid, text)
         await self.client.log_action(w.sid, "observe_hint", {"text": text[:300]},
