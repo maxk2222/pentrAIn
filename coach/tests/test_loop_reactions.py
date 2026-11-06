@@ -2676,6 +2676,32 @@ async def test_cred_spray_note_after_two_failed_hosts():
     assert "host-scoped" not in res
 
 
+async def test_cookie_jar_note_on_redirect_without_send():
+    """s44: ~40 turns of `curl -sL` on a login POST — the 302 sets the
+    session on hop one, the cookie-less follow lands back at login.
+    Deterministic advisory, once per rule per window."""
+    coach, _ = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    _d, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -sL http://app/ --data-urlencode \"username=a\" "
+                    "--data-urlencode \"password=x\""}, proactive=True)
+    assert "NOTE:" in res and "jar" in res
+    # once per window — the same shape doesn't nag twice
+    _d, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -sL http://app/ --data-urlencode \"username=b\""},
+        proactive=True)
+    assert "session cookie" not in res
+    # correct usage is silent
+    _d, res = await coach._dispatch(
+        {"type": "exec_in_kali",
+         "command": "curl -sL -c /tmp/jar -b /tmp/jar http://app/"},
+        proactive=True)
+    assert "jar" not in res
+
+
 async def test_turn_effort_threads_to_llm_call():
     """adaptive effort: chat replies run 'low', routine proactive turns
     'medium', stage-2 escalations keep 'high' — otherwise a local model

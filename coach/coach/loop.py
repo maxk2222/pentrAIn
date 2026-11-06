@@ -316,6 +316,7 @@ class SessionCoach:
         # cred-spray advisory: (secret, host) pairs already noted — the hint
         # is pop-once per target so password-reuse tries stay legitimate
         self._spray_noted: set[tuple[str, str]] = set()
+        self._curl_noted: dict[str, set[str]] = {}
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -1904,6 +1905,34 @@ class SessionCoach:
                         "Rotate credentials instead of spraying.")
         return ""
 
+    def _cookie_jar_note(self, a: dict, window: str | None) -> str:
+        """Deterministic curl session bug: `-L` (or no cookie flags at all)
+        on a POST/login means the redirect chain runs unauthenticated —
+        the 302 sets the cookie, the follow never sends it (s44: ~40
+        turns of -sL without -b jar). Also `-c` alone saves but never
+        sends. Advisory, pop-once per rule per window."""
+        if a.get("type") not in ("exec_in_kali", "type_in_pane"):
+            return ""
+        cmd = str(a.get("command") or a.get("text") or "")
+        if "curl" not in cmd:
+            return ""
+        has_b = re.search(r"(?:^|\s)-[a-zA-Z]*b(?:[\s/=]|$)|--cookie\b", cmd)
+        has_c = re.search(r"(?:^|\s)-[a-zA-Z]*c(?:[\s/=]|$)|--cookie-jar\b", cmd)
+        has_L = re.search(r"(?:^|\s)-[a-zA-Z]*L(?:\s|$)|--location\b", cmd)
+        noted = self._curl_noted.setdefault(window or "main", set())
+        if has_L and not has_b and "cookie" not in noted:
+            noted.add("cookie")
+            return ("\nNOTE: -L followed the redirect but no cookie was "
+                    "ever sent — a 302 login sets the session on the FIRST "
+                    "hop, the follow needs it on the SECOND. One jar does "
+                    "both: curl -sL -c /tmp/jar -b /tmp/jar …")
+        if has_c and not has_b and "save-only" not in noted:
+            noted.add("save-only")
+            return ("\nNOTE: -c writes the cookie jar but never sends it "
+                    "— add -b <jar> on the SAME request so the session "
+                    "actually travels.")
+        return ""
+
     def _lookup_field_note(self, q: str, window: str | None) -> str | None:
         """Pull-side of the observer's knowledge: a field note whose tags or
         text overlap the query — labeled, capped, hit-tracked like a push."""
@@ -1991,6 +2020,8 @@ class SessionCoach:
         # cannot scroll past unnoticed (pop-once, bounded)
         if spray := self._cred_spray_note(a):
             result += spray
+        if jar := self._cookie_jar_note(a, window):
+            result += jar
         result = self._drain_observer_hints(result, a, window)
         return spoke, result
 
