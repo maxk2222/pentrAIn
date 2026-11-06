@@ -398,6 +398,15 @@ async def _materialize(db: AsyncSession, bs: BuilderSession,
                 or rel.startswith("/")):
             errors.append(f"unsafe file path '{p}'")
             continue
+        # only the five pack files exist — anything else (e.g. invented
+        # pack-local role overrides) is silently dead content; reject so
+        # the model reroutes into setup.exec/setup.files instead
+        if rel not in _PACK_FILES:
+            errors.append(
+                f"'{rel}' is not a pack file — quests support only "
+                f"{', '.join(sorted(_PACK_FILES))}; put VM content in "
+                "setup.exec/setup.files")
+            continue
         clean[rel] = "" if content is None else str(content)
     if errors:
         return errors, qid or None
@@ -442,6 +451,10 @@ async def _materialize(db: AsyncSession, bs: BuilderSession,
                                extra_dirs=[get_config().generated_packs_dir])
     return [], qid
 
+
+# the complete pack contract — curated packs carry exactly these files
+_PACK_FILES = {"quest.yaml", "briefing.md", "coach_context.md",
+               "defense.md", "cheatsheet.md"}
 
 # roles that provide infrastructure only — a flag target running nothing
 # else has literally nothing to attack (bare docker engine is NOT a vuln)
