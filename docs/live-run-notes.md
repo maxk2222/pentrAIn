@@ -559,3 +559,36 @@ Timeline of the stuck loop and the fixes it produced:
   stale dead-ends (seen s32: 'unreachable:10.1.10.27@kali').
 - Duplicate flag_submissions rows observed for tool-abuse in one
   session — flag idempotency worth a look.
+
+## QUEST BUILDER PIPELINE — LIVE TEST (bs1, web-sqli-bypass)
+- Draft transport: JSON-in-fence failed (27B cannot escape YAML/MD as
+  JSON strings). file:path blocks work — one fenced block per file.
+- Deploy-failure path was a dead end: create_session exceptions went
+  straight to 'failed' with no diagnosis. Now deploy_failed feeds the
+  diagnose->patch->retry loop; it correctly classified the invented
+  template name as quest_bug and patched it to debian-12-x64-server.
+- list_vm_templates added — drafts were inventing template names;
+  list_templates (role asset trees) was too ambiguous a name.
+- Tool-call fixation: diagnose re-read the same quest.yaml ~12x. Fixes:
+  identical-call dedupe returns a stub from the 2nd call, and the 4th
+  identical call force-exits to the answer early (saves ~10min vs the
+  full 16-call cap). Phase-aware force hints ask for verdict+patch
+  blocks in diagnose, draft blocks in chat.
+- Missing-verdict and missing-patch replies each get ONE tool-free
+  retry; inconclusive diagnoses log the reply tail for debugging.
+- Engine hardening found via generated specs: ip_last_octet:null now
+  defaults like an absent key; ram_min_gb clamps below ram_gb (PVE
+  rejects balloon min>=max); KALI WORKER floored at 4G/2cpu — a 2G/1cpu
+  spec booted too slowly for the deploy-time QGA interface lookup and
+  failed deterministically (looked like a flake, was a resource floor).
+- DATA BUG: coach_lessons.evidence rows written via raw sqlite (not the
+  ORM) held a non-JSON string -> every CoachLesson row-load threw
+  JSONDecodeError -> coach context 500 -> coach could never attach.
+  Fixed in place with json_quote. Lesson: JSON columns break silently
+  on manual DB writes — go through the ORM/API.
+- SURFACE VALIDATION (big one): the model's draft put only
+  pentrain_docker_host on the flag VM = bare docker engine, nothing
+  reachable. Coach burned 40+ turns brute-forcing ssh on a box with no
+  service. Builder now validates flag targets carry a service role or
+  setup.exec/files; prompt teaches the same rule. Second draft added
+  pentrain_dvwa -> real SQLi surface.
