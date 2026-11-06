@@ -665,9 +665,21 @@ async def _diagnose(db: AsyncSession, bs: BuilderSession,
                    "too_easy, the ```file:<path> patch blocks.")
     m = _VERDICT_RE.search(reply or "")
     if not m:
+        # the forced reply rambled without a verdict — one tool-free
+        # retry asking for ONLY the verdict block
+        retry = (await _llm(db, [
+            *messages,
+            {"role": "assistant", "content": reply},
+            {"role": "user", "content":
+             "Emit ONLY the ```verdict JSON block now — kind, rationale, "
+             "patch."}])).get("content") or ""
+        m = _VERDICT_RE.search(retry)
+        if m:
+            reply = retry
+    if not m:
         return {"kind": "coach_limitation",
                 "rationale": "diagnosis produced no verdict block — "
-                             "treating as inconclusive/coach-side"}
+                             f"reply tail: {(reply or '')[-300:]}"}
     try:
         verdict = json.loads(m.group(1))
     except json.JSONDecodeError:
