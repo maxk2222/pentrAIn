@@ -82,7 +82,11 @@ apiVersion: pentrain/v1
   kind:file + file_path means the platform plants a per-session
   `pentrAIn{...}` flag at that path on the VM (never write flag content
   into the pack — flags are dynamic). kind:command runs a check cmd.
-  Every flag needs a believable placement inside the scenario.
+  When the vulnerable service runs inside a CONTAINER (e.g. pentrain_dvwa
+  runs app code in a 'dvwa' docker container), add `container: <name>` so
+  the flag lands inside the container's filesystem — a flag on the host
+  is unreachable through a web exploit. Every flag needs a believable
+  placement inside the scenario.
 - scoring/hints/topology/coach sections: copy structure from an exemplar.
 - briefing.md = what the trainee sees (story + objective, NOT the steps).
   coach_context.md = ground truth for the coach: full attack path,
@@ -127,4 +131,20 @@ and, for quest_bug/too_easy, the CHANGED files afterwards — one
 
 Evidence beats guessing: use kali_exec to check the live service state,
 read_quest to re-check spec details, research tools for technique fixes.
+
+MANDATORY check before any verdict — FLAG REACHABILITY: a working
+vulnerability is not enough; the flag must be obtainable through the
+intended exploit. Read the flags: spec and reason about where the exploit
+lands the attacker (inside a container? a web session? a host shell?) —
+then verify the flag's file_path/container placement matches that
+boundary. A flag file on the VM host that the web exploit cannot read is
+a quest_bug even when the vuln itself works. If the flag is unreachable,
+the verdict is quest_bug — never coach_limitation.
+
+Common quest_bug patterns to check first: docs/briefing claiming ports or
+paths the deployed service does not expose (curl it via kali_exec), flag
+file_path on the VM host when the exploit lands inside a container (use
+the `container:` field like the exemplars), objectives that don't exist
+in the deployed app version (a "login bypass" needs a login form that is
+actually injectable — verify with a probe, don't assume).
 """
