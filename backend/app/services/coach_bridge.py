@@ -35,6 +35,7 @@ from ..models.domain import (
     Track,
     UserProfile,
 )
+from . import agent_link
 from .engine import get_engine
 from .events import bus, publish_session
 
@@ -634,6 +635,23 @@ async def exec_in_kali(db: AsyncSession, session_id: int, command: str,
     if not session.kali_vmid:
         return {"error": "no kali vmid", "status": "error"}
 
+    # fast path: rust pentrain-agent over its exec-channel WS (local tmux,
+    # ~50ms probes vs QGA HTTPS round-trips). Falls back to the agent-exec
+    # path on any transport failure — the result dicts are identical.
+    if agent_link.is_online(session_id):
+        res = await agent_link.request(
+            session_id,
+            {"t": "exec", "cmd": command, "window": window,
+             "timeout_s": 60},
+            timeout_s=75)
+        if res is not None and res.get("status") != "error":
+            args = {"command": command}
+            if window:
+                args["window"] = window
+            status = ("ok" if res.get("exitcode") == 0 else "error")
+            await record_action(db, session_id, "exec_in_kali", args, res,
+                                status=status)
+            return {**res, "status": status}
     engine = await get_engine(db)
     try:
         res = await exec_visible_in_kali(engine, session.kali_vmid, command,
@@ -673,6 +691,19 @@ async def type_in_pane(db: AsyncSession, session_id: int, text: str,
         return {"error": "autonomy level too low", "status": "denied"}
     if not session.kali_vmid:
         return {"error": "no kali vmid", "status": "error"}
+    if agent_link.is_online(session_id):
+        res = await agent_link.request(
+            session_id,
+            {"t": "type", "text": text, "window": window},
+            timeout_s=20)
+        if res is not None and res.get("status") != "error":
+            t_args2: dict = {"text": text[:80]}
+            if window:
+                t_args2["window"] = window
+            await record_action(db, session_id, "type_in_pane", t_args2,
+                                {"out": str(res.get("out") or "")[-600:]},
+                                status="ok")
+            return {**res, "status": "ok"}
     engine = await get_engine(db)
     try:
         # remember where the cursor sits BEFORE typing — the typed line
@@ -751,6 +782,16 @@ async def peek_pane(db: AsyncSession, session_id: int,
         return {"error": "autonomy level too low", "status": "denied"}
     if not session.kali_vmid:
         return {"error": "no kali vmid", "status": "error"}
+    if agent_link.is_online(session_id):
+        res = await agent_link.request(
+            session_id, {"t": "peek", "window": window}, timeout_s=20)
+        if res is not None and res.get("status") != "error":
+            await record_action(db, session_id, "peek_pane",
+                                {"window": window or ""},
+                                {"out": str(res.get("out") or "")[-400:],
+                                 "fg": res.get("current_command") or ""},
+                                status="ok")
+            return res
     engine = await get_engine(db)
     try:
         target = _pane_target(window)

@@ -1,0 +1,25 @@
+[package]
+name = "pentrain-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Kali/target guest agent: telemetry shipper, browser-terminal channel, coach exec channel"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+# ws:// only — the lab API is plain http on the isolated range network;
+# pulling TLS (ring/openssl) breaks the musl-static build for no benefit.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+ureq = { version = "2", default-features = false, features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"

@@ -144,10 +144,22 @@ async def check_command_flag(db: AsyncSession, engine, session: Session, flag: F
         return False
     if spec.get("container"):
         cmd = f"docker exec {spec['container']} /bin/sh -c {_shq(cmd)}"
-    try:
-        res = await engine.pve.agent_exec_sh(vmid, cmd)
-    except Exception:
-        return None
+    res = None
+    if vmid == session.kali_vmid:
+        # raw exec over the rust agent's WS — no tmux visibility needed for
+        # headless greps; ~50ms vs the QGA round-trip (review quests chain
+        # several of these per check_flag).
+        from . import agent_link
+        res = await agent_link.request(
+            session.id, {"t": "raw", "cmd": cmd, "timeout_s": 30},
+            timeout_s=35)
+        if res is not None and "exitcode" not in res:
+            res = None  # transport/agent error → QGA fallback
+    if res is None:
+        try:
+            res = await engine.pve.agent_exec_sh(vmid, cmd)
+        except Exception:
+            return None
     expect = spec.get("expect")
     if expect is None:
         return res.get("exitcode") == 0

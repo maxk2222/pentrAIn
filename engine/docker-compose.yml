@@ -5,7 +5,10 @@ name: pentrain
 services:
   backend:
     build:
-      context: ../backend
+      # repo-root context: the rust guest agent (agent/) is built in a
+      # Dockerfile stage and ships inside this image for QGA provisioning
+      context: ..
+      dockerfile: backend/Dockerfile
     env_file: .env
     environment:
       PENTRAIN_DATABASE_URL: sqlite+aiosqlite:////data/pentrain.db

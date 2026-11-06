@@ -129,6 +129,16 @@ async def terminal_kali_ws(websocket: WebSocket, session_id: int,
                         websocket.query_params.get("token"))
 
 
+@router.websocket("/api/agent/kali/{session_id}")
+async def agent_kali_ws(websocket: WebSocket, session_id: int,
+                        db: AsyncSession = Depends(get_db)):
+    """Exec-channel socket — outbound dial from the rust pentrain-agent.
+    Auth: session telemetry_token (same as terminal/telemetry paths)."""
+    from ..services.agent_link import agent_ws
+    await agent_ws(db, websocket, session_id,
+                   websocket.query_params.get("token"))
+
+
 @router.websocket("/api/terminal/{session_id}/{chan_id}")
 async def terminal_user_ws(websocket: WebSocket, session_id: int,
                            chan_id: str, db: AsyncSession = Depends(get_db)):

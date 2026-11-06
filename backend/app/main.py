@@ -1,4 +1,5 @@
 """pentrAIn backend — FastAPI app factory."""
+
 from __future__ import annotations
 
 import asyncio
@@ -29,10 +30,12 @@ async def lifespan(app: FastAPI):
     cfg = get_config()
     if cfg.app_secret == "dev-secret-change-me":
         await log.awarning(
-            "PENTRAIN_APP_SECRET is unset — flag secrets + auth tokens are forgeable. "
-            "Set it in production.")
+            "PENTRAIN_APP_SECRET is unset — flag secrets + auth tokens are forgeable. Set it in production."
+        )
     if cfg.coach_service_token == "dev-coach-token":
-        await log.awarning("PENTRAIN_COACH_SERVICE_TOKEN is unset — coach API is open to anyone on the network")
+        await log.awarning(
+            "PENTRAIN_COACH_SERVICE_TOKEN is unset — coach API is open to anyone on the network"
+        )
     init_engine()
     await create_all()
     # load quest packs into DB at boot — curated root plus the writable
@@ -40,26 +43,23 @@ async def lifespan(app: FastAPI):
     async with session_factory()() as db:
         try:
             gen_dir = Path(cfg.generated_packs_dir)
-            await asyncio.to_thread(
-                gen_dir.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(gen_dir.mkdir, parents=True, exist_ok=True)
             extra_dirs = [gen_dir]
         except Exception as e:
             # e.g. dev checkout without the /data volume — generated packs
             # are optional, curated sync must still run
-            await log.awarning("generated packs dir unavailable",
-                               error=str(e))
+            await log.awarning("generated packs dir unavailable", error=str(e))
             extra_dirs = []
         try:
-            res = await packs_svc.sync_packs(
-                db, cfg.content_dir, extra_dirs=extra_dirs)
+            res = await packs_svc.sync_packs(db, cfg.content_dir, extra_dirs=extra_dirs)
             await log.ainfo("packs synced", **res)
         except Exception as e:
             await log.awarning("pack sync failed", error=str(e))
         # repo-shipped field notes → coach_lessons (idempotent seed)
         try:
             from .services import coach_bridge as cb_svc
-            n = await cb_svc.seed_lessons(
-                db, Path(cfg.content_dir).parent / "knowledge" / "lessons.json")
+
+            n = await cb_svc.seed_lessons(db, Path(cfg.content_dir).parent / "knowledge" / "lessons.json")
             if n:
                 await log.ainfo("lessons seeded", count=n)
         except Exception as e:
@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
         # builder verify loops die with the process — never claim verified
         try:
             from .services import builder as builder_svc
+
             n = await builder_svc.rescue_incomplete(db)
             if n:
                 await log.ainfo("builder verify interrupted", count=n)
@@ -75,15 +76,20 @@ async def lifespan(app: FastAPI):
     # reattach deploy/reset watchers orphaned by the previous process —
     # ludus deploys server-side, so the range usually just kept going
     from .services import sessions as sessions_svc
+
     try:
         await sessions_svc.resume_inflight()
     except Exception as e:
         await log.awarning("inflight session resume failed", error=str(e))
+    from .services import agent_link
     from .services import terminal as terminal_svc
+
     terminal_svc.start()
+    agent_link.start()
     yield
     # shutdown: close engine http clients (live + retired) so none leak
     from .services import engine as engine_svc
+
     await engine_svc.shutdown()
 
 

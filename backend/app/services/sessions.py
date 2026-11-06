@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import ipaddress
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 import structlog
@@ -726,6 +727,7 @@ async def _finalize(db: AsyncSession, engine, session: Session,
     if session.kali_vmid:
         await _configure_telemetry(db, engine, session, quest)
         await _pin_range_hosts(db, engine, session, quest)
+        await _provision_agent(db, engine, session, quest)
         # live tool inventory for the coach — stops "command not found"
         # discoveries mid-run. Non-fatal: QGA may be late on slow boots.
         try:
@@ -1077,15 +1079,85 @@ async def _configure_telemetry(db: AsyncSession, engine, session: Session,
             continue
         conf = (f"TOKEN={session.telemetry_token}\nSESSION={session.id}\n"
                 f"HOST={host}\nAPI={api_url}\n"
-                # SHELL=1 enables the browser-terminal channel — kali only;
-                # targets share the telemetry token and must not offer shells.
-                + ("SHELL=1\n" if host == "kali" else ""))
+                # SHELL=1 enables the browser-terminal channel, EXEC=1 the
+                # rust-agent exec socket — kali only; targets share the
+                # telemetry token and must not offer either channel.
+                + ("SHELL=1\nEXEC=1\n" if host == "kali" else ""))
         try:
             await engine.pve.agent_write_file(vmid, "/etc/pentrain/telemetried.conf", conf)
             await engine.pve.agent_exec_sh(
                 vmid, "systemctl restart pentrain-telemetried || true")
         except Exception as e:
             await _append_log(db, session, f"[pentrain] telemetry setup warn ({host}): {e}")
+
+
+_AGENT_BIN = Path("/opt/pentrain-agent")
+_AGENT_UNIT = """[Unit]
+Description=PenTrAIn guest agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/pentrain-agent /etc/pentrain/telemetried.conf
+Restart=always
+RestartSec=3
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+async def _provision_agent(db: AsyncSession, engine, session: Session,
+                           quest: Quest | None = None) -> None:
+    """Push the rust pentrain-agent binary to kali + linux targets via QGA,
+    install its systemd unit, and — only after the new agent reports active —
+    stop the python telemetried (which stays on disk as rollback).
+
+    Idempotent + best-effort: any failure leaves telemetried running, so
+    telemetry/terminal channels degrade gracefully to the python agent."""
+    if not await asyncio.to_thread(_AGENT_BIN.is_file):
+        await _append_log(db, session,
+                          "[pentrain] agent binary absent in image — telemetried only")
+        return
+    blob = await asyncio.to_thread(_AGENT_BIN.read_bytes)
+    boxes = [("kali", session.kali_vmid), *_linux_target_vmids(session, quest)]
+    for host, vmid in boxes:
+        if not vmid:
+            continue
+        try:
+            # chunked write — QGA file-write payloads are base64'd, ~2MB binary
+            await engine.pve.agent_exec_sh(
+                vmid, "rm -f /tmp/pentrain-agent", timeout_s=10)
+            CHUNK = 200_000
+            for off in range(0, len(blob), CHUNK):
+                await engine.pve.agent_file_write(
+                    vmid, f"/tmp/pentrain-agent.{off}", blob[off:off + CHUNK])
+            await engine.pve.agent_write_file(
+                vmid, "/etc/systemd/system/pentrain-agent.service", _AGENT_UNIT)
+            res = await engine.pve.agent_exec_sh(
+                vmid,
+                "cat /tmp/pentrain-agent.* > /tmp/pentrain-agent "
+                "&& rm -f /tmp/pentrain-agent.* "
+                "&& install -m755 /tmp/pentrain-agent /usr/local/bin/pentrain-agent "
+                "&& systemctl daemon-reload "
+                "&& systemctl enable --now pentrain-agent "
+                "&& sleep 2 && systemctl is-active --quiet pentrain-agent "
+                "&& systemctl disable --now pentrain-telemetried "
+                "&& echo AGENT-OK",
+                timeout_s=30)
+            if "AGENT-OK" in (res.get("out") or ""):
+                await _append_log(db, session,
+                                  f"[pentrain] rust agent live on {host}")
+            else:
+                await _append_log(
+                    db, session,
+                    f"[pentrain] agent start failed on {host}: "
+                    f"{(res.get('out') or res.get('err') or '?')[:200]} "
+                    "— telemetried still active")
+        except Exception as e:
+            await _append_log(db, session,
+                              f"[pentrain] agent provision warn ({host}): {e}")
 
 
 async def _pin_range_hosts(db: AsyncSession, engine, session: Session,
