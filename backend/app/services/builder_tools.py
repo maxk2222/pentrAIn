@@ -66,6 +66,10 @@ BUILDER_TOOLS = [
         "apps, k8s manifests, configs). Helps decide whether a template "
         "already exists for what the user wants.",
         {}),
+    _fn("list_vm_templates",
+        "List the VM template names that exist on the Proxmox host. A "
+        "quest.yaml vm.template value MUST come from this list — anything "
+        "else fails deployment.", {}),
     _fn("web_search",
         "Search the web for technique docs, exploit writeups, product "
         "defaults (DDG + Marginalia). Returns title/url/snippet rows.",
@@ -101,7 +105,7 @@ BUILDER_TOOLS = [
 RESEARCH_TOOLS = {"web_search", "web_fetch", "query_vuln_db", "rss_feed",
                   "search_technique"}
 CATALOG_TOOLS = {"quest_catalog", "read_quest", "list_roles", "read_role",
-                 "list_templates"}
+                 "list_templates", "list_vm_templates"}
 VERIFY_TOOLS = {"kali_exec"}
 
 
@@ -157,6 +161,8 @@ async def dispatch(ctx: ToolCtx, name: str, args: dict) -> str:
             return _read_role(ctx, args)
         if name == "list_templates":
             return _list_templates(ctx)
+        if name == "list_vm_templates":
+            return await _list_vm_templates(ctx)
         if name in RESEARCH_TOOLS:
             return await _research(ctx, name, args)
         if name == "kali_exec":
@@ -236,6 +242,19 @@ def _list_templates(ctx: ToolCtx) -> str:
         if names:
             out.append(f"{d.name}: {', '.join(sorted(set(names))[:12])}")
     return "\n".join(out[:_MAX_LIST]) or "no files/ trees found"
+
+
+async def _list_vm_templates(ctx: ToolCtx) -> str:
+    engine = ctx.engine
+    pve = getattr(engine, "pve", None)
+    if pve is None:
+        return "error: no live engine — cannot list host templates"
+    try:
+        names = sorted(v["name"] for v in await pve.cluster_vms()
+                       if v.get("template") and v.get("name"))
+    except Exception as e:
+        return f"error: {e!r}"
+    return "\n".join(names) or "no templates on host"
 
 
 # --------------------------------------------------------------- research

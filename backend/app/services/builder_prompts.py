@@ -55,8 +55,9 @@ apiVersion: pentrain/v1
   (e.g. "docker-registry-abuse"). track is ALWAYS "custom". tier 1-3
   (prefer 1 — generated quests skip the unlock ladder anyway). exam:false.
 - vms: each entry {name, template, cpus, ram_gb, roles:[...]}. The
-  template must be an existing VM template — copy it verbatim from
-  exemplar quests (read_quest!). Do NOT invent template names. Only use
+  template MUST be one returned by list_vm_templates (or copied verbatim
+  from an exemplar quest via read_quest). Do NOT invent template names.
+  Only use
   roles from list_roles — you CANNOT create new ansible roles (the PVE
   host is unreachable from here).
 - To customize a VM beyond existing roles use the per-vm `setup:` block —

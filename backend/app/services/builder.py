@@ -480,6 +480,8 @@ async def _verify_loop(bs_id: int) -> None:
                 bs.iterations = it
                 await db.commit()
                 await _log(db, bs, "verify", f"iteration {it}/{max_iters}")
+                s = None
+                prev = None
                 try:
                     prev = (await db.get(Session, bs.verify_session_id)
                             if bs.verify_session_id else None)
@@ -498,10 +500,14 @@ async def _verify_loop(bs_id: int) -> None:
                         bs.verify_session_id = s.id
                         await db.commit()
                 except Exception as e:
-                    await _finish(db, bs, "failed",
-                                  f"cannot start verify session: {e}")
-                    return
-                outcome, detail = await _await_solve(db, bs, s.id, timeout_s)
+                    # deploy-time faults (bad template/role, capacity) are
+                    # quest bugs the diagnosis loop can patch — don't bail
+                    outcome, detail = "deploy_failed", \
+                        f"cannot start verify session: {e}"
+                    s = prev
+                else:
+                    outcome, detail = await _await_solve(
+                        db, bs, s.id, timeout_s)
                 await _log(db, bs, "verify",
                            f"iteration {it} outcome: {outcome} — {detail[:300]}")
                 if outcome == "solved":
@@ -593,20 +599,22 @@ async def _await_solve(db: AsyncSession, bs: BuilderSession, sid: int,
     return "timeout", f"no solve within {timeout_s}s"
 
 
-async def _diagnose(db: AsyncSession, bs: BuilderSession, s: Session,
-                    outcome: str, detail: str) -> dict:
+async def _diagnose(db: AsyncSession, bs: BuilderSession,
+                    s: Session | None, outcome: str, detail: str) -> dict:
     """Ask the LLM to classify the failure; it gets live verify tools."""
     quest = await db.get(Quest, bs.quest_id)
-    actions = (await db.execute(
-        select(CoachAction).where(CoachAction.session_id == s.id)
-        .order_by(CoachAction.id.desc()).limit(40))).scalars().all()
+    actions = []
+    if s is not None:
+        actions = (await db.execute(
+            select(CoachAction).where(CoachAction.session_id == s.id)
+            .order_by(CoachAction.id.desc()).limit(40))).scalars().all()
     tail = "\n".join(
         f"{a.tool}({json.dumps(a.args or {})[:140]}) → "
         f"{str(a.result or '')[:200]}"
         for a in reversed(actions)) or "(no coach actions recorded)"
     spec = yaml.safe_dump({
         "quest.yaml": (bs.draft or {}).get("quest.yaml", ""),
-        "deploy_log_tail": (s.deploy_log or "")[-3000:],
+        "deploy_log_tail": (s.deploy_log or "")[-3000:] if s else "",
     }, sort_keys=False)
     messages = [
         {"role": "system", "content": DIAGNOSE_SYSTEM},
@@ -618,12 +626,14 @@ async def _diagnose(db: AsyncSession, bs: BuilderSession, s: Session,
          "Verdict?"}]
     engine = await get_engine(db)
     ctx = builder_tools.ToolCtx(
-        db=db, engine=engine, verify_session_id=s.id,
+        db=db, engine=engine,
+        verify_session_id=s.id if s is not None else None,
         web_enabled=bool(await settings_svc.get_setting(
             db, "builder.web_enabled", True)))
     cap = int(await settings_svc.get_setting(
         db, "builder.tool_call_cap", 10) or 10)
-    tools = builder_tools.tools_for_phase("verify", has_verify=True)
+    tools = builder_tools.tools_for_phase("verify",
+                                          has_verify=s is not None)
     reply = await _tool_loop(db, bs, ctx, messages, tools, cap)
     m = _VERDICT_RE.search(reply or "")
     if not m:
