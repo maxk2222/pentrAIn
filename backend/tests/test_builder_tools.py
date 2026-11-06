@@ -98,5 +98,6 @@ def test_tools_for_phase_unknown_tools():
     spec = tools_for_phase("chat", has_verify=False)
     names = {t["function"]["name"] for t in spec}
     assert names == {"quest_catalog", "read_quest", "list_roles",
-                     "read_role", "list_templates", "web_search", "web_fetch",
+                     "read_role", "list_templates", "list_vm_templates",
+                     "web_search", "web_fetch",
                      "query_vuln_db", "rss_feed", "search_technique"}
