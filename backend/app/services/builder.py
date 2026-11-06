@@ -136,6 +136,7 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
     usually tool_calls-only — returning its (empty) content would post a
     blank reply. Close out with stub results and force one text answer."""
     calls = 0
+    seen: dict[str, int] = {}
     while True:
         msg = await _llm(db, messages, tools=tools)
         tcs = msg.get("tool_calls") or []
@@ -170,7 +171,16 @@ async def _tool_loop(db: AsyncSession, bs: BuilderSession,
                 args = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            result = await builder_tools.dispatch(ctx, name, args)
+            # dedupe: a repeated identical call is a stuck pattern — the
+            # first result is already in context; say so instead of
+            # re-running the same read N times (burns the whole budget)
+            key = f"{name}:{json.dumps(args, sort_keys=True)}"
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] > 1:
+                result = (f"already returned above — identical {name} call "
+                          "ignored; proceed with what you have")
+            else:
+                result = await builder_tools.dispatch(ctx, name, args)
             await _msg(db, bs, "assistant",
                        f"{name}({json.dumps(args, ensure_ascii=False)[:240]})",
                        kind="tool", meta={"result": result[:600]})
