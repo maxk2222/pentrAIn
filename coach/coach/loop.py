@@ -317,6 +317,14 @@ class SessionCoach:
         # is pop-once per target so password-reuse tries stay legitimate
         self._spray_noted: set[tuple[str, str]] = set()
         self._curl_noted: dict[str, set[str]] = {}
+        # ssh remote-write advisor: pop-once per window (s57: nested-quote
+        # echo/cat writes over ssh wedged the pane 4x+ in a row)
+        self._ssh_write_noted: dict[str, set[str]] = {}
+        # verbatim failure repeats: normalized cmd → {outcome-sig → count} —
+        # an identical attempt failing 3x identically gets an explicit
+        # REPEAT-BLOCK note (s57: echo "f wedge ×6; s59: %00.md ×8)
+        self._fail_reps: dict[str, dict[str, int]] = {}
+        self._last_resync: float = time.monotonic()
         self._traj = _traj.NullTrajLog()         # JSONL turn log — real file
         # once start() binds the session (PENTRAIN_TRAJ_DIR)
 
@@ -724,7 +732,18 @@ class SessionCoach:
         if not s.get("id"):
             return
         self.ctx = ctx
+        prev_state = self.state.state
         self.state.state = s.get("state", self.state.state)
+        # field notes arrive in ctx — without this refresh they only reach
+        # the coach on full restart (s59: verified %2500 lesson sat unused
+        # for ~1h while the coach kept retrying %00)
+        self.facts.set_field_notes(ctx.get("field_notes"))
+        # fresh activation resets the stuck clock — a session parked in
+        # 'ready' for hours must not look stuck-since-attach (s57: stuck_s
+        # reported 7h at takeover start). Only on the transition INTO
+        # active; resyncs inside an ongoing run keep real progress.
+        if prev_state != "active" and self.state.state == "active":
+            self.state.last_progress_ts = time.time()
         # a session parked in 'ready' then activated must not look
         # stuck-since-attach — started_at/ready_at are liveness signals
         # too, but only ever move the clock FORWARD so real progress
@@ -1003,6 +1022,17 @@ class SessionCoach:
 
     async def _reflect_tick(self, reflect_s: float) -> None:
         self._next_reflect = time.monotonic() + reflect_s
+        # periodic resync — the WS stream is best-effort (s56/s57: an
+        # activate() issued outside the backend process published nothing,
+        # leaving the coach on 'ready' until a manual restart). A cheap
+        # HTTP poll every ~5min is the drift floor; resync() is idempotent
+        # and also refreshes field_notes + the stuck-clock seed.
+        if time.monotonic() - self._last_resync > 300:
+            self._last_resync = time.monotonic()
+            try:
+                await self.resync()
+            except Exception as e:
+                await log.adebug("periodic resync failed", error=str(e))
         if not self.llm or not self.state.coach_enabled:
             return
         decision = self.policy.evaluate(self.state)
@@ -1905,6 +1935,76 @@ class SessionCoach:
                         "Rotate credentials instead of spraying.")
         return ""
 
+    def _ssh_write_note(self, a: dict, window: str | None) -> str:
+        """Remote file writes via nested quoting wedge the pane (s57: four
+        consecutive continuation wedges on `ssh … 'echo "…" >> f'`). Point
+        at stdin-pipe/base64 instead. Pop-once per window."""
+        if a.get("type") not in ("exec_in_kali", "type_in_pane"):
+            return ""
+        cmd = str(a.get("command") or a.get("text") or "")
+        if not re.search(r"\bssh\b|\bsshpass\b", cmd):
+            return ""
+        # a local stdin redirect (< file) already IS the good pattern
+        if re.search(r"<\s*[/\w]", cmd):
+            return ""
+        wedge = (re.search(r"echo\s+['\"].*>", cmd)
+                 or re.search(r"\bcat\s*>", cmd)
+                 or re.search(r"<<\s*['\"]?\w", cmd))
+        if not wedge:
+            return ""
+        noted = self._ssh_write_noted.setdefault(window or "main", set())
+        if "ssh-write" in noted:
+            return ""
+        noted.add("ssh-write")
+        return ("\nNOTE: remote file writes via nested quoting wedge the "
+                "pane (continuation state). Reliable: build the payload "
+                "locally (printf > /tmp/p.sh), then pipe stdin — "
+                "ssh host 'cat >> /remote/f' < /tmp/p.sh — or base64: "
+                "ssh host 'echo B64 | base64 -d >> /remote/f'.")
+
+    def _repeat_block_note(self, a: dict, result: str,
+                           window: str | None) -> str:
+        """Verbatim retry guard: same normalized command + byte-similar
+        failure result ≥3x → hard stop-note (s57: echo "f wedge ×6;
+        s59: %00.md ×8, dedup-bounce ×N). Denials already escalate via
+        _deny_counts — this covers non-denial repeats."""
+        if a.get("type") not in ("exec_in_kali", "type_in_pane"):
+            return ""
+        if not isinstance(result, str) or result.startswith("denied:"):
+            return ""
+        cmd = re.sub(r"\s+", " ",
+                     str(a.get("command") or a.get("text") or "")
+                     ).strip().lower()
+        if not cmd:
+            return ""
+        # identical outcome = settled, regardless of exit code — an exit-0
+        # that returns the same error page/body 3x is the same loop as a
+        # nonzero failure (s59: %00.md returned the SAME html 8x and the
+        # model kept resubmitting it). A NEW result under the same cmd is
+        # a different signature, not a repeat.
+        core = result.strip().lower()
+        fail = (core.startswith(("reason:", "error:"))
+                or '"reason"' in core           # dedup guards bounce JSON
+                or "pane is now busy" in core or "still running" in core
+                or re.search(r'"exitcode":\s*[1-9]', core)
+                or re.search(r"exit[_ ]?code[:= ]+[1-9]", core))
+        sig = hashlib.sha1(core[:400].encode()).hexdigest()[:12]
+        rec = self._fail_reps.setdefault(cmd, {})
+        n = rec[sig] = rec.get(sig, 0) + 1
+        if len(self._fail_reps) > 512:   # bound — unique cmds accumulate
+            for k in list(self._fail_reps)[:len(self._fail_reps) - 512]:
+                self._fail_reps.pop(k, None)
+        if n < 3:
+            return ""
+        if fail:
+            return (f"\nREPEAT-BLOCK ×{n}: this exact command failed {n} "
+                    "times identically — it will not start working on "
+                    "retry. Change the vector: different encoding, a "
+                    "different file, host path, or a different tool.")
+        return (f"\nREPEAT ×{n}: same command, same result — the data is "
+                "settled, the retry gains nothing. Take a DIFFERENT "
+                "action toward the flag.")
+
     def _cookie_jar_note(self, a: dict, window: str | None) -> str:
         """Deterministic curl session bug: `-L` (or no cookie flags at all)
         on a POST/login means the redirect chain runs unauthenticated —
@@ -1978,6 +2078,11 @@ class SessionCoach:
         be invisible to agent-metrics). Fire-and-forget, never blocks."""
         spoke, result = await self._dispatch_inner(
             a, proactive=proactive, window=window)
+        # verbatim-failure repeat tracking runs on the RAW result — the
+        # advisory suffixes appended below vary per count and would break
+        # the outcome signature
+        if rep := self._repeat_block_note(a, result, window):
+            result += rep
         if isinstance(result, str) and result.startswith("denied:"):
             args = {k: v for k, v in (a or {}).items()
                     if k in ("command", "text", "task", "worker_id",
@@ -2036,6 +2141,8 @@ class SessionCoach:
             result += spray
         if jar := self._cookie_jar_note(a, window):
             result += jar
+        if sshw := self._ssh_write_note(a, window):
+            result += sshw
         result = self._drain_observer_hints(result, a, window)
         return spoke, result
 

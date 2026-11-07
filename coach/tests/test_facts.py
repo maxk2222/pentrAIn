@@ -459,3 +459,21 @@ def test_socks_forward_and_failed_setup_keep_denials():
     f.observe_output("sshuttle -r deploy@web01 10.1.10.0/24",
                      "client: Connected.", 1)
     assert "filtered:10.1.10.32@kali" in f.denials          # failed = stale
+
+
+def test_uid0_and_docker_exec_pin_proven_caps():
+    """s57: root+container primitives were re-derived instead of re-used —
+    a confirmed uid=0 / working docker exec must pin to caps (renders every
+    turn)."""
+    from coach.facts import FactsDB
+    f = FactsDB()
+    f.observe_output("sshpass -p x ssh deploy@shop01 id",
+                     "uid=0(root) gid=0(root) groups=0(root)", 0)
+    f.observe_output("ssh deploy@shop01 docker exec api cat /x", "DATA", 0)
+    assert any("root-shell@shop01" in c for c in f.caps)
+    assert any("docker exec api@shop01" in c for c in f.caps)
+    # non-root uid and failing exec pin nothing
+    f2 = FactsDB()
+    f2.observe_output("ssh deploy@h id", "uid=1000(deploy) gid=1000(deploy)", 0)
+    f2.observe_output("ssh deploy@h docker exec api cat /x", "err", 1)
+    assert not f2.caps

@@ -168,3 +168,35 @@ def test_facts_snapshot_reads_live_coach_registry():
     assert svc._facts_snapshot(999) == ""
     svc2 = ObserverService(client=None, cfg_getter=dict)
     assert svc2._facts_snapshot(84) == ""
+
+
+def test_failure_digest_lists_failed_and_retried_args():
+    s = _svc()
+    w = _Watch(1)
+    w.window.append({"kind": "turn", "actions": [
+        {"t": "exec_in_kali", "arg": "curl http://x/ftp/flag1.txt%00.md",
+         "res": '{"exitcode": 0, "out": "<html>err"}'},
+        {"t": "exec_in_kali", "arg": "curl http://x/ftp/flag1.txt%00.md",
+         "res": '{"exitcode": 0, "out": "<html>err"}'},
+        {"t": "exec_in_kali", "arg": "ssh a@b 'echo x >> /f'",
+         "res": '{"err": "still running — pane is now busy"}'},
+        {"t": "exec_in_kali", "arg": "ls -la", "res": '{"exitcode": 0}'}]})
+    txt, toks = s._failure_digest(w)
+    assert "flag1.txt%00.md" in txt and "retried" in txt
+    assert "echo x >> /f" in txt and "failed" in txt
+    assert "ls -la" not in txt                    # one-off success, not a dead end
+    assert any("%00" in t or "flag1.txt" in t for t in toks)
+
+
+def test_field_notes_block_reads_coach_facts():
+    class _C:
+        def __init__(self):
+            from coach.facts import FactsDB
+            self.facts = FactsDB()
+    coach = _C()
+    coach.facts.set_field_notes([
+        {"id": 1, "text": "use %2500.md double-encode", "tags": ["ftp"]}])
+    s = ObserverService(client=None, cfg_getter=dict, coaches={59: coach})
+    blk = s._field_notes_block(59)
+    assert "%2500.md" in blk and "verified field notes" in blk
+    assert s._field_notes_block(999) == ""

@@ -374,3 +374,62 @@ async def test_update_plan_worker_owns_its_plan():
     # parent sees worker intent via agent_status
     _s, st = await coach._dispatch({"type": "agent_status"})
     assert "w step" in st
+
+
+async def test_repeat_block_after_three_identical_failures():
+    """s57/s59: verbatim failed retries wedged the loop for hours — the
+    REPEAT-BLOCK note must fire on the 3rd identical outcome."""
+    coach, _c = _coach(autonomy=4)
+    a = {"type": "exec_in_kali", "command": "ssh x 'echo \"f\" >> /opt/b.sh'"}
+    res = '{"err": "still running — pane is now busy", "out": "dquote> "}'
+    assert coach._repeat_block_note(a, res, None) == ""
+    assert coach._repeat_block_note(a, res, None) == ""
+    assert "REPEAT-BLOCK" in coach._repeat_block_note(a, res, None)
+    # whitespace-only variant counts as the same attempt
+    a2 = {"type": "exec_in_kali", "command": "ssh x  'echo \"f\"   >> /opt/b.sh'"}
+    assert "REPEAT-BLOCK" in coach._repeat_block_note(a2, res, None)
+    # a different outcome under the same command is progress, not a repeat
+    ok = '{"err": "", "exitcode": 0, "out": "wrote"}'
+    assert coach._repeat_block_note(a, ok, None) == ""
+
+
+async def test_repeat_block_skips_denials_and_tracks_signatures():
+    coach, _c = _coach(autonomy=4)
+    a = {"type": "exec_in_kali", "command": "id"}
+    # denied: escalates via _deny_counts, not here
+    for _ in range(4):
+        assert coach._repeat_block_note(a, "denied: scope", None) == ""
+    res = '{"err": "still running", "out": ""}'
+    coach._repeat_block_note(a, res, None)
+    coach._repeat_block_note(a, res, None)
+    # a NEW outcome under the same command is a different signature —
+    # it does not count toward the failure streak
+    ok = '{"err": "", "exitcode": 0, "out": "uid=0"}'
+    assert coach._repeat_block_note(a, ok, None) == ""
+    # third identical failure fires the block
+    assert "REPEAT-BLOCK" in coach._repeat_block_note(a, res, None)
+    # identical SUCCESS repeats also loop — settled data is still settled
+    # (s59: exit-0 error pages retried 8x), gentler wording
+    b = {"type": "exec_in_kali", "command": "curl http://x/y"}
+    for _ in range(2):
+        assert coach._repeat_block_note(b, ok, None) == ""
+    assert "REPEAT ×3" in coach._repeat_block_note(b, ok, None)
+
+
+async def test_ssh_write_note_pop_once_and_good_patterns():
+    coach, _c = _coach(autonomy=4)
+    a = {"type": "exec_in_kali",
+         "command": "sshpass -p x ssh deploy@h 'echo \"f\" >> /opt/b.sh'"}
+    note = coach._ssh_write_note(a, None)
+    assert "pipe stdin" in note or "base64" in note
+    assert coach._ssh_write_note(a, None) == ""   # pop-once per window
+    # local stdin redirect IS the recommended pattern — no note
+    good = {"type": "exec_in_kali",
+            "command": "ssh deploy@h 'cat >> /opt/b.sh' < /tmp/p.sh"}
+    assert coach._ssh_write_note(good, None) == ""
+    # plain ssh read — no write pattern, no note
+    read = {"type": "exec_in_kali", "command": "ssh deploy@h 'cat /etc/crontab'"}
+    assert coach._ssh_write_note(read, None) == ""
+    # different window gets its own pop-once
+    note = coach._ssh_write_note(a, "w1")
+    assert "base64" in note

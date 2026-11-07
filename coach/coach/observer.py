@@ -111,6 +111,70 @@ class ObserverService:
         except Exception:
             return ""
 
+    @staticmethod
+    def _failure_digest(w: _Watch, limit: int = 12) -> str:
+        """Failed/bounced attempts from the traj window — the advisory must
+        never re-suggest a payload that already failed (s59: it advised
+        %00.md when the verified bypass was %2500.md and the coach burned
+        ~8 retries on the wrong hint). Returns digest lines + the token set
+        for the post-generation re-suggest drop."""
+        counts: dict[str, list[int]] = {}
+        order: list[str] = []
+        for ev in w.window:
+            for a in ev.get("actions") or []:
+                arg = re.sub(r"\s+", " ",
+                             str(a.get("arg") or "")).strip()[:100]
+                if not arg or a.get("t") not in (
+                        "exec_in_kali", "type_in_pane", "exec"):
+                    continue
+                res = str(a.get("res") or "").lower()
+                fail = (a.get("denied")
+                        or res.startswith(("denied:", "reason:", "error:"))
+                        or "pane is now busy" in res
+                        or "still running" in res
+                        or '"reason"' in res
+                        or re.search(r'"exitcode":\s*[1-9]', res))
+                if arg not in counts:
+                    order.append(arg)
+                    counts[arg] = [0, 0]   # attempts, failures
+                counts[arg][0] += 1
+                counts[arg][1] += 1 if fail else 0
+        # dead ends = anything that hard-failed, or a verbatim repeat that
+        # never produced progress (2+ identical attempts, none failing but
+        # nothing gained either — the loop signature from s59)
+        tried = [a for a in order
+                 if counts[a][1] > 0 or counts[a][0] >= 2]
+        lines = []
+        for arg in tried[-limit:]:
+            att, fl = counts[arg]
+            tag = f"failed x{fl}" if fl else f"retried x{att}"
+            lines.append(f"{arg} ({tag})")
+        if not lines:
+            return "", set()
+        tokens = {t for arg in order
+                  for t in re.findall(r"[A-Za-z0-9%_.:/-]{8,}", arg)
+                  if re.search(r"[%.:/-]", t)}
+        return ("\nfailed/tried attempts — do NOT re-suggest these or "
+                "payload variants of them:\n" + "\n".join(lines)), tokens
+
+    def _field_notes_block(self, sid: int) -> str:
+        """Session field lessons (observer-written, operator-verified) the
+        coach's facts DB holds — the advisory should point AT these, not
+        around them."""
+        try:
+            coach = self._coaches.get(sid)
+            notes = getattr(getattr(coach, "facts", None),
+                            "field_notes", None) or []
+            if not notes:
+                return ""
+            lines = [f"- {str(n.get('text') or '')[:160]}"
+                     for n in notes[-6:]]
+            return ("\nverified field notes for THIS session — prefer "
+                    "telling the coach to apply one verbatim over "
+                    "inventing a new payload:\n" + "\n".join(lines))
+        except Exception:
+            return ""
+
     def drop(self, sid: int) -> None:
         """Forget detector state for a session. Called on reset: the traj
         file is rotated, so a surviving watch would hold a byte offset into
@@ -335,6 +399,8 @@ class ObserverService:
             flag_line = (f"flags: {len(done)}/{len(flags)} solved "
                          f"({', '.join(done) or 'none'} done; "
                          f"{', '.join(open_) or 'none'} REMAINING)\n")
+        fail_txt, fail_tokens = self._failure_digest(w)
+        notes_txt = self._field_notes_block(w.sid)
         msgs = [{"role": "system", "content": (
             "You observe an autonomous pentest coach that is STUCK — repeated "
             "denials or tool loops with no progress. Propose ONE concrete "
@@ -344,11 +410,15 @@ class ObserverService:
             "text only (no markdown). The FACTS snapshot lists settled dead "
             "ends (missing:, denied:, filtered:, blocked:) — a tip that "
             "repeats one is worse than no tip. The flags line is ground "
-            "truth: never call a quest solved while flags REMAIN open.")}, {"role": "user", "content": (
+            "truth: never call a quest solved while flags REMAIN open. "
+            "Anything under 'failed attempts' already failed — never "
+            "re-suggest it or a payload variant (encoding, casing, path "
+            "spelling) of it. If a verified field note exists, the best "
+            "tip is usually 'apply that note verbatim'.")}, {"role": "user", "content": (
             f"quest: {quest.get('title','?')} track={quest.get('track','?')} "
             f"tier={quest.get('tier','?')}\n{flag_line}\n"
             f"recent actions (newest last):\n{self._window_text(list(w.window))}"
-            f"{self._facts_snapshot(w.sid)}")}]
+            f"{fail_txt}{notes_txt}{self._facts_snapshot(w.sid)}")}]
         w.analyses += 1
         try:
             resp = await self._chat(llm, msgs, json_mode=False)
@@ -369,6 +439,15 @@ class ObserverService:
                 r"already (captured|completed)", text, re.IGNORECASE)):
             await log.awarning("observer advisory dropped: premature-solved",
                                session=w.sid, text=text[:120])
+            return
+        # re-suggest drop: an advisory quoting ≥2 distinctive tokens of
+        # already-failed commands sends the coach back into the loop it
+        # just left (s59: %00.md re-tried ~8x on observer advice)
+        hits = sum(1 for t in fail_tokens if t.lower() in text.lower())
+        if hits >= 2:
+            await log.awarning("observer advisory dropped: re-suggests "
+                               "failed payload", session=w.sid,
+                               text=text[:120], hits=hits)
             return
         await self.client.observer_hint(w.sid, text)
         await self.client.log_action(w.sid, "observe_hint", {"text": text[:300]},

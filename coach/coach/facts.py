@@ -50,6 +50,9 @@ _MYSQL_U = re.compile(r"\bmysql\b[^\n]*?-u\s*['\"]?([^\s'\"]{1,64})"
 _URL_CRED = re.compile(r"\b(\w[\w.-]{0,47}):([^\s:/@]{2,80})@")
 _HYDRA_LP = re.compile(r"\s-l\s+['\"]?([^\s'\"]{1,64})\s+-p\s+['\"]?([^\s'\"]{1,80})")
 _USER_AT_HOST = re.compile(r"([\w.\-]+)@([\w.\-]+)")
+_UID0 = re.compile(r"uid=0\s*\(\s*root\s*\)")
+_DOCKER_EXEC = re.compile(
+    r"\bdocker\s+exec\s+(?:-\S+\s+)*([A-Za-z][\w.-]*)\s")
 # routing-capable tunnel setup — these change kali's L3 vantage, so
 # reachability facts learned pre-tunnel go stale (ssh -D does NOT: a
 # SOCKS proxy only helps proxy-aware tools, direct connects stay local)
@@ -499,6 +502,19 @@ class FactsDB:
                 ff = self.files.get(str(entry)) or self.files.get(path)
                 if ff and ff.writes:
                     self._merge_caps([f"root-exec via {entry}"])
+            # proven-primitive caps (s57): a uid=0 result is a re-usable
+            # primitive — pin WHERE it works so the model re-uses it instead
+            # of re-deriving privesc for the next objective
+            if code == 0 and not typed_input and _UID0.search(out or ""):
+                ssh = _USER_AT_HOST.search(cmd)
+                self._merge_caps(
+                    [f"root-shell@{(ssh.group(2) if ssh else 'kali')}"])
+            if (code == 0 and not typed_input
+                    and (de := _DOCKER_EXEC.search(cmd))):
+                ssh = _USER_AT_HOST.search(cmd)
+                h = ssh.group(2) if ssh else "kali"
+                self._merge_caps(
+                    [f"docker exec {de.group(1)}@{h}"])
             # timeout with no marker text — curl exit 28 on an empty reply
             # is the unreachable-host signal too (s46: direct curls to a
             # docker-internal IP retried every restart)
