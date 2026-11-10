@@ -212,6 +212,11 @@ class SessionCoach:
         self._history: list[dict] = []       # rolling conversation for LLM context
         self._task: asyncio.Task | None = None
         self._chat_task: asyncio.Task | None = None
+        # set while the debounced chat task waits for/works the llm lock —
+        # an in-flight proactive chain must yield to it; the flag outlives
+        # pending_chat (popped before the lock is held), which a bare
+        # `pending_chat` chain check would miss
+        self._chat_wants_turn = False
         self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=2000)
         self._stop = asyncio.Event()
         self._ready = asyncio.Event()
@@ -773,6 +778,37 @@ class SessionCoach:
     async def feed(self, event: dict) -> None:
         if self._stop.is_set():
             return  # dead coach — don't fill a queue nobody drains
+        # fast paths — interactive operator signals cannot wait for the next
+        # queue drain: drains only run between llm sub-calls, so a slow or
+        # hung model call would hold a user pause or question for the whole
+        # call window (u/pen: pause mid-takeover kept executing for minutes;
+        # 'hallo??' went completely unanswered behind an in-flight chain)
+        try:
+            data = event.get("data") or {}
+            sid = int(data.get("session_id")
+                      or event.get("session_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid == self.sid:
+            etype = event.get("type")
+            topic = event.get("topic", "")
+            if etype == "coach_enabled" and topic.startswith("session."):
+                # apply pause/resume NOW — the queued copy still runs the
+                # handler for ctx bookkeeping + resume scheduling
+                enabled = bool(data.get("enabled"))
+                global_on = bool(
+                    self.cfg.get("coach", {}).get("enabled", True))
+                self.state.coach_enabled = enabled and global_on
+                if not self.state.coach_enabled:
+                    self._kill_all_workers()
+            elif (etype == "coach_message"
+                    and topic.startswith("coach.")
+                    and data.get("role") == "user"
+                    and self.state.coach_enabled):
+                # buffer immediately, skip the queue — the queued handler
+                # would buffer the same message a second time
+                self._buffer_chat(str(data.get("content") or ""))
+                return
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -996,6 +1032,16 @@ class SessionCoach:
         if not self._chat_task or self._chat_task.done():
             self._chat_task = asyncio.create_task(self._chat_debounced())
 
+    def _chat_pending(self) -> bool:
+        """A trainee message owns the next llm turn — either buffered text
+        not yet picked up, or a debounced chat task already waiting on the
+        llm lock (buffer popped, lock still held by an in-flight chain).
+        The chat task itself never counts — its own turn must not abort."""
+        if self.state.pending_chat:
+            return True
+        return (self._chat_wants_turn
+                and asyncio.current_task() is not self._chat_task)
+
     async def _chat_debounced(self) -> None:
         try:
             await asyncio.sleep(CHAT_DEBOUNCE_S)
@@ -1003,8 +1049,21 @@ class SessionCoach:
                 return
             text = "\n".join(self.state.pending_chat)
             self.state.pending_chat.clear()
-            await asyncio.wait_for(self._answer_chat(text),
-                                   timeout=LLM_TURN_BUDGET_S)
+            if not self.state.coach_enabled:
+                # pause landed inside the debounce window — same one-time
+                # notice the queued handler sends, instead of a silent void
+                if not self._disabled_notice_sent:
+                    self._disabled_notice_sent = True
+                    await self._quick_ack(
+                        "Coach is disabled for this session — "
+                        "you're on your own.")
+                return
+            self._chat_wants_turn = True
+            try:
+                await asyncio.wait_for(self._answer_chat(text),
+                                       timeout=LLM_TURN_BUDGET_S)
+            finally:
+                self._chat_wants_turn = False
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1389,7 +1448,7 @@ class SessionCoach:
                 # pull queued telemetry/state/chat BEFORE the next sub-call —
                 # keeps command memory fresh and lets trainee chat preempt
                 await self._drain_queue()
-                if self.state.pending_chat:
+                if self._chat_pending():
                     break  # operator message wins — release the llm lock
                 if not self.state.coach_enabled:
                     break  # pause arrived mid-chain — stop after this sub-call
@@ -3085,7 +3144,7 @@ class SessionCoach:
                     # sliced like collect_agent — an operator message must
                     # preempt the pause instead of queueing behind it
                     while time.monotonic() - t_wait < n:
-                        if self.state.pending_chat:
+                        if self._chat_pending():
                             aborted = True
                             break
                         await asyncio.sleep(
@@ -3662,7 +3721,7 @@ class SessionCoach:
             wait_s = float(self.cfg.get("coach", {}).get("collect_wait_s", 240))
             deadline = time.monotonic() + wait_s
             while w.status == "running" and time.monotonic() < deadline:
-                if self.state.pending_chat:
+                if self._chat_pending():
                     return (f"{wid} still running ({w.actions} actions) — "
                             "collect later")
                 try:

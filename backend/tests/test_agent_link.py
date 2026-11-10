@@ -69,7 +69,7 @@ async def _wait(cond, timeout_s: float = 2.0) -> None:
 
 
 async def _connect(db, sid: int) -> _FakeWs:
-    ws, task = _dial(db, sid)
+    ws, _task = _dial(db, sid)
     ws.feed_json({"t": "hello", "v": 1})
     await _wait(lambda: link.is_online(sid))
     return ws

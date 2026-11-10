@@ -3260,3 +3260,88 @@ async def test_live_pause_breaks_then_denies_execs():
     ok, res = await coach._dispatch(
         {"type": "exec_in_kali", "command": "id"})
     assert ok is False and "paused" in res
+
+
+async def test_feed_fastpaths_pause_instantly():
+    """Pause lands in feed(), not at the next queue drain — a hung llm call
+    must not hold the toggle hostage (u/pen: pause kept executing)."""
+    coach, _c = _coach()
+    coach.state.coach_enabled = True
+    await coach.feed({"type": "coach_enabled", "topic": "session.1",
+                      "data": {"session_id": 1, "enabled": False}})
+    assert coach.state.coach_enabled is False      # applied NOW
+    assert coach._queue.qsize() == 1               # queued for bookkeeping
+
+
+async def test_feed_fastpaths_chat_buffers():
+    """A user message buffers in feed() — not at the next drain — and must
+    not be queued too (the queued handler would double-buffer it)."""
+    coach, _c = _coach()
+    await coach.feed({"type": "coach_message", "topic": "coach.1",
+                      "data": {"session_id": 1, "role": "user",
+                               "content": "hallo?"}})
+    assert coach.state.pending_chat == ["hallo?"]
+    assert coach._queue.qsize() == 0
+    assert coach._chat_task and not coach._chat_task.done()
+    coach._chat_task.cancel()
+
+
+async def test_feed_queues_chat_when_disabled():
+    """Paused → the message still queues so the one-time disabled notice
+    fires via the normal handler path."""
+    coach, _c = _coach()
+    coach.state.coach_enabled = False
+    await coach.feed({"type": "coach_message", "topic": "coach.1",
+                      "data": {"session_id": 1, "role": "user",
+                               "content": "frage"}})
+    assert coach.state.pending_chat == []
+    assert coach._queue.qsize() == 1
+
+
+async def test_waiting_chat_breaks_chain():
+    """The debounced chat task pops pending_chat BEFORE it can hold the
+    llm lock — a bare pending_chat chain check would starve it. The
+    _chat_wants_turn flag must break the in-flight chain regardless."""
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    endless = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+               "actions": [{"type": "exec_in_kali", "command": "id",
+                            "_call_id": "c1"}]}
+    coach.llm = ScriptLlm([endless] * 6)
+    coach._chat_wants_turn = True          # chat task popped, wants the lock
+    coach._chat_task = asyncio.create_task(asyncio.sleep(30))
+    try:
+        await coach._llm_turn("work", proactive=True)
+        assert len(coach.llm.calls) == 1   # chain yielded after one sub-call
+    finally:
+        coach._chat_task.cancel()
+
+
+async def test_own_chat_turn_ignores_wants_flag():
+    """_chat_pending() must not abort the chat task's own turn — the flag
+    it set while waiting for the lock stays up through its chain."""
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    two = [{"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+            "actions": [{"type": "exec_in_kali", "command": "id",
+                         "_call_id": "c1"}]},
+           {"content": "antwort", "tool_calls": [],
+            "actions": [{"type": "send_chat", "content": "antwort"}]}]
+    coach.llm = ScriptLlm(two)
+    coach._chat_wants_turn = True
+    coach._chat_task = asyncio.current_task()   # this turn IS the chat task
+    await coach._llm_turn("frage?")
+    assert len(coach.llm.calls) == 2            # its own chain ran to the end
+
+
+async def test_pause_in_debounce_window_sends_notice():
+    """Pause lands between feed-buffer and debounce wake — the queued
+    disabled-notice path was skipped, so _chat_debounced must fire it
+    itself instead of going silent."""
+    coach, c = _coach()
+    coach._buffer_chat("frage")
+    coach.state.coach_enabled = False           # paused mid-debounce
+    await asyncio.sleep(CHAT_DEBOUNCE_S + 0.2)
+    assert any("disabled" in m["content"] for m in c.chats)
