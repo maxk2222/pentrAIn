@@ -3205,3 +3205,58 @@ async def test_cross_file_reread_advisory():
     assert "re-reads" not in r
     _, r = await rd("grep open /ev/c.nmap")
     assert "re-reads" in r and "settled in your history" in r
+
+
+async def test_pause_arriving_mid_chain_stops_execution():
+    """A coach_enabled=false event drained between sub-calls breaks the
+    agentic chain — the model's NEXT sub-call never fires (u/pen: pause
+    didn't stop an in-flight takeover chain)."""
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    endless = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+               "actions": [{"type": "exec_in_kali", "command": "id",
+                            "_call_id": "c1"}]}
+    coach.llm = ScriptLlm([endless] * 6)
+    # pause lands while the turn is in flight — the drain between
+    # sub-calls must pick it up and break
+    await coach._queue.put({"type": "coach_enabled",
+                            "topic": "session.1",
+                            "data": {"session_id": 1, "enabled": False}})
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 1      # chain broke after one sub-call
+    assert not coach.state.coach_enabled
+
+
+async def test_pending_chat_defers_proactive_turn():
+    """A buffered trainee message owns the next llm turn — the reflect
+    tick must yield instead of starting a takeover chain that would
+    starve the chat answer of the llm lock."""
+    coach, _c = _coach()
+    coach.llm = FakeLlm()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach._last_resync = time.monotonic()   # skip the HTTP resync
+    coach.state.pending_chat.append("frage?")
+    before = coach._next_reflect
+    await coach._reflect_tick(60)
+    assert not coach.llm.calls            # no proactive turn started
+    assert coach._next_reflect < before + 60  # rescheduled short (~5s)
+
+
+async def test_live_pause_breaks_then_denies_execs():
+    """End-to-end: pause mid-chain → break; subsequent dispatch denied."""
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    endless = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+               "actions": [{"type": "exec_in_kali", "command": "id",
+                            "_call_id": "c1"}]}
+    coach.llm = ScriptLlm([endless] * 4)
+    await coach._queue.put({"type": "coach_enabled",
+                            "topic": "session.1",
+                            "data": {"session_id": 1, "enabled": False}})
+    await coach._llm_turn("work", proactive=True)
+    ok, res = await coach._dispatch(
+        {"type": "exec_in_kali", "command": "id"})
+    assert ok is False and "paused" in res

@@ -1035,6 +1035,14 @@ class SessionCoach:
                 await log.adebug("periodic resync failed", error=str(e))
         if not self.llm or not self.state.coach_enabled:
             return
+        # chat answers beat proactive turns: the debounced chat task holds a
+        # pending user message — starting a 10s-pace takeover chain here
+        # starves it of the llm lock for whole chains (u/pen: a trainee
+        # question went unanswered for minutes while the agent kept working)
+        if self.state.pending_chat or (self._chat_task
+                                     and not self._chat_task.done()):
+            self._next_reflect = time.monotonic() + 5
+            return
         decision = self.policy.evaluate(self.state)
         await log.ainfo("reflect decision", session=self.sid,
                         may=decision.may_proactive, reason=decision.reason,
@@ -1383,6 +1391,8 @@ class SessionCoach:
                 await self._drain_queue()
                 if self.state.pending_chat:
                     break  # operator message wins — release the llm lock
+                if not self.state.coach_enabled:
+                    break  # pause arrived mid-chain — stop after this sub-call
             if worked:
                 # real work happened — this turn is progress, not an
                 # unanswered nudge; don't let it feed the backoff streak
@@ -2076,6 +2086,13 @@ class SessionCoach:
         """Guard-denial audit: every 'denied:' result self-reports to the
         backend (exec/type denials that never reach the API would otherwise
         be invisible to agent-metrics). Fire-and-forget, never blocks."""
+        if not self.state.coach_enabled and a.get("type") != "none":
+            # pause is a hard stop: an in-flight chain must not keep
+            # executing (u/pen: pause pressed, agent kept working + minutes
+            # later still exec'd). 'none' stays allowed so the model can
+            # still park its reasoning note.
+            return False, ("denied: coach is paused — no actions execute "
+                           "while paused. Stop working until resumed.")
         spoke, result = await self._dispatch_inner(
             a, proactive=proactive, window=window)
         # verbatim-failure repeat tracking runs on the RAW result — the

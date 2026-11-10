@@ -433,3 +433,22 @@ async def test_ssh_write_note_pop_once_and_good_patterns():
     # different window gets its own pop-once
     note = coach._ssh_write_note(a, "w1")
     assert "base64" in note
+
+
+async def test_pause_denies_everything_but_none():
+    """Pause pressed mid-run → every subsequent action is denied (u/pen:
+    the agent kept executing for minutes after pause). 'none' stays
+    allowed so the model can park its reasoning note."""
+    coach, c = _coach(autonomy=4)
+    spoke, _ = await coach._dispatch({"type": "exec_in_kali", "command": "id"})
+    assert spoke and c.execs == ["id"]
+    coach.state.coach_enabled = False
+    for act in ({"type": "exec_in_kali", "command": "id2"},
+                {"type": "type_in_pane", "text": "x"},
+                {"type": "send_chat", "content": "hi"},
+                {"type": "submit_flag", "value": "pentrAIn{abc}"},
+                {"type": "update_plan", "items": [{"t": "a"}]}):
+        denied, res = await coach._dispatch(act)
+        assert denied is False and "paused" in res, act
+    _spoke_none, _ = await coach._dispatch({"type": "none", "reason": "parked"})
+    assert not c.execs[1:] and len(c.chats) == 1  # only the pre-pause report

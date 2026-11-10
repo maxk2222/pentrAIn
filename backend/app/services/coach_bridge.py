@@ -14,7 +14,7 @@ import shlex
 import time
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,7 +169,8 @@ async def session_context(db: AsyncSession, session_id: int) -> dict:
     field_notes = [{"id": n.id, "text": n.text, "tags": n.tags or []}
                    for n in await active_lessons(
                        db, track=quest.track_slug if quest else None,
-                       quest_id=session.quest_id)]
+                       quest_id=session.quest_id,
+                       session_id=session.id)]
     telem = (await db.execute(
         select(TelemetryEvent).where(TelemetryEvent.session_id == session_id)
         .order_by(TelemetryEvent.id.desc()).limit(60))).scalars().all()
@@ -443,18 +444,25 @@ async def post_observer_hint(db: AsyncSession, session_id: int,
 
 async def active_lessons(db: AsyncSession, *, track: str | None = None,
                          quest_id: int | None = None,
+                         session_id: int | None = None,
                          limit: int = 24) -> list[CoachLesson]:
-    """Field notes a session may consume: global + its track + its quest,
-    newest first. Disabled rows never surface."""
+    """Field notes a session may consume: global + its track + its quest +
+    lessons written FOR this session (session_id match — the observer's
+    session-scoped pushes sat invisible on applies='session'/'verified',
+    s59). Disabled rows never surface."""
     scopes = ["global"]
     if track:
         scopes.append(f"track:{track}")
     if quest_id is not None:
         scopes.append(f"quest:{quest_id}")
+    scope_clause = CoachLesson.applies.in_(scopes)
+    if session_id is not None:
+        scope_clause = or_(scope_clause,
+                           CoachLesson.session_id == session_id)
     return (await db.execute(
         select(CoachLesson).where(
             CoachLesson.status == "active",
-            CoachLesson.applies.in_(scopes))
+            scope_clause)
         .order_by(CoachLesson.id.desc()).limit(limit))).scalars().all()
 
 
