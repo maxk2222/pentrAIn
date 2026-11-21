@@ -87,22 +87,23 @@ class LudusProvider:
             await self._req("PUT", "/testing/stop")
         # range config is a YAML file upload, multipart field name "file"
         payload = yaml.safe_dump(config, sort_keys=False).encode()
+        files = {"file": ("range-config.yml", payload, "application/x-yaml")}
         try:
-            await self._req(
-                "PUT", "/range/config",
-                files={"file": ("range-config.yml", payload, "application/x-yaml")},
-            )
+            await self._req("PUT", "/range/config", files=files)
         except LudusError as e:
-            # destroy_range deletes the range OBJECT in Ludus 2 — PUT config on a
-            # missing default range 404s. Recreate the range + point the user's
-            # default at it (the dangling default is what 404s), then retry once.
-            if "404" not in str(e):
+            if "esting is enabled" in str(e):
+                # testing can't be STOPPED on an empty range (the stop-playbook
+                # 500s on an empty inventory), leaving the config locked — the
+                # 409's own remedy is `Use --force to override`.
+                await self._req("PUT", "/range/config?force=true", files=files)
+            elif "404" in str(e):
+                # destroy_range deletes the range OBJECT in Ludus 2 — PUT config
+                # on a missing default range 404s. Recreate the range + point
+                # the user's default at it (the dangling default is what 404s).
+                await self._ensure_default_range(name)
+                await self._req("PUT", "/range/config", files=files)
+            else:
                 raise
-            await self._ensure_default_range(name)
-            await self._req(
-                "PUT", "/range/config",
-                files={"file": ("range-config.yml", payload, "application/x-yaml")},
-            )
         await self._req("POST", "/range/deploy", json={})
         st = await self.status()
         # Return the actual ludus rangeID ("" when ludus doesn't echo one —
