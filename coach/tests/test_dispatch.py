@@ -452,3 +452,26 @@ async def test_pause_denies_everything_but_none():
         assert denied is False and "paused" in res, act
     _spoke_none, _ = await coach._dispatch({"type": "none", "reason": "parked"})
     assert not c.execs[1:] and len(c.chats) == 1  # only the pre-pause report
+
+
+async def test_denial_match_ignores_literal_text():
+    """s73: a report heredoc mentioning a filtered host's ip + the word
+    'nmap' was denied as 'prior evidence'. Literal content is DATA —
+    only unquoted invocations match."""
+    coach, _c = _coach(autonomy=4)
+    coach.facts.denials = ["filtered:192.168.3.41@kali"]
+    # report write mentioning the dead host + scan words → passes
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "cat > /root/lan-report.md << 'REPORTEOF'\n"
+        "# LAN Report\n"
+        "nmap scan of 192.168.3.41 found no open ports — host filtered.\n"
+        "REPORTEOF"})
+    assert not res.startswith("denied"), res
+    # quoted mention inside another command → passes
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "grep '192.168.3.41' /root/lan-report.md"})
+    assert not res.startswith("denied"), res
+    # real rescan of the dead host → still blocked
+    _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "nmap -sV 192.168.3.41"})
+    assert res.startswith("denied"), res

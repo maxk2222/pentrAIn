@@ -1799,6 +1799,23 @@ class SessionCoach:
         # actually-dead direct connect to app01 went unseen by
         # filtered:app01@kali).
         segs = _shell_segments(cmd)
+        # heredoc bodies are literal DATA, not invocations — \n already split
+        # them into segments, so a `<< 'EOF'` opener marks body lines until a
+        # bare `EOF` segment. Skip them entirely: a report write mentioning
+        # 'nmap' + a dead ip must not trip the matcher (s73 lan-report.md)
+        hd_marker = None
+        clean_segs: list[str] = []
+        for s in segs:
+            if hd_marker is not None:
+                if s.strip() == hd_marker:
+                    hd_marker = None
+                continue
+            m = re.search(r"<<\s*['\"]?(\w+)['\"]?\s*$", s)
+            if m:
+                hd_marker = m.group(1)
+                clean_segs.append(s[:m.start()])
+            else:
+                clean_segs.append(s)
 
         def _head(seg: str) -> str:
             """Segment text up to the first user@host token = local part."""
@@ -1827,6 +1844,13 @@ class SessionCoach:
         _CONNECT = re.compile(
             r"\b(nmap|masscan|rustscan|unicornscan|nc|netcat|fping|ping|"
             r"ssh|sshpass|curl|wget|telnet|sshuttle|proxychains4?|socat)\b")
+
+        def _literal_free(s: str) -> str:
+            """Quoted strings are DATA, not invocations — mentioning a dead
+            ip or 'nmap' inside quotes must not trip the matcher. Applied
+            to kali-vantage heads only — remote tails keep their quoting,
+            the whole remote command lives inside it."""
+            return re.sub(r"'[^']*'|\"[^\"]*\"", " ", s)
         # availability probes are not invocations — `which expect python3
         # perl` must pass a known-missing:expect fact or the whole probe
         # (and the info about the OTHER tools) dies with it (s84 live)
@@ -1863,9 +1887,11 @@ class SessionCoach:
                 if not key:
                     continue
                 if vantage == "kali":
-                    # each local segment independently — cross-segment
-                    # joins must not fabricate evidence
-                    if any(_deny(key, dn, _head(s)) for s in segs):
+                    # each clean (non-heredoc-body) local segment
+                    # independently — cross-segment joins must not
+                    # fabricate evidence
+                    if any(_deny(key, dn, _literal_free(_head(s)))
+                           for s in clean_segs):
                         return dn
                 else:
                     # host facts see only what runs ON that host
