@@ -109,6 +109,10 @@ _CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
                 "wait"}
 
 
+class _Preempt(Exception):
+    """Operator signal (chat/pause) aborted an in-flight llm call."""
+
+
 @dataclass
 class _Worker:
     """A spawned parallel subagent — own LLM context, own tmux window
@@ -1042,6 +1046,24 @@ class SessionCoach:
         return (self._chat_wants_turn
                 and asyncio.current_task() is not self._chat_task)
 
+    async def _llm_call(self, messages: list, **kw) -> dict:
+        """One model call that stays interruptible: the call runs as a task
+        and is re-checked every ~1.5s — a buffered operator message or a
+        pause cancels it mid-flight instead of riding out the full model
+        latency (60-180s on the 35B) inside the llm lock."""
+        task = asyncio.ensure_future(self.llm.chat(messages, **kw))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=1.5)
+                if done:
+                    return task.result()
+                if self._chat_pending() or not self.state.coach_enabled:
+                    task.cancel()
+                    raise _Preempt()
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
     async def _chat_debounced(self) -> None:
         try:
             await asyncio.sleep(CHAT_DEBOUNCE_S)
@@ -1331,9 +1353,16 @@ class SessionCoach:
                         tools = [t for t in tools
                                  if t["function"]["name"] not in drop]
                 try:
-                    resp = await self.llm.chat(messages, on_delta=on_delta,
-                                               tools=tools,
-                                               reasoning_effort=effort)
+                    resp = await self._llm_call(messages, on_delta=on_delta,
+                                                tools=tools,
+                                                reasoning_effort=effort)
+                except _Preempt:
+                    # operator signal mid-call — abort this sub-call NOW,
+                    # don't wait out a 60-180s model latency (u/pen: pause
+                    # + chat still felt stuck behind each in-flight call)
+                    await log.ainfo("llm call preempted by operator",
+                                    session=self.sid)
+                    break
                 except (LlmError, httpx.HTTPError) as e:
                     # one quiet retry — a slow/flaky endpoint shouldn't kill
                     # the turn outright; the turn budget keeps worst-case
@@ -1341,8 +1370,12 @@ class SessionCoach:
                     await log.awarning("llm call failed, retrying once",
                                        error=str(e))
                     try:
-                        resp = await self.llm.chat(messages, tools=tools,
-                                                   reasoning_effort=effort)
+                        resp = await self._llm_call(messages, tools=tools,
+                                                    reasoning_effort=effort)
+                    except _Preempt:
+                        await log.ainfo("llm call preempted by operator",
+                                        session=self.sid)
+                        break
                     except (LlmError, httpx.HTTPError) as e2:
                         await log.awarning("llm call failed", error=str(e2))
                         return False

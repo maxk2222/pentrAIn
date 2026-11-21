@@ -3345,3 +3345,51 @@ async def test_pause_in_debounce_window_sends_notice():
     coach.state.coach_enabled = False           # paused mid-debounce
     await asyncio.sleep(CHAT_DEBOUNCE_S + 0.2)
     assert any("disabled" in m["content"] for m in c.chats)
+
+
+async def test_llm_call_preempted_by_pause():
+    """An in-flight llm.chat is cancelled when pause lands — the turn
+    doesn't ride out the model latency (u/pen: pause felt stuck)."""
+    coach, _c = _coach()
+
+    class SlowLlm(FakeLlm):
+        async def chat(self, messages, **kw):
+            self.calls.append(messages)
+            await asyncio.sleep(60)
+            return {"content": "", "actions": [], "tool_calls": []}
+
+    coach.llm = SlowLlm()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    coach.state.coach_enabled = False            # paused before the call
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 1             # call aborted, no retry loop
+
+
+async def test_llm_call_preempted_by_chat():
+    """Buffered trainee chat cancels the in-flight call so the answer
+    doesn't wait a full model latency."""
+    coach, _c = _coach()
+    coach.state.autonomy_level = 4
+    coach.ctx["session"]["autonomy_level"] = 4
+    slow = {"content": "", "tool_calls": [_call(1, "exec_in_kali")],
+            "actions": [{"type": "exec_in_kali", "command": "id",
+                         "_call_id": "c1"}]}
+
+    class FirstSlowLlm(FakeLlm):
+        async def chat(self, messages, **kw):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                # first sub-call returns a chain action; second hangs
+                return slow
+            await asyncio.sleep(60)
+            return {"content": "", "actions": [], "tool_calls": []}
+
+    coach.llm = FirstSlowLlm()
+    # chat arrives while the second sub-call is in flight
+    async def _poke():
+        await asyncio.sleep(0.3)
+        coach.state.pending_chat.append("frage")
+    asyncio.create_task(_poke())
+    await coach._llm_turn("work", proactive=True)
+    assert len(coach.llm.calls) == 2             # second call cancelled early
