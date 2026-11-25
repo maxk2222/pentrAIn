@@ -527,6 +527,7 @@ _ROLE_FRAGMENTS = {
 
 def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
                          plan_txt: str = "", shared_txt: str = "",
+                         directive: str = "",
                          *, turn_cap: int = 80,
                          time_cap_s: int = 3600) -> str:
     """System prompt for a spawned worker agent — scoped to its task,
@@ -544,6 +545,11 @@ def render_worker_prompt(ctx: dict, w, facts_txt: str = "",
         (f"TARGETS: {targets} — use these exact IPs/hostnames; resolve "
          "names via getent; never invent addresses."),
     ]
+    if directive:
+        # the operator's standing order — workers spawn mid-task and must
+        # inherit the engagement's aim, not just the parent's plan
+        lines.append(
+            "OPERATOR_DIRECTIVE (overrides everything below): " + directive)
     if frag := _ROLE_FRAGMENTS.get(getattr(w, "role", "general") or ""):
         lines.append(frag)
     if getattr(w, "done_when", ""):

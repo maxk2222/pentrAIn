@@ -4127,6 +4127,7 @@ class SessionCoach:
                      plan_render(self.state.plan, cap=350,
                                  title="OPERATOR_PLAN"),
                      shared_txt=shared,
+                     directive=self.state.operator_directive,
                      turn_cap=turn_cap, time_cap_s=time_cap)},
                 {"role": "user", "content": w.task}]
         t0 = time.monotonic()
