@@ -969,10 +969,12 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     # shell waits for a delimiter, so typed lines land as heredoc input.
     if fg_cmd and fg_cmd not in shells:
         return {"out": "", "visible": True, "busy": True, "exitcode": None,
-                "err": (f"pane busy: '{fg_cmd}' is running interactively — "
-                        "use type_in_pane to send input lines into it (e.g. "
-                        "passwords, menu choices), or send 'C-c' via "
-                        "exec_in_kali to interrupt it")}
+                "err": (f"pane busy: '{fg_cmd}' is running — for a "
+                        "long-running tool use `wait` to poll it and collect "
+                        "its output (C-c throws the output away); use "
+                        "type_in_pane to answer input prompts (passwords, "
+                        "menus); 'C-c' via exec_in_kali only if it is "
+                        "genuinely stuck")}
     if re.search(r"(heredoc|dquote|quote|pipe)?>\s*$", last) and last != ">":
         return {"out": "", "visible": True, "busy": True, "exitcode": None,
                 "err": (f"pane busy: shell awaits more input ({last[-40:]!r} "
@@ -1088,10 +1090,13 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
     # timed out but still typed — the partial pane tail beats a dead end
     return {"out": last_tail
             or "(still running — visible in the pentrain-coach tmux window)",
-            "err": ("still running — pane is now busy; further commands "
-                    "bounce until it finishes or you send 'C-c'. If it is "
-                    "waiting for INPUT (password/menu prompt), answer NOW "
-                    "with type_in_pane — prompts time out"),
+            "err": ("still running — pane is now busy. For a long command "
+                    "this is NORMAL: use the `wait` tool to poll it and "
+                    "collect the output when it finishes — do NOT C-c or "
+                    "you lose all its output. Send 'C-c' only if it is "
+                    "genuinely stuck. If it is waiting for INPUT "
+                    "(password/menu prompt), answer NOW with type_in_pane "
+                    "— prompts time out"),
             "exitcode": None, "visible": True, "timed_out": True}
 
 
