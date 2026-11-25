@@ -1323,6 +1323,8 @@ class SessionCoach:
 
             spoke = False
             worked = False
+            resp: dict | None = None
+            preempted = False
             t0 = time.monotonic()
             chain_max = int(self.cfg.get("coach", {}).get(
                 "takeover_chain_max", 48))
@@ -1362,6 +1364,7 @@ class SessionCoach:
                     # + chat still felt stuck behind each in-flight call)
                     await log.ainfo("llm call preempted by operator",
                                     session=self.sid)
+                    preempted = True
                     break
                 except (LlmError, httpx.HTTPError) as e:
                     # one quiet retry — a slow/flaky endpoint shouldn't kill
@@ -1375,6 +1378,7 @@ class SessionCoach:
                     except _Preempt:
                         await log.ainfo("llm call preempted by operator",
                                         session=self.sid)
+                        preempted = True
                         break
                     except (LlmError, httpx.HTTPError) as e2:
                         await log.awarning("llm call failed", error=str(e2))
@@ -1485,6 +1489,11 @@ class SessionCoach:
                     break  # operator message wins — release the llm lock
                 if not self.state.coach_enabled:
                     break  # pause arrived mid-chain — stop after this sub-call
+            if preempted:
+                # operator interrupted mid-call — the pending chat owns the
+                # next turn; an interruption is not a stall and resp may be
+                # unset on the first sub-call
+                return spoke
             if worked:
                 # real work happened — this turn is progress, not an
                 # unanswered nudge; don't let it feed the backoff streak
