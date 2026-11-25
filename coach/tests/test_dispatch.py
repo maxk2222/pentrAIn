@@ -475,3 +475,27 @@ async def test_denial_match_ignores_literal_text():
     _ok, res = await coach._dispatch({"type": "exec_in_kali", "command":
         "nmap -sV 192.168.3.41"})
     assert res.startswith("denied"), res
+
+
+async def test_denial_match_ignores_interpreter_payloads():
+    """s81: a python3 -c report-write whose -c payload mentions a filtered
+    host + 'nmap' was denied twice (prior-evidence + scan saturation).
+    -c/-e args are DATA — an inner ' ends naive quote spans early, so the
+    payload must be truncated wholesale, not span-stripped."""
+    coach, _c = _coach(autonomy=4)
+    coach.facts.denials = ["filtered:192.168.3.237@kali"]
+    import coach.facts as facts_mod
+    coach.facts.hosts["192.168.3.0"] = facts_mod.HostFact(
+        ip="192.168.3.0", scans=4)
+    # inner ' inside the -c payload breaks naive quote-stripping — must
+    # still count as data for BOTH the denial matcher and scan saturation
+    did, res = await coach._dispatch({"type": "exec_in_kali", "command":
+        "python3 -c 'report = \"nmap said 192.168.3.237 filtered; "
+        "it\\'s settled\"\nopen(\"/root/r.md\",\"w\").write(report)'"})
+    assert not res.startswith("denied"), res
+    # the interpreter's own -c payload runs real commands though — a
+    # missing-tool denial still sees the interpreter token
+    coach.facts.denials = ["missing:expect@kali"]
+    did, res = await coach._dispatch({"type": "exec_in_kali",
+        "command": "expect -c 'spawn ssh app01'"})
+    assert res.startswith("denied"), res

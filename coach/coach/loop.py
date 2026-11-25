@@ -116,6 +116,36 @@ _CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
                 "spawn_agent", "collect_agent", "agent_status", "kill_agent",
                 "wait"}
 
+_CODE_ARG = re.compile(
+    r"(\b(?:python3?|bash|sh|zsh|perl|ruby|php|node|lua|awk|expect)\s+"
+    r"-\w*[ce]\w*)\s+.*")
+_CODE_ARG_SUB = r"\1 "
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+_HEREDOC_OPEN = re.compile(r"<<\s*['\"]?(\w+)['\"]?\s*$")
+
+
+def _ops_text(cmd: str) -> str:
+    """A command's operational text for guard matching — literal DATA
+    removed so report content, script payloads and quoted mentions can't
+    masquerade as invocations. Strips: heredoc bodies, interpreter
+    -c/-e payloads wholesale (inner quotes defeat span-stripping), and
+    balanced quoted spans."""
+    segs = re.split(r"[;\n]|&&|\|\|", cmd or "")
+    hd = None
+    keep: list[str] = []
+    for s in segs:
+        if hd is not None:
+            if s.strip() == hd:
+                hd = None
+            continue
+        m = _HEREDOC_OPEN.search(s)
+        if m:
+            hd = m.group(1)
+            keep.append(s[:m.start()])
+        else:
+            keep.append(s)
+    return _QUOTED.sub(" ", _CODE_ARG.sub(_CODE_ARG_SUB, " ".join(keep)))
+
 
 class _Preempt(Exception):
     """Operator signal (chat/pause) aborted an in-flight llm call."""
@@ -1879,10 +1909,14 @@ class SessionCoach:
             r"ssh|sshpass|curl|wget|telnet|sshuttle|proxychains4?|socat)\b")
 
         def _literal_free(s: str) -> str:
-            """Quoted strings are DATA, not invocations — mentioning a dead
-            ip or 'nmap' inside quotes must not trip the matcher. Applied
-            to kali-vantage heads only — remote tails keep their quoting,
+            """Quoted strings + interpreter payloads are DATA, not
+            invocations — mentioning a dead ip or 'nmap' inside them must
+            not trip the matcher. `python3 -c 'x "quote" y'` defeats naive
+            quote-stripping (inner ' ends the span early) — interpreter
+            -c/-e args are truncated wholesale instead. Applied to
+            kali-vantage heads only — remote tails keep their quoting,
             the whole remote command lives inside it."""
+            s = _CODE_ARG.sub(_CODE_ARG_SUB, s)
             return re.sub(r"'[^']*'|\"[^\"]*\"", " ", s)
         # availability probes are not invocations — `which expect python3
         # perl` must pass a known-missing:expect fact or the whole probe
@@ -2512,11 +2546,14 @@ class SessionCoach:
                     # scan saturation: >=3 recon scans on a host that still
                     # shows zero open ports is settled evidence — the next
                     # flag-variant rescan is a loop, not iteration (s84:
-                    # w1 ran 4 nmap variants at a filtered host)
+                    # w1 ran 4 nmap variants at a filtered host). Match on
+                    # the operational text only — a report write mentioning
+                    # 'nmap' + the dead ip is data, not a rescan (s81).
+                    ops = _ops_text(cmd)
                     if re.search(
                             r"\b(nmap|masscan|rustscan|unicornscan)\b",
-                            cmd or ""):
-                        ips = self._IP_RE.findall(cmd or "")
+                            ops):
+                        ips = self._IP_RE.findall(ops)
                         hh = (self.facts.hosts.get(ips[-1])
                               if ips else None)
                         if hh and hh.scans >= 3 and not hh.ports:
