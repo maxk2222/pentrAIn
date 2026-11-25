@@ -348,6 +348,15 @@ def test_valid_on_marks_working_credential():
         "=== Trying passwords ===", 0)
     for c in f6.creds:
         assert not c.valid_on
+    # a rejected cred renders 'failed:' — an explicit dead-end signal the
+    # model can't misread as 'tried: maybe works' (s81 phantom creds)
+    f7 = FactsDB()
+    f7.observe_output(
+        "sshpass -p 'dead' ssh ssw0d@192.168.3.54 'whoami'",
+        "Permission denied, please try again.", 5)
+    r = f7.render()
+    assert "failed:192.168.3.54" in r and "tried:" not in r.split(
+        "creds:")[1].split("\n")[0]
 
 
 def test_read_target_ignores_url_paths():

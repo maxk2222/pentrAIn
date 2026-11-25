@@ -203,6 +203,7 @@ class CredFact:
     source: str = ""                      # where found: host, path, cmd
     tested_on: set[str] = field(default_factory=set)   # hosts it was tried on
     valid_on: set[str] = field(default_factory=set)    # hosts it worked on
+    failed_on: set[str] = field(default_factory=set)   # hosts that rejected it
 
 
 @dataclass
@@ -519,6 +520,16 @@ class FactsDB:
                 for user, secret, host in _cmd_creds(cmd):
                     if host:
                         self.add_cred(user, secret, valid_on=host)
+            elif _AUTH_FAIL_OUT.search(strip_ansi(out or "")):
+                # rejected credential — record WHERE it died so the model
+                # sees 'failed:' instead of a neutral 'tried:' it keeps
+                # re-reading as maybe-valid (s81: ssw0d/$pass denied ~10×
+                # yet still cited as a working cred)
+                for user, secret, host in _cmd_creds(cmd):
+                    if host:
+                        c = self.add_cred(user, secret, tested_on=host)
+                        if c:
+                            c.failed_on.add(host)
             # root-cron promotion: a crontab line for a file WE wrote proves
             # root code-exec (not just a discovered schedule) — the cap must
             # outlive the history that produced it
@@ -860,6 +871,8 @@ class FactsDB:
             for c in self.creds[:6]:
                 if c.valid_on:
                     st = "valid:" + ",".join(sorted(c.valid_on)[:3])
+                elif c.failed_on:
+                    st = "failed:" + ",".join(sorted(c.failed_on)[:3])
                 elif c.tested_on:
                     st = "tried:" + ",".join(sorted(c.tested_on)[:3])
                 else:
