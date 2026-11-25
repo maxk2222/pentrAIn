@@ -428,8 +428,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
             "macro-chains (recon/web_enum/smb_enum/cred_try/…) on their "
             "own pane; channel_open keeps a persistent interactive "
             "session (ssh/msfconsole/nc) on window c1/c2.")
-        if (st.operator_directive
-                and time.time() - st.operator_directive_ts < 600):
+        if st.operator_directive:
+            # pinned until the operator supersedes it — a long-running task
+            # ("find+own a box") must not fade after 600s and leave the
+            # coach drifting back to generic behaviour.
             parts.append(
                 "OPERATOR_DIRECTIVE (this overrides your plan — execute it "
                 "verbatim NOW): " + st.operator_directive)

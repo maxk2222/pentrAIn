@@ -3685,12 +3685,6 @@ class SessionCoach:
         if spoke:
             self.state.last_nudge_ts = time.time()
             self.state.nudges_sent += 1
-        # an executed action (parent only — a worker's execs must not consume
-        # the operator's directive) retires the pinned OPERATOR_DIRECTIVE so
-        # it stops steering later turns; the chat message stays in history
-        if (spoke and window is None and t in (
-                "exec_in_kali", "type_in_pane", "submit_flag", "check_flag")):
-            self.state.operator_directive = ""
         return spoke, result
 
     # ---------- parallel worker agents (L4 subagents) ----------

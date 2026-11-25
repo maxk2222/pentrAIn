@@ -1217,10 +1217,12 @@ async def test_context_operator_directive_at_l4():
     st.operator_directive_ts = time.time()
     msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
     assert "OPERATOR_DIRECTIVE" in msg and "ssh -tt" in msg
-    # stale directives expire — don't boss the model around forever
-    st.operator_directive_ts = time.time() - 700
+    # directives are standing orders — they stay pinned until the operator
+    # supersedes them, never fading mid-task (s81: a long hunt lost
+    # steering after one action / 600s)
+    st.operator_directive_ts = time.time() - 3600
     msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
-    assert "OPERATOR_DIRECTIVE" not in msg
+    assert "OPERATOR_DIRECTIVE" in msg
 
 
 # ---------- in-turn agentic chain (act→observe→act) ----------
@@ -1929,9 +1931,10 @@ async def test_busy_bounces_are_per_pane():
     assert "PANE_WEDGED" not in r
 
 
-async def test_operator_directive_clears_after_first_action():
-    """A pinned OPERATOR_DIRECTIVE that was acted on must stop steering —
-    otherwise stale directives train the model to ignore the block."""
+async def test_operator_directive_persists_past_actions():
+    """An OPERATOR_DIRECTIVE is a standing order — one executed action does
+    not retire it. Multi-step tasks (hunt+compromise a host) need steering
+    across hundreds of actions; only a new chat supersedes it."""
     import time
     coach, _c = _coach()
     coach.state.autonomy_level = 4
@@ -1941,7 +1944,7 @@ async def test_operator_directive_clears_after_first_action():
     st.operator_directive_ts = time.time()
     await coach._dispatch({"type": "exec_in_kali", "command": "ls"},
                           proactive=True)
-    assert st.operator_directive == ""
+    assert st.operator_directive == "submit the flag you saw"
 
 
 async def test_context_includes_reference_and_tool_inventory():
