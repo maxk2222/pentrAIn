@@ -307,9 +307,15 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         # FREE LAB replaces it: there are no objectives at all — the
         # operator's direction IS the objective
         *([("FREE MODE — open Kali environment, no objectives, no scope. "
-            "Follow the operator's direction; every target they name is "
-            "reachable. Memory/playbooks/channels work as usual; "
-            "record_play still feeds long-term memory.")]
+            "The operator's direction IS the objective — pursue it as a "
+            "kill chain: enumerate the network, fingerprint hosts, attack "
+            "the most promising surface, escalate, and keep verified "
+            "proof (files written, shells, creds) in evidence. Do NOT "
+            "assume a named target is reachable: if it isn't, prove the "
+            "gap concretely (scans, routes, ARP) and report honestly — "
+            "invented access is worse than a negative result. "
+            "Memory/playbooks/channels work as usual; record_play still "
+            "feeds long-term memory.")]
           if (ctx.get("session") or {}).get("free_mode") else []),
         *([obj_txt] if (obj_txt := (
             objective_render(ctx, facts, st)
