@@ -1425,7 +1425,18 @@ class SessionCoach:
                                 # progress — without this a re-fire loop of
                                 # denied commands never trips the stall
                                 # machinery (s81: 7 identical denied nmmaps)
-                                and not str(res or "").startswith("denied:")):
+                                and not str(res or "").startswith("denied:")
+                                # an auth-failed cred try is equally not
+                                # progress (s81: sshpass 'Permission denied'
+                                # re-fire loops) — and a bare C-c is cleanup,
+                                # never work
+                                and not re.search(
+                                    r"Permission denied[,(]|"
+                                    r"Authentication failed|"
+                                    r"Access denied|please try again",
+                                    str(res or ""), re.IGNORECASE)
+                                and str(a.get("command") or "").strip()
+                                != "C-c"):
                             worked = True
                         arg = (a.get("command") or a.get("text")
                                or a.get("content") or a.get("value")
