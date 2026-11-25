@@ -65,8 +65,16 @@ _HYDRA_URI = re.compile(r"(?:ssh|ftp|smb|rdp|mysql|vnc|telnet)://([\w.\-]+)")
 # auth failures in OUTPUT — a command that exits 0 without any of these
 # means the credential in its line actually worked (valid_on)
 _AUTH_FAIL_OUT = re.compile(
-    r"Access denied|Authentication failed|Permission denied \(publickey|"
-    r"Logon failure|Login failed|incorrect password", re.IGNORECASE)
+    r"Access denied|Authentication failed|"
+    # ssh auth failures in both forms — 'Permission denied (publickey...)'
+    # and sshpass password rejections 'Permission denied, please try
+    # again.'. The publickey-only pattern missed the second form and
+    # marked dead creds valid (s81: 'password'/'admin' stored valid_on
+    # .54). Bare 'Permission denied' stays out — a successful ssh running
+    # 'cat /etc/shadow' also prints it.
+    r"Permission denied[,(]|"
+    r"Logon failure|Login failed|incorrect password|"
+    r"please try again", re.IGNORECASE)
 # `sort | uniq -c | sort -rn` output lines — the leading "N <value>" pair is
 # top-talker evidence (top attacker IP, hottest user) that MUST survive
 # context loss: s54 computed `5 203.0.113.44` correctly, then lost it and

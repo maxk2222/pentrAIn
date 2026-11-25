@@ -320,6 +320,25 @@ def test_valid_on_marks_working_credential():
         "Access denied for user 'u'@'db'", 0)
     c3 = next(c for c in f3.creds if c.secret == "Bad")
     assert not c3.valid_on
+    # sshpass password rejection — 'Permission denied, please try again.'
+    # is an auth failure, NOT a file error: s81 stored dead creds as
+    # valid_on because only the '(publickey' form was matched
+    f4 = FactsDB()
+    f4.observe_output(
+        "sshpass -p 'password' ssh -o StrictHostKeyChecking=no "
+        "admin@192.168.3.54 'whoami'",
+        "Permission denied, please try again.", 0)
+    c4 = next(c for c in f4.creds if c.secret == "password")
+    assert not c4.valid_on
+    # but a working ssh whose remote command hits a file-permission wall
+    # must NOT poison the cred — 'Permission denied' without ,/( stays
+    # out of the auth-fail set
+    f5 = FactsDB()
+    f5.observe_output(
+        "sshpass -p 'Real1!' ssh admin@host 'cat /etc/shadow'",
+        "cat: /etc/shadow: Permission denied", 0)
+    c5 = next(c for c in f5.creds if c.secret == "Real1!")
+    assert "host" in c5.valid_on
 
 
 def test_read_target_ignores_url_paths():
