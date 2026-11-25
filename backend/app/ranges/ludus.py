@@ -104,13 +104,47 @@ class LudusProvider:
                 await self._req("PUT", "/range/config", files=files)
             else:
                 raise
-        await self._req("POST", "/range/deploy", json={})
+        try:
+            await self._req("POST", "/range/deploy", json={})
+        except LudusError as e:
+            msg = str(e)
+            if "esting enabled" in msg:
+                # same testing-lock edge as the config PUT above — deploy
+                # refuses internet access while testing is stuck on an
+                # empty range. force rides in the JSON body — the query
+                # param is ignored here.
+                await self._req("POST", "/range/deploy", json={"force": True})
+            elif "active deployment" in msg or "already deployed" in msg:
+                # a previous (possibly crashed) session already pushed this
+                # config — its deploy is running or done; wait it out instead
+                # of erroring a fresh session over somebody else's deploy.
+                await self._wait_range_deployed()
+            else:
+                raise
         st = await self.status()
         # Return the actual ludus rangeID ("" when ludus doesn't echo one —
         # subsequent calls then use the user's default range). Callers filter
         # via `rangeID=`; `userID=` is an admin user filter and 400s on
         # range names.
         return st.range_id or ""
+
+    async def _wait_range_deployed(self, timeout_s: float = 1800) -> None:
+        """Poll GET /range until the in-flight deploy settles — used when a
+        session's deploy POST 409s on someone else's running deployment."""
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                st = await self._req("GET", "/range")
+            except LudusError:
+                await asyncio.sleep(15)
+                continue
+            state = (st.get("rangeState") or "").upper() if isinstance(st, dict) else ""
+            if state == "DEPLOYED":
+                return
+            if state in ("ERROR", "FAILED"):
+                raise LudusError(f"in-flight range deploy ended in {state}")
+            await asyncio.sleep(15)
+        raise LudusError("timed out waiting for in-flight range deploy")
 
     async def _ensure_default_range(self, name: str) -> None:
         """POST /api/v2/ranges/create + POST /user/default-range — Ludus does

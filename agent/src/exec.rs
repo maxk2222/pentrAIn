@@ -69,7 +69,7 @@ pub async fn exec_visible(cmd: &str, window: Option<&str>, timeout_s: u64,
     if !tmux::is_shell_fg(&fg) {
         return json!({"out": "", "visible": true, "busy": true,
                       "exitcode": Value::Null,
-                      "err": format!("pane busy: '{fg}' is running interactively — use type_in_pane to send input lines into it (e.g. passwords, menu choices), or send 'C-c' via exec_in_kali to interrupt it")});
+                      "err": format!("pane busy: '{fg}' is running interactively — for a long-running tool use `wait` to poll it (C-c throws away its output); use type_in_pane to answer input prompts (passwords, menus), or send 'C-c' via exec_in_kali only if it is genuinely stuck")});
     }
     let last = tmux::last_pane_line(w).await;
     if is_continuation(&last) {
@@ -221,7 +221,7 @@ pub async fn exec_visible(cmd: &str, window: Option<&str>, timeout_s: u64,
         "out": if last_tail.is_empty() {
             "(still running — visible in the pentrain-coach tmux window)".to_string()
         } else { last_tail },
-        "err": "still running — pane is now busy; further commands bounce until it finishes or you send 'C-c'. If it is waiting for INPUT (password/menu prompt), answer NOW with type_in_pane — prompts time out",
+        "err": "still running — pane is now busy. For a long command this is NORMAL: use the `wait` tool to poll it and collect the output when it finishes — do NOT C-c or you lose all its output. Send 'C-c' only if it is genuinely stuck. If it is waiting for INPUT (password/menu prompt), answer NOW with type_in_pane — prompts time out",
         "exitcode": Value::Null, "visible": true, "timed_out": true})
 }
 

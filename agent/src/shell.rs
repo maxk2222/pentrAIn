@@ -67,7 +67,8 @@ fn spawn_pty(chan: &str, cols: u16, rows: u16) -> std::io::Result<Pty> {
     unsafe {
         cmd.pre_exec(move || {
             libc::setsid();
-            libc::ioctl(slave, libc::TIOCSCTTY, 0);
+            #[allow(clippy::useless_conversion)]
+            libc::ioctl(slave, libc::TIOCSCTTY.into(), 0);
             libc::dup2(slave, 0);
             libc::dup2(slave, 1);
             libc::dup2(slave, 2);
