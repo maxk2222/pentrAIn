@@ -1418,9 +1418,14 @@ class SessionCoach:
                         spoke |= did
                         if cid := a.get("_call_id"):
                             call_results[cid] = res
-                        if did and a.get("type") in ("exec_in_kali", "type_in_pane",
-                                                     "submit_flag", "check_flag",
-                                                     "wait"):
+                        if (did and a.get("type") in (
+                                "exec_in_kali", "type_in_pane",
+                                "submit_flag", "check_flag", "wait")
+                                # a denied action is a refused attempt, not
+                                # progress — without this a re-fire loop of
+                                # denied commands never trips the stall
+                                # machinery (s81: 7 identical denied nmmaps)
+                                and not str(res or "").startswith("denied:")):
                             worked = True
                         arg = (a.get("command") or a.get("text")
                                or a.get("content") or a.get("value")

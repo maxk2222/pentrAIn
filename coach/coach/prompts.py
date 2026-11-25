@@ -232,6 +232,10 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         f"SESSION: state={s['state']} autonomy={s['autonomy_level']} coach_on={s['coach_enabled']}",
         *([("INTERNET: YES — kali has a LAN uplink (second nic, DHCP) so "
             "apt/pip/curl DO work this session; range targets stay isolated. "
+            "The LAN nic is eth1 — eth0 is the range net. L2 discovery "
+            "tools (arp-scan, netdiscover, tcpdump) bind eth0 by default: "
+            "pass -I eth1 or an explicit subnet to hit the real LAN, else "
+            "you scan the empty range net. "
             "web_search(query) + web_fetch(url) are available for research "
             "(CVEs, exploits, error strings, docs) — fetch the best hit "
             "rather than crawling; local tools still cover anything "
@@ -444,9 +448,11 @@ def build_context_msg(ctx: dict, st, reason: str, urgency: str = "low",
         if st.proactive_streak:
             parts.append(
                 f"STALL_ALERT: your last {st.proactive_streak} turn(s) "
-                "produced no command execution — announcing a plan is NOT "
-                "progress, nobody answers you. Call exec_in_kali / "
-                "submit_flag / check_flag NOW (batch several in one turn).")
+                "made no progress — announcing a plan is NOT progress, and "
+                "re-firing a denied command is NOT progress either (a "
+                "denial is a verdict, not a retry invitation). Do something "
+                "different NOW: new vector, new host, or gather the fact "
+                "the denial demanded.")
         saturated = [f"{t} ({n}x)" for t, n in st.recon_counts().items()
                      if n >= 3]
         if saturated:

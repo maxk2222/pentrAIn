@@ -827,7 +827,7 @@ async def test_context_stall_alert_at_l4():
     assert "STALL_ALERT" not in msg          # no stall yet
     st.proactive_streak = 2
     msg = build_context_msg(coach.ctx, st, "takeover loop", stage=1)
-    assert "STALL_ALERT" in msg and "exec_in_kali" in msg
+    assert "STALL_ALERT" in msg and "no progress" in msg
 
 
 async def test_context_recon_saturation_at_l4():
