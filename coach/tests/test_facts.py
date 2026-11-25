@@ -339,6 +339,15 @@ def test_valid_on_marks_working_credential():
         "cat: /etc/shadow: Permission denied", 0)
     c5 = next(c for c in f5.creds if c.secret == "Real1!")
     assert "host" in c5.valid_on
+    # truncated composite command: exit 0 but only its own banner made it
+    # into the capture — no success evidence, must NOT mark valid
+    f6 = FactsDB()
+    f6.observe_output(
+        "echo '=== Trying passwords ===' && for u in root admin ssw0d; do "
+        "sshpass -p '$pass' ssh $u@192.168.3.54 'whoami'; done",
+        "=== Trying passwords ===", 0)
+    for c in f6.creds:
+        assert not c.valid_on
 
 
 def test_read_target_ignores_url_paths():

@@ -83,6 +83,21 @@ _TOPN = re.compile(
     r"^\s*(\d{1,9})\s+((?:\d{1,3}\.){3}\d{1,3}|[\w@:.-]{3,64})\s*$", re.MULTILINE)
 
 
+_NOISE_LINE = re.compile(r"^\s*[=~\-\s]*$|^\s*===|^\s*#")
+
+
+def _success_evidence(out: str) -> bool:
+    """Does the output contain at least one real content line? Banner-only
+    captures ('=== Trying passwords ===' from a truncated loop) are not
+    proof — a marked-valid cred needs SOMETHING the remote side produced
+    (whoami result, banner, file listing), never just our own echo."""
+    for ln in out.splitlines():
+        t = ln.strip()
+        if t and not _NOISE_LINE.match(ln):
+            return True
+    return False
+
+
 def _cmd_creds(cmd: str) -> list[tuple[str, str, str | None]]:
     """(user, secret, target) triples the command line tests. The target
     is per-credential: the sshpass pair authenticates against the ssh
@@ -493,9 +508,14 @@ class FactsDB:
                         self.findings.append(tag[:80])
             # a credential test that exits 0 without an auth-failure marker
             # worked — mark it valid so `tried:` becomes `valid:` and the
-            # model stops stuffing it at unrelated services
+            # model stops stuffing it at unrelated services. Requires
+            # positive evidence: a loop/composite cred command whose output
+            # was truncated to its banner ("=== Trying … ===") contains no
+            # proof of success — absence-of-failure ≠ success (s81: dead
+            # creds marked valid_on from header-only captures).
             if (code == 0 and not typed_input
-                    and not _AUTH_FAIL_OUT.search(strip_ansi(out or ""))):
+                    and not _AUTH_FAIL_OUT.search(strip_ansi(out or ""))
+                    and _success_evidence(strip_ansi(out or ""))):
                 for user, secret, host in _cmd_creds(cmd):
                     if host:
                         self.add_cred(user, secret, valid_on=host)
