@@ -104,7 +104,10 @@ _INFRA_ERR = (r"qemu guest agent|qga command|agent/exec|agent is not running|"
 
 
 _ACCESS_CLAIM = re.compile(
-    r"shell|access|compromis|own(?:ed|ing)?|root|admin|foothold|pwn",
+    r"shell|access|compromis|own(?:ed|ing)?|root|admin|foothold|pwn|"
+    # German equivalents — the model writes plan items in the operator's
+    # language and the gate must see through it
+    r"zugriff|zugang|übernommen|kompromitt|eingenommen|erlangt",
     re.IGNORECASE)
 _IP_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 
