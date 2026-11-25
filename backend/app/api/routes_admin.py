@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_config
 from ..db import get_db
 from ..models.domain import Attempt, CoachMessage, LlmUsage, Session, SessionState, UserProfile
+from ..ranges.base import RangeState
 from ..schemas import (
     CheckpointIn,
     CoachActionLogIn,
@@ -36,6 +37,7 @@ from ..services import coach_bridge
 from ..services import console as console_svc
 from ..services import hoststats as hoststats_svc
 from ..services import packs as packs_svc
+from ..services import sessions as sessions_svc
 from ..services import settings as settings_svc
 from ..services import telemetry as telemetry_svc
 from ..services.engine import CLIENT_KEYS, get_engine, rebuild
@@ -200,6 +202,61 @@ async def engine_resources(db: AsyncSession = Depends(get_db),
     return {"ok": True, "ram_total_gb": round(ram_total_gb, 1),
             "ram_free_gb": round(ram_free_gb, 1), "cores": cores,
             "disk_free_gb": round(disk_free_gb, 1), "suggested": suggested}
+
+
+_LIVE_STATES = (
+    SessionState.QUEUED.value, SessionState.DEPLOYING.value,
+    SessionState.READY.value, SessionState.ACTIVE.value,
+    SessionState.ABORTING.value, SessionState.RESETTING.value)
+
+
+@router.get("/engine/deployments")
+async def engine_deployments(db: AsyncSession = Depends(get_db),
+                             _=Depends(get_current_user)):
+    """Live deployments view: the provider's range + its VMs plus every
+    non-terminal session — the teardown surface for ranges whose session
+    already died and left them running on the host."""
+    engine = await get_engine(db)
+    st = None
+    with contextlib.suppress(Exception):
+        st = await engine.provider.status()
+    rows = (await db.execute(
+        select(Session.id, Session.quest_id, Session.state, Session.range_id,
+               Session.created_at)
+        .where(Session.state.in_(_LIVE_STATES))
+        .order_by(Session.id.desc()))).all()
+    ranges = []
+    if st and st.state != RangeState.ABSENT:
+        ranges.append({
+            "range_id": st.range_id or "",
+            "state": st.state.value,
+            "vms": [{"name": v.name, "vmid": v.vmid, "ip": v.ip, "role": v.role}
+                    for v in st.vms],
+        })
+    return {"mode": engine.mode, "ranges": ranges,
+            "sessions": [{"id": r.id, "quest_id": r.quest_id, "state": r.state,
+                          "range_id": r.range_id, "created_at": r.created_at}
+                         for r in rows]}
+
+
+@router.post("/engine/deployments/destroy")
+async def engine_deployments_destroy(body: dict,
+                                     db: AsyncSession = Depends(get_db),
+                                     _=Depends(get_current_user)):
+    """Tear down a range even when no live session points at it. Sessions in a
+    non-terminal state are force-aborted first so the coach lets go — the
+    provider manages one default range, so any live session IS on it."""
+    engine = await get_engine(db)
+    doomed = (await db.execute(
+        select(Session.id).where(Session.state.in_(_LIVE_STATES)))).all()
+    for (sid,) in doomed:
+        with contextlib.suppress(Exception):
+            await sessions_svc.mark_aborted(db, sid)
+    try:
+        await engine.provider.destroy_range(body.get("range_id") or None)
+    except Exception as e:
+        raise HTTPException(502, f"destroy failed: {e}") from e
+    return {"ok": True}
 
 
 # ---------- LLM endpoint discovery / test ----------

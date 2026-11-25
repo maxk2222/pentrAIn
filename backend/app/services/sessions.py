@@ -1305,6 +1305,21 @@ async def _abort(session_id: int) -> None:
             _tasks.pop(session_id, None)
 
 
+async def mark_aborted(db: AsyncSession, session_id: int) -> None:
+    """Force-mark a session aborted WITHOUT touching its range — used by the
+    deployments teardown, which destroys the range itself."""
+    session = await db.get(Session, session_id)
+    if not session or session.state in (
+            SessionState.ABORTED.value, SessionState.SOLVED.value,
+            SessionState.FAILED.value):
+        return
+    task = _tasks.get(session_id)
+    if task and not task.done():
+        task.cancel()
+    await _set_state(db, session, SessionState.ABORTED,
+                     ended_at=datetime.now(UTC).replace(tzinfo=None))
+
+
 async def suggest_command_confirm(db: AsyncSession, session_id: int, action_id: int,
                                   accept: bool) -> CoachAction:
     """Copilot (L3): user confirms/rejects a coach-suggested command."""

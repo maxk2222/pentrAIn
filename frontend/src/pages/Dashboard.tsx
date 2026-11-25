@@ -4,6 +4,7 @@ import { Activity, ArrowRight, BrainCircuit, CheckCircle2, PlayCircle, Server } 
 import { api, type EngineStatus, type GlobalBoardRow, type Quest, type Track } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Progress } from "@/components/ui";
+import { DeploymentsCard } from "@/components/deployments";
 import { XpHero, useXpData } from "@/components/xp";
 
 export function DashboardPage() {
@@ -55,6 +56,8 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      <DeploymentsCard />
 
       <div>
         <div className="mb-3 flex items-center justify-between">
