@@ -110,6 +110,7 @@ pub async fn exec_visible(cmd: &str, window: Option<&str>, timeout_s: u64,
 
     let mut b_sent = false;
     let mut last_tail = String::new();
+    let mut wedged_polls = 0u32;
     let deadline = Instant::now() + Duration::from_secs(timeout_s);
     while Instant::now() < deadline {
         let lines = match tmux::capture_tail(w).await {
@@ -133,12 +134,35 @@ pub async fn exec_visible(cmd: &str, window: Option<&str>, timeout_s: u64,
                     }
                 }
             }
-            if ai < 0 && ln.ends_with(&format!("{marker}A")) {
+            // bare marker-output line only — on a wedged pane (foreground
+            // process eating stdin while pane_current_command still reads a
+            // shell) the typed `echo PTN…A` input line itself ends with the
+            // marker text; ends_with would match that echo and we'd wait
+            // forever for a B that can't run. `echo PTN…B:$?` ends in `:$?`
+            // (not digits) so the B strip_prefix+parse is already safe.
+            if ai < 0 && ln.trim() == format!("{marker}A") {
                 ai = i as i64;
             }
             if ai >= 0 && bi >= 0 {
                 break;
             }
+        }
+        if ai < 0 {
+            // A-marker echo never ran → the pane is wedged: a foreground
+            // process is consuming stdin (a healthy shell echoes the marker
+            // within one poll). Bail fast — polling to deadline just costs
+            // budget and hides the real state from the model.
+            wedged_polls += 1;
+            if wedged_polls >= 8 {
+                return json!({
+                    "out": if last_tail.is_empty() {
+                        "(typed — visible in the pentrain-coach tmux window)".to_string()
+                    } else { last_tail },
+                    "err": "pane wedged: your input is being eaten by the foreground process, not executed — send 'C-c' via exec_in_kali to kill it, then re-run the command",
+                    "exitcode": Value::Null, "visible": true, "timed_out": true});
+            }
+        } else {
+            wedged_polls = 0;
         }
         if ai >= 0 && bi >= 0 {
             let a = ai as usize;

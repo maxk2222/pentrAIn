@@ -1014,14 +1014,21 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                 "| tail -800")
     fg_probe = (f"tmux display-message -p -t {target} "
                 "'#{pane_current_command}'")
-    # only real marker *output* lines count: `PTN…A` alone, `PTN…B:<digits>`
-    begin = re.compile(rf"{re.escape(marker)}A\s*$")
+    # only real marker *output* lines count: a bare `PTN…A` line, `PTN…B:<digits>`.
+    # The A-marker must FULLMATCH — on a wedged pane (foreground process
+    # eating stdin while pane_current_command still reads 'bash') the typed
+    # `echo PTN…A` line itself ends with the marker text; a suffix search
+    # matches that echo and the bridge waits forever for a B that can't run.
+    # `echo PTN…B:$?` ends in `:$?` — not digits — so the end pattern's
+    # suffix search is already safe.
+    begin = re.compile(rf"^\s*{re.escape(marker)}A\s*$")
     end = re.compile(rf"{re.escape(marker)}B:(\d+)\s*$")
     cont_re = re.compile(r"(heredoc|dquote|quote|pipe)?>\s*$")
     cmd_tail = typed_line.split("\n")[-1][-60:].rstrip()
     deadline = time.monotonic() + timeout_s
     last_tail = ""
     b_sent = False
+    wedged_polls = 0
     while time.monotonic() < deadline:
         pane = await engine.pve.agent_exec_sh(kali_vmid, pane_cmd, timeout_s=15)
         lines = (pane.get("out") or "").splitlines()
@@ -1034,6 +1041,24 @@ async def exec_visible_in_kali(engine, kali_vmid: int, command: str,
                 ai = i
             if ai >= 0 and bi >= 0:
                 break
+        if ai < 0:
+            # the A-marker ECHO didn't run within ~3s of typing — on a
+            # healthy shell `echo PTN…A` prints in <100ms, so a missing
+            # marker means a foreground process is eating stdin while
+            # pane_current_command still reports a shell (e.g. a script's
+            # `bash` child). This is the genuinely-wedged case: stop
+            # polling and tell the caller to free the pane.
+            wedged_polls = wedged_polls + 1
+            if wedged_polls >= 8:
+                return {"out": last_tail
+                        or "(typed — visible in the pentrain-coach tmux window)",
+                        "err": ("pane wedged: your input is being eaten by "
+                                "the foreground process, not executed — "
+                                "send 'C-c' via exec_in_kali to kill it, "
+                                "then re-run the command"),
+                        "exitcode": None, "visible": True, "timed_out": True}
+        else:
+            wedged_polls = 0
         if ai >= 0 and bi >= 0:
             # typed command lines sit between PTNA and the output — their
             # exact pane-line count is unreliable (multi-line zsh prompt,
