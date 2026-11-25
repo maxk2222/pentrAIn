@@ -103,6 +103,11 @@ _INFRA_ERR = (r"qemu guest agent|qga command|agent/exec|agent is not running|"
               r"is not running|guest-exec|transport failed|500:|502:|503:")
 
 
+_ACCESS_CLAIM = re.compile(
+    r"shell|access|compromis|own(?:ed|ing)?|root|admin|foothold|pwn",
+    re.IGNORECASE)
+_IP_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
 _CHAIN_TOOLS = {"exec_in_kali", "type_in_pane", "submit_flag", "check_flag",
                 "mark_checkpoint", "capture_screen", "suggest_command",
                 "spawn_agent", "collect_agent", "agent_status", "kill_agent",
@@ -3273,6 +3278,27 @@ class SessionCoach:
             result = (f"{verb} — {len(items)} steps ({open_n} open): "
                       + " | ".join(f"[{'x' if i['s'] == 'done' else '>' if i['s'] == 'doing' else ' '}] {i['t']}"
                                   for i in items)[:600])
+            if not window:
+                # evidence gate — a step marked done that CLAIMS host access
+                # (shell/root/admin on <ip>) needs a proven primitive behind
+                # it: a valid cred or cap on that host. s81: the model
+                # marked 'SSH works, I have a shell' done on a host whose
+                # every auth attempt returned Permission denied — the false
+                # shell then steered the whole next phase.
+                proven = {h for c in self.facts.creds
+                          for h in c.valid_on}
+                proven |= {str(cap).split("@")[-1]
+                           for cap in self.facts.caps}
+                bad = [i["t"][:60] for i in items
+                       if i["s"] == "done" and _ACCESS_CLAIM.search(i["t"])
+                       and _IP_RE.search(i["t"])
+                       and not any(h in proven for h in _IP_RE.findall(i["t"]))]
+                if bad:
+                    result += (" | ⚠ unproven access claim(s): "
+                               + "; ".join(bad)
+                               + " — no valid cred or cap on that host; "
+                                 "prove a primitive (working shell/cred) "
+                                 "or mark the step doing")
             asyncio.create_task(self.client.log_action(
                 self.sid, "update_plan",
                 {"items": items, "agent": window or "main"},
